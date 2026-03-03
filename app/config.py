@@ -27,8 +27,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str
 
     # YouTube
-    YOUTUBE_CLIENT_SECRET_JSON: str
-    YOUTUBE_TOKEN_JSON: str
+    YOUTUBE_CLIENT_ID: str
+    YOUTUBE_CLIENT_SECRET: str
+    YOUTUBE_TOKEN_JSON: str = "youtube_token.json"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

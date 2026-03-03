@@ -25,10 +25,12 @@ class YouTubeService:
 
     def __init__(
         self,
-        client_secret_path: str,
+        client_id: str,
+        client_secret: str,
         token_path: str,
     ) -> None:
-        self._client_secret_path = client_secret_path
+        self._client_id = client_id
+        self._client_secret = client_secret
         self._token_path = token_path
         self._youtube = self._build_client()
 
@@ -47,7 +49,6 @@ class YouTubeService:
         Falls back to the full OAuth consent flow when no token exists yet
         (only relevant during initial server setup).
         """
-        import json
         import os
 
         if os.path.exists(self._token_path):
@@ -64,9 +65,16 @@ class YouTubeService:
                 return creds
 
         # First-time setup – requires interactive browser consent.
-        flow = InstalledAppFlow.from_client_secrets_file(
-            self._client_secret_path, _SCOPES
-        )
+        client_config = {
+            "installed": {
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["http://localhost"],
+            }
+        }
+        flow = InstalledAppFlow.from_client_config(client_config, _SCOPES)
         creds = flow.run_local_server(port=0)
         self._save_credentials(creds)
         return creds

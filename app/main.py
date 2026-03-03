@@ -52,7 +52,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     try:
         youtube_service = YouTubeService(
-            client_secret_path=settings.YOUTUBE_CLIENT_SECRET_JSON,
+            client_id=settings.YOUTUBE_CLIENT_ID,
+            client_secret=settings.YOUTUBE_CLIENT_SECRET,
             token_path=settings.YOUTUBE_TOKEN_JSON,
         )
         logger.info("YouTube service initialised")
