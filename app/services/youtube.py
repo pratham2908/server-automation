@@ -89,6 +89,40 @@ class YouTubeService:
     # Public API
     # ------------------------------------------------------------------
 
+    def get_channel_info(self, youtube_channel_id: str) -> dict[str, Any]:
+        """Fetch channel metadata from YouTube.
+
+        Returns a dict with: ``name``, ``description``, ``subscriber_count``,
+        ``video_count``, ``thumbnail_url``, ``custom_url``.
+        """
+        response = (
+            self._youtube.channels()
+            .list(part="snippet,statistics", id=youtube_channel_id)
+            .execute()
+        )
+
+        items = response.get("items", [])
+        if not items:
+            raise ValueError(
+                f"No YouTube channel found with ID '{youtube_channel_id}'"
+            )
+
+        channel = items[0]
+        snippet = channel.get("snippet", {})
+        stats = channel.get("statistics", {})
+
+        return {
+            "name": snippet.get("title", ""),
+            "description": snippet.get("description", ""),
+            "custom_url": snippet.get("customUrl", ""),
+            "thumbnail_url": snippet.get("thumbnails", {})
+            .get("default", {})
+            .get("url", ""),
+            "subscriber_count": int(stats.get("subscriberCount", 0)),
+            "video_count": int(stats.get("videoCount", 0)),
+            "view_count": int(stats.get("viewCount", 0)),
+        }
+
     def get_video_stats(
         self, youtube_video_ids: list[str]
     ) -> dict[str, dict[str, Any]]:

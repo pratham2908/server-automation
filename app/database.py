@@ -21,6 +21,7 @@ async def connect_db(mongodb_uri: str, db_name: str) -> AsyncIOMotorDatabase:
     _db = _client[db_name]
 
     # ---------- indexes ----------
+    await _db.channels.create_index("channel_id", unique=True)
     await _db.videos.create_index(
         [("channel_id", 1), ("status", 1)],
     )

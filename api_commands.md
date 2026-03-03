@@ -32,6 +32,46 @@ curl http://localhost:8000/health
 
 ---
 
+## Channels
+
+```bash
+# Register a channel (auto-fetches name, description, stats from YouTube)
+curl -X POST http://localhost:8000/api/v1/channels/ \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"youtube_channel_id": "UCxxxxxxxx"}'
+
+# Register with a custom slug
+curl -X POST http://localhost:8000/api/v1/channels/ \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"youtube_channel_id": "UCxxxxxxxx", "channel_id": "my-channel"}'
+
+# List all channels
+curl http://localhost:8000/api/v1/channels/ \
+  -H "X-API-Key: your-api-key"
+
+# Get a single channel
+curl http://localhost:8000/api/v1/channels/ch1 \
+  -H "X-API-Key: your-api-key"
+
+# Refresh channel data from YouTube (re-fetches stats, name, etc.)
+curl -X POST http://localhost:8000/api/v1/channels/ch1/refresh \
+  -H "X-API-Key: your-api-key"
+
+# Update a channel
+curl -X PATCH http://localhost:8000/api/v1/channels/ch1 \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Updated Channel Name"}'
+
+# Delete a channel (also removes all its videos, categories, analysis, queue)
+curl -X DELETE http://localhost:8000/api/v1/channels/ch1 \
+  -H "X-API-Key: your-api-key"
+```
+
+---
+
 ## Categories
 
 ```bash

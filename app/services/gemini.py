@@ -20,7 +20,7 @@ class GeminiService:
 
     def __init__(self, api_key: str) -> None:
         self._client = genai.Client(api_key=api_key)
-        self._model = "gemini-3.1-flash-preview"
+        self._model = "gemini-3.1-pro-preview"
 
     # ------------------------------------------------------------------
     # Public API

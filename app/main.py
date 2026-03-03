@@ -87,8 +87,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from app.routers import analysis, categories, posting, videos  # noqa: E402
+from app.routers import analysis, categories, channels, posting, videos  # noqa: E402
 
+app.include_router(channels.router)
 app.include_router(videos.router)
 app.include_router(categories.router)
 app.include_router(analysis.router)
