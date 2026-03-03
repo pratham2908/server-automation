@@ -206,7 +206,7 @@ Returns all videos for a channel, with optional filtering and suggestion marking
 
 | Param           | Type   | Default | Description                                                                                           |
 | --------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------- |
-| `status_filter` | string | `all`   | Filter by status: `todo`, `done`, or `all`                                                            |
+| `status_filter` | string | `all`   | Filter by status: `todo`, `in_queue`, `done`, or `all`                                                |
 | `suggest_n`     | int    | —       | If provided, marks the top N to-do videos as `suggested=true` (ordered by category score, best first) |
 
 **How `suggest_n` works:**
@@ -228,7 +228,7 @@ Returns all videos for a channel, with optional filtering and suggestion marking
     "description": "In this video...",
     "tags": ["vscode", "productivity", "coding"],
     "category": "Tutorials",
-    "subcategory": "IDE Tips",
+    "topic": "VS Code productivity hacks",
     "status": "todo",
     "suggested": true,
     "basis_factor": "Auto-generated from analysis v3",
@@ -249,7 +249,7 @@ Returns all videos for a channel, with optional filtering and suggestion marking
 
 #### `PATCH /{video_id}/status` — Update video status
 
-Toggles a video between `todo` and `done`.
+Changes a video's status.
 
 **Path params:** `video_id` — the UUID of the video
 
@@ -257,7 +257,7 @@ Toggles a video between `todo` and `done`.
 
 ```json
 {
-  "status": "done" // "done" or "todo"
+  "status": "done" // "todo", "in_queue", or "done"
 }
 ```
 
@@ -292,7 +292,7 @@ Creates a new video record AND adds it to the posting queue. The video file is s
   "description": "Description...", // optional
   "tags": ["tag1", "tag2"], // optional
   "category": "Tutorials", // optional
-  "subcategory": "IDE Tips", // optional
+  "topic": "VS Code productivity hacks", // optional
   "basis_factor": "Manual upload" // optional
 }
 ```
@@ -301,7 +301,7 @@ Creates a new video record AND adds it to the posting queue. The video file is s
 
 1. Generates a UUID for `video_id`
 2. Streams the file to R2 at `{channel_id}/{video_id}.mp4`
-3. Creates a video document in the `videos` collection
+3. Creates a video document in the `videos` collection with status `in_queue`
 4. Creates a queue entry in `video_queue` with the next available position
 
 **Response (201):**
@@ -429,7 +429,7 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 2. **Compute delta** — compare with already-analysed video IDs to find new ones
 3. **Early exit** if no new videos to analyse
 4. **Fetch YouTube stats** (views, likes, comments) for new videos that have a `youtube_video_id`
-5. **Send to Gemini** — video data + previous analysis → Gemini returns updated analysis
+5. **Send to Gemini in batches of 5** — each batch receives the running analysis from prior batches, so insights accumulate incrementally
 6. **Save updated analysis** to DB (increments version number)
 7. **Run to-do engine:**
    - Archives categories with score < 30 AND ≥ 5 videos
@@ -444,7 +444,7 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
   "best_posting_times": [
     {
       "day_of_week": "monday",
-      "video_count": 1,
+      "video_count": 2,
       "times": ["10:00", "14:00"]
     }
   ],
@@ -510,7 +510,7 @@ Processes the entire queue in order. For each video:
 
 1. **Download** from Cloudflare R2 to a temp file
 2. **Upload** to YouTube via resumable upload (10MB chunks, private by default)
-3. **Update** the video record: set `youtube_video_id`, mark `status=done`
+3. **Update** the video record: set `youtube_video_id`, change status from `in_queue` → `done`
 4. **Remove** from the posting queue
 5. **Clean up** the temp file
 
@@ -594,8 +594,8 @@ Stores all video records — both manually uploaded and AI-generated to-do items
   "description": "In this video...",
   "tags": ["vscode", "productivity"],
   "category": "Tutorials",
-  "subcategory": "IDE Tips",
-  "status": "todo", // "todo" or "done"
+  "topic": "VS Code productivity hacks", // the core content idea
+  "status": "todo", // "todo", "in_queue", or "done"
   "suggested": false, // true when marked by suggest_n
   "basis_factor": "Auto-generated...", // why this video was created
   "youtube_video_id": null, // set after YouTube upload
@@ -618,7 +618,8 @@ Stores all video records — both manually uploaded and AI-generated to-do items
 
 **Status lifecycle:**
 
-- `todo` → Video idea exists, not yet produced/uploaded
+- `todo` → Video idea exists (AI-generated or manual), not yet produced
+- `in_queue` → Video file uploaded to R2, waiting in posting queue
 - `done` → Video has been uploaded to YouTube
 
 ---
@@ -691,8 +692,8 @@ Stores the AI-generated channel analysis. **One document per channel.**
   "best_posting_times": [
     {
       "day_of_week": "monday",
-      "video_count": 1,
-      "times": ["10:00", "14:00"]
+      "video_count": 2, // post 2 videos on Monday
+      "times": ["10:00", "14:00"] // exactly video_count entries
     }
   ],
   "category_analysis": [
@@ -743,7 +744,7 @@ Stores the AI-generated channel analysis. **One document per channel.**
 
 ### Analysis Engine (`app/services/analysis_engine.py`)
 
-Orchestrates the full analysis pipeline: delta computation → YouTube stats → Gemini analysis → DB save → to-do engine.
+Orchestrates the full analysis pipeline: delta computation → YouTube stats → **Gemini analysis in batches of 5** (each batch receives the running analysis, so insights accumulate) → DB save → to-do engine.
 
 ### To-do Engine (`app/services/todo_engine.py`)
 

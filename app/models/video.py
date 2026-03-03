@@ -11,6 +11,7 @@ class VideoStatus(str, Enum):
     """Allowed lifecycle states for a video."""
 
     TODO = "todo"
+    IN_QUEUE = "in_queue"
     DONE = "done"
 
 
@@ -31,7 +32,7 @@ class Video(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     category: str = ""
-    subcategory: str = ""
+    topic: str = ""
     status: VideoStatus = VideoStatus.TODO
     suggested: bool = False
     basis_factor: str = ""
@@ -49,7 +50,7 @@ class VideoCreate(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     category: str = ""
-    subcategory: str = ""
+    topic: str = ""
     basis_factor: str = ""
 
 

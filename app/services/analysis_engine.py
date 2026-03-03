@@ -76,7 +76,7 @@ async def run_analysis(
         entry: dict[str, Any] = {
             "title": v.get("title", ""),
             "category": v.get("category", ""),
-            "subcategory": v.get("subcategory", ""),
+            "topic": v.get("topic", ""),
             "tags": v.get("tags", []),
         }
         yt_id = v.get("youtube_video_id")
@@ -84,8 +84,9 @@ async def run_analysis(
             entry["stats"] = yt_stats[yt_id]
         video_data.append(entry)
 
-    # 5  Send to Gemini
-    previous = (
+    # 5  Send to Gemini in batches of 5
+    BATCH_SIZE = 5
+    running_analysis = (
         {
             "best_posting_times": existing_analysis.get(
                 "best_posting_times", []
@@ -98,7 +99,24 @@ async def run_analysis(
         else None
     )
 
-    updated = await gemini_service.analyze_videos(video_data, previous)
+    for i in range(0, len(video_data), BATCH_SIZE):
+        batch = video_data[i : i + BATCH_SIZE]
+        batch_num = (i // BATCH_SIZE) + 1
+        total_batches = (len(video_data) + BATCH_SIZE - 1) // BATCH_SIZE
+
+        logger.info(
+            "Analysing batch %d/%d (%d videos) for channel %s",
+            batch_num,
+            total_batches,
+            len(batch),
+            channel_id,
+        )
+
+        running_analysis = await gemini_service.analyze_videos(
+            batch, running_analysis
+        )
+
+    updated = running_analysis or {}
 
     # 6  Save to DB
     all_analysed = list(already_analysed | {v["video_id"] for v in new_videos})

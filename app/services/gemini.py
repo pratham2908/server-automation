@@ -120,7 +120,10 @@ class GeminiService:
         return f"""You are a YouTube channel analytics expert. Analyze the following video
 performance data and produce a comprehensive channel analysis.
 
-## Video Data
+## Video Data (Batch)
+This is one batch of videos from a larger dataset. Incorporate these new
+data points into the analysis, refining your conclusions incrementally.
+
 ```json
 {json.dumps(video_data, indent=2)}
 ```
@@ -133,7 +136,7 @@ Return a JSON object with exactly these keys:
   "best_posting_times": [
     {{
       "day_of_week": "monday",
-      "video_count": 1,
+      "video_count": 2,
       "times": ["10:00", "14:00"]
     }}
   ],
@@ -149,12 +152,17 @@ Return a JSON object with exactly these keys:
 }}
 
 Guidelines:
-- Recommend posting times based on observed engagement patterns.
-- For each content category, identify the most effective title patterns,
-  description templates, and tags.
-- Score each category from 0-100 based on overall performance.
-- If previous analysis exists, update it incrementally – do not discard
-  prior insights without good reason."""
+- **best_posting_times**: Recommend the optimal posting schedule.
+  - `video_count` = the number of videos to post on that day.
+  - `times` = an array of exactly `video_count` optimal posting times (HH:MM, 24-hour format).
+  - Example: if `video_count` is 1, `times` has 1 entry. If `video_count` is 3, `times` has 3 entries.
+  - Include an entry for each day of the week (monday through sunday).
+- **category_analysis**: For each content category found in the videos:
+  - Identify the most effective title patterns and description templates.
+  - List the best-performing tags.
+  - Score each category from 0-100 based on overall engagement and performance.
+- If previous analysis exists, **refine it incrementally** — do not discard
+  prior insights without good reason. Merge new observations with existing ones."""
 
     @staticmethod
     def _build_content_prompt(

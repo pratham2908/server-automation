@@ -108,7 +108,7 @@ async def update_todo_list(
             "description": content.get("description", ""),
             "tags": content.get("tags", []),
             "category": cat_name,
-            "subcategory": "",
+            "topic": "",
             "status": "todo",
             "suggested": False,
             "basis_factor": f"Auto-generated from analysis v{analysis.get('version', '?')}",

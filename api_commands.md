@@ -122,15 +122,19 @@ curl "http://localhost:8000/api/v1/channels/ch1/videos/?status_filter=todo" \
 curl "http://localhost:8000/api/v1/channels/ch1/videos/?status_filter=done" \
   -H "X-API-Key: your-api-key"
 
+# List in_queue videos
+curl "http://localhost:8000/api/v1/channels/ch1/videos/?status_filter=in_queue" \
+  -H "X-API-Key: your-api-key"
+
 # List videos with top 3 suggestions
 curl "http://localhost:8000/api/v1/channels/ch1/videos/?suggest_n=3" \
   -H "X-API-Key: your-api-key"
 
-# Add video to queue (with file upload)
+# Add video to queue (with file upload — sets status to in_queue)
 curl -X POST http://localhost:8000/api/v1/channels/ch1/videos/queue \
   -H "X-API-Key: your-api-key" \
   -F "file=@/path/to/video.mp4" \
-  -F 'body={"title":"My Video","description":"Video description","tags":["tag1","tag2"],"category":"Tutorials"}'
+  -F 'body={"title":"My Video","description":"Video description","tags":["tag1","tag2"],"category":"Tutorials","topic":"My video topic"}'
 
 # Mark a video as done (replace VIDEO_ID)
 curl -X PATCH http://localhost:8000/api/v1/channels/ch1/videos/VIDEO_ID/status \
