@@ -7,7 +7,7 @@ an incremental channel analysis.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -53,6 +53,13 @@ async def run_analysis(
 
     new_videos = [
         v for v in done_videos if v["video_id"] not in already_analysed
+    ]
+
+    # 2b  Exclude videos posted less than 3 days ago (not enough data yet).
+    three_days_ago = datetime.utcnow() - timedelta(days=3)
+    new_videos = [
+        v for v in new_videos
+        if v.get("created_at", datetime.min) <= three_days_ago
     ]
 
     # 3  Early exit

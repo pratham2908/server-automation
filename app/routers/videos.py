@@ -1,4 +1,4 @@
-"""Videos router – list, status update, and queue addition."""
+"""Videos router – list, status update, queue addition, and YouTube sync."""
 
 import uuid
 from datetime import datetime
@@ -6,6 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import BaseModel, Field
 
 from app.database import get_db
 from app.dependencies import verify_api_key
@@ -203,3 +204,279 @@ async def add_to_queue(
 
     video_doc.pop("_id", None)
     return {"ok": True, "video": video_doc, "queue_position": next_pos}
+
+
+# ------------------------------------------------------------------
+# POST /sync  –  sync videos from YouTube + categorise via Gemini
+# ------------------------------------------------------------------
+
+
+def _get_services():
+    """Lazy import to avoid circular dependency."""
+    from app.main import youtube_service, gemini_service  # type: ignore[import]
+
+    return youtube_service, gemini_service
+
+
+def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
+    """Fetch every video from a channel's uploads playlist."""
+    uploads_playlist_id = "UU" + youtube_channel_id[2:]
+
+    video_ids = []
+    next_page = None
+
+    while True:
+        request = yt._youtube.playlistItems().list(
+            part="contentDetails",
+            playlistId=uploads_playlist_id,
+            maxResults=50,
+            pageToken=next_page,
+        )
+        response = request.execute()
+        for item in response.get("items", []):
+            video_ids.append(item["contentDetails"]["videoId"])
+        next_page = response.get("nextPageToken")
+        if not next_page:
+            break
+
+    # Fetch snippets + stats in batches of 50.
+    videos = []
+    for i in range(0, len(video_ids), 50):
+        batch_ids = video_ids[i : i + 50]
+        resp = (
+            yt._youtube.videos()
+            .list(part="snippet,statistics", id=",".join(batch_ids))
+            .execute()
+        )
+        for item in resp.get("items", []):
+            snippet = item.get("snippet", {})
+            stats = item.get("statistics", {})
+            videos.append(
+                {
+                    "youtube_video_id": item["id"],
+                    "title": snippet.get("title", ""),
+                    "description": snippet.get("description", ""),
+                    "tags": snippet.get("tags", []),
+                    "views": int(stats.get("viewCount", 0)),
+                    "likes": int(stats.get("likeCount", 0)),
+                    "comments": int(stats.get("commentCount", 0)),
+                }
+            )
+
+    return videos
+
+
+def _categorize_batch(gemini_service, channel_description, existing_categories, batch, category_instructions=""):
+    """Ask Gemini to assign category + topic per video."""
+    import json
+    from google.genai import types as genai_types
+
+    video_summaries = [
+        {
+            "youtube_video_id": v["youtube_video_id"],
+            "title": v["title"],
+            "description": v["description"][:500],
+            "tags": v["tags"][:15],
+        }
+        for v in batch
+    ]
+
+    cats_section = ""
+    if existing_categories:
+        cats_section = (
+            f"\n\n## Existing Categories\n"
+            f"Reuse these when a video fits: {json.dumps(existing_categories)}\n"
+            f"Only create a new category if NONE of the above fit."
+        )
+
+    prompt = f"""You are a YouTube channel analyst. Categorize these videos.
+
+## Channel Description
+{channel_description}
+{cats_section}
+
+## Videos
+```json
+{json.dumps(video_summaries, indent=2)}
+```
+
+{f"## Additional Instructions for Categorization" + chr(10) + category_instructions if category_instructions else ""}
+For each video, return a JSON array:
+[{{"youtube_video_id": "...", "category": "...", "topic": "..."}}]
+
+Reuse existing categories. Only create new ones if truly needed."""
+
+    response = gemini_service._client.models.generate_content(
+        model=gemini_service._model,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+        ),
+    )
+
+    try:
+        return json.loads(response.text)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+class SyncRequest(BaseModel):
+    """Optional body for the sync endpoint."""
+    new_category_description: Optional[str] = Field(
+        None,
+        description="Extra instructions for Gemini on how to categorize videos",
+    )
+
+
+@router.post("/sync")
+async def sync_videos(
+    channel_id: str,
+    body: Optional[SyncRequest] = None,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Sync videos from YouTube into the DB.
+
+    Fetches all videos from the YouTube channel, finds any that aren't
+    already in the ``videos`` collection, categorises them via Gemini,
+    and inserts them as ``done``.
+    """
+    youtube_service, gemini_service = _get_services()
+
+    if youtube_service is None or gemini_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="YouTube or Gemini service not initialised",
+        )
+
+    # Look up channel.
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    youtube_channel_id = channel["youtube_channel_id"]
+    channel_description = channel.get("description", "")
+
+    # Fetch all YouTube videos.
+    all_yt_videos = _fetch_all_youtube_videos(youtube_service, youtube_channel_id)
+
+    # Find already-imported youtube_video_ids.
+    existing_yt_ids = set()
+    async for doc in db.videos.find(
+        {"channel_id": channel_id}, {"youtube_video_id": 1}
+    ):
+        if doc.get("youtube_video_id"):
+            existing_yt_ids.add(doc["youtube_video_id"])
+
+    new_videos = [
+        v for v in all_yt_videos if v["youtube_video_id"] not in existing_yt_ids
+    ]
+
+    if not new_videos:
+        return {
+            "ok": True,
+            "synced": 0,
+            "message": f"All {len(all_yt_videos)} videos already in DB",
+            "videos": [],
+        }
+
+    # Build running category list.
+    existing_cats = [
+        c["name"]
+        async for c in db.categories.find(
+            {"channel_id": channel_id}, {"name": 1}
+        )
+    ]
+
+    # Categorize in batches of 5.
+    BATCH_SIZE = 5
+    categorizations = {}
+
+    for i in range(0, len(new_videos), BATCH_SIZE):
+        batch = new_videos[i : i + BATCH_SIZE]
+        results = _categorize_batch(
+            gemini_service, channel_description, existing_cats, batch,
+            category_instructions=body.new_category_description if body else "",
+        )
+
+        for r in results:
+            yt_id = r.get("youtube_video_id", "")
+            cat = r.get("category", "Uncategorized")
+            topic = r.get("topic", "")
+            categorizations[yt_id] = {"category": cat, "topic": topic}
+
+            # Auto-create new category.
+            if cat not in existing_cats:
+                existing_cats.append(cat)
+                now = datetime.utcnow()
+                await db.categories.insert_one(
+                    {
+                        "channel_id": channel_id,
+                        "name": cat,
+                        "description": "",
+                        "raw_description": "",
+                        "score": 50.0,
+                        "status": "active",
+                        "video_count": 0,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+
+    # Insert videos.
+    docs = []
+    for v in new_videos:
+        yt_id = v["youtube_video_id"]
+        cat_info = categorizations.get(yt_id, {"category": "Uncategorized", "topic": ""})
+        now = datetime.utcnow()
+        docs.append(
+            {
+                "channel_id": channel_id,
+                "video_id": str(uuid.uuid4()),
+                "title": v["title"],
+                "description": v["description"],
+                "tags": v["tags"],
+                "category": cat_info["category"],
+                "topic": cat_info["topic"],
+                "status": "done",
+                "suggested": False,
+                "basis_factor": "Synced from YouTube",
+                "youtube_video_id": yt_id,
+                "r2_object_key": None,
+                "metadata": {
+                    "views": v.get("views"),
+                    "engagement": None,
+                    "avg_percentage_viewed": None,
+                },
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    if docs:
+        await db.videos.insert_many(docs)
+
+    # Update category video counts.
+    for doc in docs:
+        await db.categories.update_one(
+            {"channel_id": channel_id, "name": doc["category"]},
+            {"$inc": {"video_count": 1}},
+        )
+
+    # Build per-video summary.
+    video_summary = [
+        {"title": d["title"], "category": d["category"], "topic": d["topic"]}
+        for d in docs
+    ]
+
+    return {
+        "ok": True,
+        "synced": len(docs),
+        "categories_created": [
+            c for c in existing_cats
+        ],
+        "videos": video_summary,
+    }
+

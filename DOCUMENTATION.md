@@ -247,6 +247,42 @@ Returns all videos for a channel, with optional filtering and suggestion marking
 
 ---
 
+#### `POST /sync` — Sync videos from YouTube
+
+Fetches all videos from the YouTube channel, finds any not already in the DB, categorizes them via Gemini (auto-creating categories from the channel description), and inserts them as `done`.
+
+**What happens:**
+
+1. Fetches all videos from the channel's uploads playlist (paginated)
+2. Skips any already in the `videos` collection (by `youtube_video_id`)
+3. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
+4. Auto-creates new categories in the `categories` collection
+5. Inserts videos as `done` with `category` and `topic` assigned
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "synced": 15,
+  "categories_created": ["Tutorials", "Reviews", "Vlogs"],
+  "videos": [
+    {
+      "title": "10 VS Code Tricks",
+      "category": "Tutorials",
+      "topic": "VS Code productivity"
+    },
+    {
+      "title": "iPhone 16 Review",
+      "category": "Reviews",
+      "topic": "iPhone 16 deep dive"
+    }
+  ]
+}
+```
+
+---
+
 #### `PATCH /{video_id}/status` — Update video status
 
 Changes a video's status.

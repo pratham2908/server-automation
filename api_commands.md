@@ -147,6 +147,10 @@ curl -X PATCH http://localhost:8000/api/v1/channels/ch1/videos/VIDEO_ID/status \
   -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"status": "todo"}'
+
+# Sync all YouTube videos into DB (auto-categorizes via Gemini)
+curl -X POST http://localhost:8000/api/v1/channels/ch1/videos/sync \
+  -H "X-API-Key: your-api-key"
 ```
 
 ---
