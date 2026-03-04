@@ -12,15 +12,66 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-logger = logging.getLogger(__name__)
+from app.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class GeminiService:
     """Provides AI-powered analysis and content generation via Gemini."""
 
+    # Model fallback chain — tried in order. If a model fails, the next
+    # one is attempted.  Edit this list to change priority.
+    _MODEL_CHAIN = [
+        "gemini-3.1-pro-preview",
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+    ]
+
     def __init__(self, api_key: str) -> None:
         self._client = genai.Client(api_key=api_key)
-        self._model = "gemini-3.1-pro-preview"
+
+    # ------------------------------------------------------------------
+    # Internal — model fallback
+    # ------------------------------------------------------------------
+
+    async def _generate(self, prompt: str) -> str:
+        """Try each model in the fallback chain until one succeeds.
+
+        Returns the raw response text. Raises the last exception if
+        every model fails.
+        """
+        import asyncio
+        last_error: Exception | None = None
+
+        for model in self._MODEL_CHAIN:
+            try:
+                # Use the async client and enforce a 90s timeout
+                response = await asyncio.wait_for(
+                    self._client.aio.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                        ),
+                    ),
+                    timeout=90.0,
+                )
+                logger.info("Gemini response from model '%s'", model, extra={"color": "CYAN"})
+                return response.text
+            except Exception as exc:
+                last_error = exc
+                is_last = model == self._MODEL_CHAIN[-1]
+                if is_last:
+                    logger.error(f"🚨 All Gemini models in the fallback chain failed! Last error: {exc}")
+                else:
+                    logger.warning(
+                        "⚠️ Model '%s' failed: %s — trying next fallback",
+                        model,
+                        exc,
+                    )
+
+        raise last_error  # type: ignore[misc]
 
     # ------------------------------------------------------------------
     # Public API
@@ -48,19 +99,14 @@ class GeminiService:
             Updated analysis JSON matching the ``Analysis`` schema
             (best_posting_times, category_analysis).
         """
+        logger.info("Starting Gemini analysis for %d videos", len(video_data))
         prompt = self._build_analysis_prompt(video_data, previous_analysis)
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
+        text = await self._generate(prompt)
 
         try:
-            return json.loads(response.text)
+            return json.loads(text)
         except (json.JSONDecodeError, TypeError):
-            logger.error("Gemini returned unparseable analysis: %s", response.text)
+            logger.error("🚨 Failed to parse JSON from Gemini analysis response: %s", text)
             raise ValueError("Failed to parse Gemini analysis response")
 
     async def generate_video_content(
@@ -83,20 +129,15 @@ class GeminiService:
         dict
             ``{"title": ..., "description": ..., "tags": [...]}``
         """
+        logger.info("Generating Gemini content for category '%s'", category)
         prompt = self._build_content_prompt(category, category_analysis)
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
+        text = await self._generate(prompt)
 
         try:
-            return json.loads(response.text)
+            return json.loads(text)
         except (json.JSONDecodeError, TypeError):
             logger.error(
-                "Gemini returned unparseable content: %s", response.text
+                "🚨 Failed to parse JSON from Gemini content response: %s", text
             )
             raise ValueError("Failed to parse Gemini content response")
 

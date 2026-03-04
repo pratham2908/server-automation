@@ -481,7 +481,9 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
    - Updates **all category scores** from Gemini's analysis output
    - Increments **category video_count** for each newly analysed video
    - Archives categories with score < 30 AND ≥ 5 videos
-   - Generates new to-do video ideas (title/description/tags) via Gemini for each active category
+   - Generates N new to-do videos (N = number of newly analysed videos)
+   - Slots are distributed across categories **weighted by score** — higher-scoring categories get more videos
+   - Every eligible category gets at least 1 slot to maintain diversity
    - Inserts new to-do videos into the `videos` collection
 
 **Response (200):**
@@ -817,16 +819,24 @@ Audit trail — one document per analysis run. Stores the inputs and outputs of 
 
 - **Analyze videos**: Sends video performance data + previous analysis → returns updated analysis JSON
 - **Generate content**: Given a category + its analysis insights → generates title, description, tags for a new video
-- **Model**: `gemini-3.1-pro-preview`
+- **Model fallback chain**: Tries models in order — if one fails (rate limit, error), automatically falls back to the next:
+  1. `gemini-3.1-pro-preview`
+  2. `gemini-3-pro-preview`
+  3. `gemini-3-flash-preview`
 - **Output**: Forces JSON response via `response_mime_type="application/json"`
 
 ### Analysis Engine (`app/services/analysis_engine.py`)
 
-Orchestrates the full analysis pipeline: delta computation → YouTube stats → **Gemini analysis in batches of 5** (each batch receives the running analysis, so insights accumulate) → DB save → to-do engine.
+Orchestrates the full analysis pipeline: delta computation → 3-day filter → YouTube stats → **Gemini analysis in batches of 5** (each batch receives the running analysis, so insights accumulate) → DB save → audit snapshot → to-do engine.
 
 ### To-do Engine (`app/services/todo_engine.py`)
 
-Post-analysis step: archives underperforming categories, generates new video ideas via Gemini for active categories.
+Post-analysis step:
+
+1. Updates all category scores from Gemini analysis
+2. Increments category video_count for newly analysed videos
+3. Archives underperforming categories (score < 30, ≥ 5 videos)
+4. Generates N new to-do videos (N = newly analysed count), distributed across categories weighted by score
 
 ---
 

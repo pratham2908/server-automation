@@ -12,6 +12,9 @@ from pydantic import BaseModel, Field
 
 from app.database import get_db
 from app.dependencies import verify_api_key
+from app.logger import get_logger
+
+logger = get_logger(__name__)
 from app.models.video import VideoCreate, VideoStatus, VideoStatusUpdate
 from app.services.r2 import R2Service
 
@@ -269,10 +272,9 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
     return videos
 
 
-def _categorize_batch(gemini_service, channel_description, existing_categories, batch, category_instructions=""):
+async def _categorize_batch(gemini_service, channel_description, existing_categories, batch, category_instructions=""):
     """Ask Gemini to assign category + topic per video."""
     import json
-    from google.genai import types as genai_types
 
     video_summaries = [
         {
@@ -309,16 +311,10 @@ For each video, return a JSON array:
 
 Reuse existing categories. Only create new ones if truly needed."""
 
-    response = gemini_service._client.models.generate_content(
-        model=gemini_service._model,
-        contents=prompt,
-        config=genai_types.GenerateContentConfig(
-            response_mime_type="application/json",
-        ),
-    )
+    response_text = await gemini_service._generate(prompt)
 
     try:
-        return json.loads(response.text)
+        return json.loads(response_text)
     except (json.JSONDecodeError, TypeError):
         return []
 
@@ -376,6 +372,14 @@ async def sync_videos(
     new_videos = [
         v for v in all_yt_videos if v["youtube_video_id"] not in existing_yt_ids
     ]
+    
+    logger.info(
+        "Found %d total videos on channel. Skipped %d already imported, %d new to process.",
+        len(all_yt_videos),
+        len(existing_yt_ids),
+        len(new_videos),
+        extra={"color": "BLUE"},
+    )
 
     if not new_videos:
         return {
@@ -399,7 +403,15 @@ async def sync_videos(
 
     for i in range(0, len(new_videos), BATCH_SIZE):
         batch = new_videos[i : i + BATCH_SIZE]
-        results = _categorize_batch(
+        
+        logger.info(
+            "Asking Gemini to categorize batch (%d/%d)...",
+            (i // BATCH_SIZE) + 1,
+            (len(new_videos) + BATCH_SIZE - 1) // BATCH_SIZE,
+            extra={"color": "MAGENTA"},
+        )
+        
+        results = await _categorize_batch(
             gemini_service, channel_description, existing_cats, batch,
             category_instructions=body.new_category_description if body else "",
         )
@@ -427,6 +439,7 @@ async def sync_videos(
                         "updated_at": now,
                     }
                 )
+                logger.success(f"Created new category: '{cat}'")
 
     # Insert videos.
     docs = []
@@ -469,12 +482,20 @@ async def sync_videos(
 
     if docs:
         await db.videos.insert_many(docs)
+        logger.success(f"Inserted {len(docs)} new synchronized videos into database")
 
     # Build per-video summary.
     video_summary = [
         {"title": d["title"], "category": d["category"], "topic": d["topic"]}
         for d in docs
     ]
+    
+    new_cats_count = len(existing_cats) - len(categories_before_sync) if 'categories_before_sync' in locals() else 0
+    # Calculate created categories cleanly
+    logger.success(
+        f"✅ YouTube Sync Complete! Synced {len(docs)} new videos.",
+        extra={"color": "BRIGHT_GREEN"}
+    )
 
     return {
         "ok": True,

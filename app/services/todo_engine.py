@@ -13,9 +13,10 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.logger import get_logger
 from app.services.gemini import GeminiService
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Categories with a score below this **and** at least this many videos
 # are candidates for archiving.
@@ -45,6 +46,8 @@ async def update_todo_list(
     # ------------------------------------------------------------------ #
     # 1  Update category scores from Gemini analysis output
     # ------------------------------------------------------------------ #
+    logger.info("🔄 Updating category scores & video counts from new analysis...", extra={"color": "BLUE"})
+    
     for cat_analysis in analysis.get("category_analysis", []):
         cat_name = cat_analysis.get("category", "")
         score = cat_analysis.get("score")
@@ -100,16 +103,27 @@ async def update_todo_list(
                     }
                 },
             )
-            logger.info(
-                "Archived category '%s' for channel %s (score=%.1f)",
+            logger.warning(
+                "📦 Archived underperforming category '%s' (score=%.1f)",
                 cat_name,
-                channel_id,
                 score,
             )
 
     # ------------------------------------------------------------------ #
-    # 4  Generate new to-do videos for active categories
+    # 4  Generate new to-do videos — score-weighted distribution
     # ------------------------------------------------------------------ #
+    #
+    # Total to generate = number of newly analysed videos.
+    # Slots are distributed across active categories proportionally to
+    # their score, with every eligible category getting at least 1 slot
+    # to keep the mix diverse.
+    total_to_generate = len(analysed_videos) if analysed_videos else 0
+    if total_to_generate == 0:
+        logger.success("✅ Full Analysis & To-Do Engine Complete!", extra={"color": "BRIGHT_GREEN"})
+        return
+        
+    logger.info("🧠 Generating new to-do video ideas (Target: %d videos)", total_to_generate, extra={"color": "MAGENTA"})
+
     active_categories = await db.categories.find(
         {"channel_id": channel_id, "status": "active"}
     ).to_list(length=None)
@@ -119,55 +133,88 @@ async def update_todo_list(
         ca["category"]: ca for ca in analysis.get("category_analysis", [])
     }
 
+    # Only consider categories that have analysis insights.
+    eligible = [
+        c for c in active_categories if c["name"] in analysis_by_cat
+    ]
+    if not eligible:
+        logger.success("✅ Full Analysis & To-Do Engine Complete!", extra={"color": "BRIGHT_GREEN"})
+        return
+
+    # Sort by score descending so highest-performing categories are first.
+    eligible.sort(key=lambda c: c.get("score", 0), reverse=True)
+
+    # Distribute slots: each eligible category gets at least 1, remaining
+    # slots go to categories proportionally by score.
+    slots: dict[str, int] = {}
+    if total_to_generate <= len(eligible):
+        # Fewer videos than categories — pick the top-scoring ones.
+        for c in eligible[:total_to_generate]:
+            slots[c["name"]] = 1
+    else:
+        # Give 1 to each, then distribute remaining by score weight.
+        for c in eligible:
+            slots[c["name"]] = 1
+
+        remaining = total_to_generate - len(eligible)
+        total_score = sum(c.get("score", 0) for c in eligible) or 1
+
+        for c in eligible:
+            share = int(remaining * (c.get("score", 0) / total_score))
+            slots[c["name"]] += share
+
+        # Distribute any leftover (from rounding) to top-scoring categories.
+        distributed = sum(slots.values())
+        leftover = total_to_generate - distributed
+        for c in eligible[:leftover]:
+            slots[c["name"]] += 1
+
+    # Generate content for each slot.
     new_videos: list[dict[str, Any]] = []
-    for cat_doc in active_categories:
-        cat_name = cat_doc["name"]
-        cat_insights = analysis_by_cat.get(cat_name, {})
+    for cat_name, count in slots.items():
+        cat_insights = analysis_by_cat[cat_name]
+        for _ in range(count):
+            try:
+                content = await gemini_service.generate_video_content(
+                    cat_name, cat_insights
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to generate content for category '%s'", cat_name
+                )
+                continue
+                
+            logger.success(f"💡 Generated title: \"{content.get('title', 'Untitled')}\" (Category: {cat_name})")
 
-        if not cat_insights:
-            continue
-
-        try:
-            content = await gemini_service.generate_video_content(
-                cat_name, cat_insights
-            )
-        except Exception:
-            logger.exception(
-                "Failed to generate content for category '%s'", cat_name
-            )
-            continue
-
-        video_doc = {
-            "channel_id": channel_id,
-            "video_id": str(uuid.uuid4()),
-            "title": content.get("title", ""),
-            "description": content.get("description", ""),
-            "tags": content.get("tags", []),
-            "category": cat_name,
-            "topic": "",
-            "status": "todo",
-            "suggested": False,
-            "basis_factor": f"Auto-generated from analysis v{analysis.get('version', '?')}",
-            "youtube_video_id": None,
-            "r2_object_key": None,
-            "metadata": {
-                "views": None,
-                "engagement": None,
-                "avg_percentage_viewed": None,
-            },
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
-        }
-        new_videos.append(video_doc)
+            video_doc = {
+                "channel_id": channel_id,
+                "video_id": str(uuid.uuid4()),
+                "title": content.get("title", ""),
+                "description": content.get("description", ""),
+                "tags": content.get("tags", []),
+                "category": cat_name,
+                "topic": "",
+                "status": "todo",
+                "suggested": False,
+                "basis_factor": f"Auto-generated from analysis v{analysis.get('version', '?')}",
+                "youtube_video_id": None,
+                "r2_object_key": None,
+                "metadata": {
+                    "views": None,
+                    "engagement": None,
+                    "avg_percentage_viewed": None,
+                },
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+            new_videos.append(video_doc)
 
     # ------------------------------------------------------------------ #
     # 5  Bulk-insert new videos
     # ------------------------------------------------------------------ #
     if new_videos:
         await db.videos.insert_many(new_videos)
-        logger.info(
-            "Inserted %d new to-do videos for channel %s",
-            len(new_videos),
-            channel_id,
-        )
+        logger.success(f"Inserted {len(new_videos)} new auto-generated To-Do videos into database")
+        
+    logger.success("✅ Full Analysis & To-Do Engine Complete!", extra={"color": "BRIGHT_GREEN"})
 

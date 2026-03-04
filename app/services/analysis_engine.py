@@ -12,11 +12,12 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.logger import get_logger
 from app.services.gemini import GeminiService
 from app.services.todo_engine import update_todo_list
 from app.services.youtube import YouTubeService
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def run_analysis(
@@ -42,6 +43,12 @@ async def run_analysis(
     done_videos = await db.videos.find(
         {"channel_id": channel_id, "status": "done"}
     ).to_list(length=None)
+    
+    logger.info(
+        "📥 Request received to analyze channel '%s'",
+        channel_id,
+        extra={"color": "CYAN"},
+    )
 
     # 2  Compute delta
     existing_analysis = await db.analysis.find_one({"channel_id": channel_id})
@@ -54,6 +61,14 @@ async def run_analysis(
     new_videos = [
         v for v in done_videos if v["video_id"] not in already_analysed
     ]
+    
+    logger.info(
+        "📊 Computing delta: Found %d 'done' videos total, %d already analysed, %d remaining.",
+        len(done_videos),
+        len(already_analysed),
+        len(new_videos),
+        extra={"color": "BLUE"},
+    )
 
     # 2b  Exclude videos posted less than 3 days ago (not enough data yet).
     three_days_ago = datetime.utcnow() - timedelta(days=3)
@@ -61,6 +76,10 @@ async def run_analysis(
         v for v in new_videos
         if v.get("created_at", datetime.min) <= three_days_ago
     ]
+    
+    skipped = len(done_videos) - len(already_analysed) - len(new_videos)
+    if skipped > 0:
+        logger.warning("⏳ 3-Day Filter: Skipped %d recent videos.", skipped)
 
     # 3  Early exit
     if not new_videos:
@@ -74,6 +93,11 @@ async def run_analysis(
     ]
     yt_stats: dict[str, Any] = {}
     if yt_ids:
+        logger.info(
+            "📡 Fetching updated YouTube stats for %d videos...",
+            len(yt_ids),
+            extra={"color": "CYAN"},
+        )
         yt_stats = youtube_service.get_video_stats(yt_ids)
 
     # Enrich video data with stats
@@ -107,6 +131,13 @@ async def run_analysis(
 
     for i in range(0, len(video_data), BATCH_SIZE):
         batch = video_data[i : i + BATCH_SIZE]
+        
+        logger.info(
+            "🧠 Gemini Analysis Batch (%d/%d) in progress...",
+            (i // BATCH_SIZE) + 1,
+            (len(video_data) + BATCH_SIZE - 1) // BATCH_SIZE,
+            extra={"color": "MAGENTA"},
+        )
 
         running_analysis = await gemini_service.analyze_videos(
             batch, running_analysis
@@ -135,6 +166,8 @@ async def run_analysis(
     else:
         analysis_doc["created_at"] = datetime.utcnow()
         await db.analysis.insert_one(analysis_doc)
+        
+    logger.success(f"💾 Updated main analysis document v{version} in database")
 
     # 6b  Store audit snapshot in analysis_history
     history_doc = {
@@ -151,6 +184,8 @@ async def run_analysis(
         "created_at": datetime.utcnow(),
     }
     await db.analysis_history.insert_one(history_doc)
+    
+    logger.success("🗃️ Saved audit trail snapshot to analysis_history")
 
     # 7  Run to-do engine
     await update_todo_list(
