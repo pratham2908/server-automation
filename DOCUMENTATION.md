@@ -251,13 +251,21 @@ Returns all videos for a channel, with optional filtering and suggestion marking
 
 Fetches all videos from the YouTube channel, finds any not already in the DB, categorizes them via Gemini (auto-creating categories from the channel description), and inserts them as `done`.
 
+**Optional request body:**
+
+```json
+{
+  "new_category_description": "Extra instructions for Gemini on how to categorize"
+}
+```
+
 **What happens:**
 
 1. Fetches all videos from the channel's uploads playlist (paginated)
 2. Skips any already in the `videos` collection (by `youtube_video_id`)
 3. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
-4. Auto-creates new categories in the `categories` collection
-5. Inserts videos as `done` with `category` and `topic` assigned
+4. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
+5. Inserts videos as `done` with `category` and `topic` assigned; `created_at` is set to the **YouTube publish date**
 
 **Response (200):**
 
@@ -463,11 +471,15 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 
 1. **Fetch done videos** from DB for this channel
 2. **Compute delta** — compare with already-analysed video IDs to find new ones
-3. **Early exit** if no new videos to analyse
-4. **Fetch YouTube stats** (views, likes, comments) for new videos that have a `youtube_video_id`
-5. **Send to Gemini in batches of 5** — each batch receives the running analysis from prior batches, so insights accumulate incrementally
-6. **Save updated analysis** to DB (increments version number)
-7. **Run to-do engine:**
+3. **Exclude recent videos** — skip any with `created_at` less than 3 days ago (hard limit, no exceptions)
+4. **Early exit** if no new videos to analyse
+5. **Fetch YouTube stats** (views, likes, comments) for new videos that have a `youtube_video_id`
+6. **Send to Gemini in batches of 5** — each batch receives the running analysis from prior batches, so insights accumulate incrementally
+7. **Save updated analysis** to DB (increments version number)
+8. **Save audit snapshot** to `analysis_history` collection
+9. **Run to-do engine:**
+   - Updates **all category scores** from Gemini's analysis output
+   - Increments **category video_count** for each newly analysed video
    - Archives categories with score < 30 AND ≥ 5 videos
    - Generates new to-do video ideas (title/description/tags) via Gemini for each active category
    - Inserts new to-do videos into the `videos` collection
@@ -752,6 +764,36 @@ Stores the AI-generated channel analysis. **One document per channel.**
 | Fields | Type | Purpose |
 |---|---|---|
 | `channel_id` | Unique | One analysis doc per channel |
+
+---
+
+### Collection: `analysis_history`
+
+Audit trail — one document per analysis run. Stores the inputs and outputs of each run for later review.
+
+```json
+{
+  "_id": "ObjectId",
+  "channel_id": "tech-tips",
+  "version": 3,
+  "input_videos": [                // videos sent to Gemini
+    {"title": "...", "category": "...", "topic": "...", "tags": [...], "stats": {...}}
+  ],
+  "new_video_ids": ["vid5", "vid6"],   // video_ids that were new in this run
+  "result": {
+    "best_posting_times": [...],       // Gemini's output
+    "category_analysis": [...]
+  },
+  "total_analysed_count": 20,          // total videos analysed so far
+  "batch_count": 2,                    // how many Gemini batches were used
+  "created_at": "datetime"
+}
+```
+
+**Indexes:**
+| Fields | Type | Purpose |
+|---|---|---|
+| `(channel_id, created_at)` | Compound (desc) | Fast reverse-chronological audit queries |
 
 ---
 

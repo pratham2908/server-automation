@@ -4,6 +4,8 @@ Configures the app, lifespan events (DB + service init), and router mounting.
 """
 
 import logging
+
+logging.basicConfig(level=logging.INFO)
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 

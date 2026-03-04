@@ -151,6 +151,12 @@ curl -X PATCH http://localhost:8000/api/v1/channels/ch1/videos/VIDEO_ID/status \
 # Sync all YouTube videos into DB (auto-categorizes via Gemini)
 curl -X POST http://localhost:8000/api/v1/channels/ch1/videos/sync \
   -H "X-API-Key: your-api-key"
+
+# Sync with custom categorization instructions
+curl -X POST http://localhost:8000/api/v1/channels/ch1/videos/sync \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"new_category_description": "Keep categories broad like Rankings, Comparisons, etc."}'
 ```
 
 ---

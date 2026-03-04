@@ -263,5 +263,6 @@ async def delete_channel(
     await db.video_queue.delete_many({"channel_id": channel_id})
     await db.categories.delete_many({"channel_id": channel_id})
     await db.analysis.delete_many({"channel_id": channel_id})
+    await db.analysis_history.delete_many({"channel_id": channel_id})
 
     return {"ok": True, "channel_id": channel_id, "deleted": True}

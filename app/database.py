@@ -33,6 +33,9 @@ async def connect_db(mongodb_uri: str, db_name: str) -> AsyncIOMotorDatabase:
         [("channel_id", 1), ("status", 1), ("score", -1)],
     )
     await _db.analysis.create_index("channel_id", unique=True)
+    await _db.analysis_history.create_index(
+        [("channel_id", 1), ("created_at", -1)],
+    )
 
     return _db
 

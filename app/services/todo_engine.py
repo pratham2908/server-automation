@@ -28,19 +28,56 @@ async def update_todo_list(
     analysis: dict[str, Any],
     db: AsyncIOMotorDatabase,
     gemini_service: GeminiService,
+    analysed_videos: list[dict[str, Any]] | None = None,
 ) -> None:
     """Refresh the to-do video list for *channel_id*.
 
     Steps
     -----
-    1. Archive categories whose score is below the threshold and that have
+    1. Update category scores from Gemini's analysis output.
+    2. Update category video_count for newly analysed videos.
+    3. Archive categories whose score is below the threshold and that have
        enough videos to be statistically meaningful.
-    2. For every active category in the analysis, generate a new to-do video
+    4. For every active category in the analysis, generate a new to-do video
        (title / description / tags) via Gemini.
-    3. Insert the new to-do videos into the ``videos`` collection.
+    5. Insert the new to-do videos into the ``videos`` collection.
     """
     # ------------------------------------------------------------------ #
-    # 1  Archive underperforming categories
+    # 1  Update category scores from Gemini analysis output
+    # ------------------------------------------------------------------ #
+    for cat_analysis in analysis.get("category_analysis", []):
+        cat_name = cat_analysis.get("category", "")
+        score = cat_analysis.get("score")
+        if cat_name and score is not None:
+            await db.categories.update_one(
+                {"channel_id": channel_id, "name": cat_name},
+                {
+                    "$set": {
+                        "score": score,
+                        "updated_at": datetime.utcnow(),
+                    }
+                },
+            )
+
+    # ------------------------------------------------------------------ #
+    # 2  Update video_count for newly analysed videos
+    # ------------------------------------------------------------------ #
+    if analysed_videos:
+        # Count how many newly analysed videos belong to each category.
+        cat_counts: dict[str, int] = {}
+        for v in analysed_videos:
+            cat = v.get("category", "")
+            if cat:
+                cat_counts[cat] = cat_counts.get(cat, 0) + 1
+
+        for cat_name, count in cat_counts.items():
+            await db.categories.update_one(
+                {"channel_id": channel_id, "name": cat_name},
+                {"$inc": {"video_count": count}},
+            )
+
+    # ------------------------------------------------------------------ #
+    # 3  Archive underperforming categories
     # ------------------------------------------------------------------ #
     for cat_analysis in analysis.get("category_analysis", []):
         cat_name = cat_analysis.get("category", "")
@@ -59,7 +96,6 @@ async def update_todo_list(
                 {
                     "$set": {
                         "status": "archived",
-                        "score": score,
                         "updated_at": datetime.utcnow(),
                     }
                 },
@@ -72,7 +108,7 @@ async def update_todo_list(
             )
 
     # ------------------------------------------------------------------ #
-    # 2  Generate new to-do videos for active categories
+    # 4  Generate new to-do videos for active categories
     # ------------------------------------------------------------------ #
     active_categories = await db.categories.find(
         {"channel_id": channel_id, "status": "active"}
@@ -125,7 +161,7 @@ async def update_todo_list(
         new_videos.append(video_doc)
 
     # ------------------------------------------------------------------ #
-    # 3  Bulk-insert new videos
+    # 5  Bulk-insert new videos
     # ------------------------------------------------------------------ #
     if new_videos:
         await db.videos.insert_many(new_videos)
@@ -134,3 +170,4 @@ async def update_todo_list(
             len(new_videos),
             channel_id,
         )
+

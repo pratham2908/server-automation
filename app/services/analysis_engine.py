@@ -64,7 +64,6 @@ async def run_analysis(
 
     # 3  Early exit
     if not new_videos:
-        logger.info("No new videos to analyse for channel %s", channel_id)
         return existing_analysis or {}
 
     # 4  Fetch YouTube stats for videos that have a youtube_video_id
@@ -108,16 +107,6 @@ async def run_analysis(
 
     for i in range(0, len(video_data), BATCH_SIZE):
         batch = video_data[i : i + BATCH_SIZE]
-        batch_num = (i // BATCH_SIZE) + 1
-        total_batches = (len(video_data) + BATCH_SIZE - 1) // BATCH_SIZE
-
-        logger.info(
-            "Analysing batch %d/%d (%d videos) for channel %s",
-            batch_num,
-            total_batches,
-            len(batch),
-            channel_id,
-        )
 
         running_analysis = await gemini_service.analyze_videos(
             batch, running_analysis
@@ -147,8 +136,27 @@ async def run_analysis(
         analysis_doc["created_at"] = datetime.utcnow()
         await db.analysis.insert_one(analysis_doc)
 
+    # 6b  Store audit snapshot in analysis_history
+    history_doc = {
+        "channel_id": channel_id,
+        "version": version,
+        "input_videos": video_data,
+        "new_video_ids": [v["video_id"] for v in new_videos],
+        "result": {
+            "best_posting_times": updated.get("best_posting_times", []),
+            "category_analysis": updated.get("category_analysis", []),
+        },
+        "total_analysed_count": len(all_analysed),
+        "batch_count": (len(video_data) + BATCH_SIZE - 1) // BATCH_SIZE,
+        "created_at": datetime.utcnow(),
+    }
+    await db.analysis_history.insert_one(history_doc)
+
     # 7  Run to-do engine
-    await update_todo_list(channel_id, analysis_doc, db, gemini_service)
+    await update_todo_list(
+        channel_id, analysis_doc, db, gemini_service,
+        analysed_videos=new_videos,
+    )
 
     # 8  Return
     saved = await db.analysis.find_one({"channel_id": channel_id})

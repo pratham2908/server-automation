@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from dateutil.parser import isoparse
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
@@ -257,6 +259,7 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
                     "title": snippet.get("title", ""),
                     "description": snippet.get("description", ""),
                     "tags": snippet.get("tags", []),
+                    "published_at": snippet.get("publishedAt", ""),
                     "views": int(stats.get("viewCount", 0)),
                     "likes": int(stats.get("likeCount", 0)),
                     "comments": int(stats.get("commentCount", 0)),
@@ -417,7 +420,7 @@ async def sync_videos(
                         "name": cat,
                         "description": "",
                         "raw_description": "",
-                        "score": 50.0,
+                        "score": 0,
                         "status": "active",
                         "video_count": 0,
                         "created_at": now,
@@ -431,6 +434,15 @@ async def sync_videos(
         yt_id = v["youtube_video_id"]
         cat_info = categorizations.get(yt_id, {"category": "Uncategorized", "topic": ""})
         now = datetime.utcnow()
+
+        # Use YouTube publish date as created_at so the 3-day filter works.
+        published_at = now
+        if v.get("published_at"):
+            try:
+                published_at = isoparse(v["published_at"]).replace(tzinfo=None)
+            except (ValueError, TypeError):
+                pass
+
         docs.append(
             {
                 "channel_id": channel_id,
@@ -450,20 +462,13 @@ async def sync_videos(
                     "engagement": None,
                     "avg_percentage_viewed": None,
                 },
-                "created_at": now,
+                "created_at": published_at,
                 "updated_at": now,
             }
         )
 
     if docs:
         await db.videos.insert_many(docs)
-
-    # Update category video counts.
-    for doc in docs:
-        await db.categories.update_one(
-            {"channel_id": channel_id, "name": doc["category"]},
-            {"$inc": {"video_count": 1}},
-        )
 
     # Build per-video summary.
     video_summary = [

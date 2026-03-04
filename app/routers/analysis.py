@@ -30,11 +30,7 @@ async def run_analysis_update(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Trigger a full analysis update for *channel_id*.
-
-    This is a heavy endpoint — it fetches YouTube stats, calls Gemini,
-    and regenerates to-do videos.
-    """
+    """Trigger a full analysis update for *channel_id*."""
     from app.services.analysis_engine import run_analysis
 
     youtube_service, gemini_service = _get_services()
