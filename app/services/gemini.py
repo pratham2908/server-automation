@@ -111,30 +111,50 @@ class GeminiService:
 
     async def generate_video_content(
         self,
+        channel_id: str,
         category: str,
         category_analysis: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Generate title, description, and tags for a new to-do video.
+        count: int = 1,
+        existing_titles: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Generate multiple titles, descriptions, and tags for new to-do videos.
 
         Parameters
         ----------
+        channel_id:
+            The channel slug (e.g., 'officialgeoranking').
         category:
             The content category name.
         category_analysis:
             The Gemini-generated insights for this category (patterns,
             templates, best tags, score).
+        count:
+            The number of distinct videos to generate.
+        existing_titles:
+            List of titles that have already been generated for this category.
 
         Returns
         -------
-        dict
-            ``{"title": ..., "description": ..., "tags": [...]}``
+        list[dict]
+            ``[{"title": ..., "description": ..., "tags": [...]}, ...]``
         """
-        logger.info("Generating Gemini content for category '%s'", category)
-        prompt = self._build_content_prompt(category, category_analysis)
+        logger.info(
+            "Generating %d Gemini video ideas for category '%s' (Channel: %s)",
+            count,
+            category,
+            channel_id,
+        )
+        prompt = self._build_content_prompt(
+            channel_id, category, category_analysis, count, existing_titles
+        )
         text = await self._generate(prompt)
 
         try:
-            return json.loads(text)
+            result = json.loads(text)
+            if isinstance(result, list):
+                return result
+            # Fallback if Gemini returned a single object instead of a list
+            return [result]
         except (json.JSONDecodeError, TypeError):
             logger.error(
                 "🚨 Failed to parse JSON from Gemini content response: %s", text
@@ -207,27 +227,46 @@ Guidelines:
 
     @staticmethod
     def _build_content_prompt(
+        channel_id: str,
         category: str,
         category_analysis: dict[str, Any],
+        count: int,
+        existing_titles: list[str] | None,
     ) -> str:
-        return f"""You are a YouTube content strategist. Generate metadata for a new video
+        existing_section = ""
+        if existing_titles:
+            existing_section = (
+                "\n\n## Existing Videos to Avoid\n"
+                "Do NOT generate videos about these explicit topics/titles, as they "
+                "already exist. Find completely distinct angles or new topics within the category:\n"
+                + "\n".join(f"- {title}" for title in existing_titles)
+            )
+
+        return f"""You are a YouTube content strategist. Generate metadata for {count} completely distinct new videos
 in the "{category}" category.
 
 ## Category Insights
 ```json
 {json.dumps(category_analysis, indent=2)}
 ```
+{existing_section}
 
 ## Required Output Format
-Return a JSON object with exactly these keys:
+Return a JSON array containing exactly {count} objects, with exactly these keys:
 
-{{
-  "title": "Engaging video title following the best patterns",
-  "description": "Full description using the best template",
-  "tags": ["tag1", "tag2", "tag3"]
-}}
+[
+  {{
+    "title": "Engaging video title following the best patterns",
+    "description": "Full description using the best template",
+    "tags": ["tag1", "tag2", "tag3"],
+    "basis_factor": "Reasoning or comparison basis"
+  }}
+]
 
 Guidelines:
-- The title should follow the best-performing patterns identified.
-- The description should use the best template but feel natural and unique.
-- Include 5-15 relevant tags."""
+- Generate exactly {count} completely distinct video ideas. DO NOT repeat titles or topics.
+- The titles should follow the best-performing patterns identified.
+- The descriptions should use the best templates but feel natural and unique.
+- Include 5-15 relevant tags per video.
+- **basis_factor**: If the channel is `officialgeoranking`, this MUST describe the exact data source, logic, or criteria used for the ranking (e.g., "Ranked by GDP using World Bank data", "Ranked by data from UNESCO World Heritage sites"). It should not just restate the title. For other channels, provide a short, generic reason for the suggestion.
+- Strictly return a JSON array of objects (`[]`), even if count is 1."""

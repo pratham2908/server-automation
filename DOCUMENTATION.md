@@ -481,10 +481,7 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
    - Updates **all category scores** from Gemini's analysis output
    - Increments **category video_count** for each newly analysed video
    - Archives categories with score < 30 AND ≥ 5 videos
-   - Generates N new to-do videos (N = number of newly analysed videos)
-   - Slots are distributed across categories **weighted by score** — higher-scoring categories get more videos
-   - Every eligible category gets at least 1 slot to maintain diversity
-   - Inserts new to-do videos into the `videos` collection
+   - Note: It no longer auto-generates video ideas. Use the `/updateToDoList` endpoint to generate videos explicitly.
 
 **Response (200):**
 
@@ -523,6 +520,37 @@ Returns the most recent analysis document for the channel.
 **Response (200):** Same format as the POST response above.
 
 **Errors:** `404` — No analysis exists yet for this channel.
+
+---
+
+#### `POST /updateToDoList` — Bulk generate to-do videos
+
+Generates completely distinct new video ideas based on the latest analysis.
+
+**Request body:**
+
+```json
+{
+  "n": 5 // number of videos to generate
+}
+```
+
+**What happens:**
+
+1. **Delete** any existing "todo" status videos that belong to newly archived categories.
+2. **Distribute** the `n` slots across active categories weighted by their performance score.
+3. **Exclude** existing video titles from generation so Gemini doesn't repeat ideas.
+4. **Call Gemini** to bulk-generate distinct ideas in one shot per category.
+5. **Insert** new videos into the `videos` collection with `status: "todo"`.
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "message": "Successfully generated 5 new videos for the to-do list."
+}
+```
 
 ---
 

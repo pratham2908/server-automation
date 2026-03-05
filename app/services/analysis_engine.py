@@ -14,7 +14,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
 from app.services.gemini import GeminiService
-from app.services.todo_engine import update_todo_list
+from app.services.todo_engine import update_categories_from_analysis
 from app.services.youtube import YouTubeService
 
 logger = get_logger(__name__)
@@ -187,9 +187,11 @@ async def run_analysis(
     
     logger.success("🗃️ Saved audit trail snapshot to analysis_history")
 
-    # 7  Run to-do engine
-    await update_todo_list(
-        channel_id, analysis_doc, db, gemini_service,
+    # 7  Run category updates and archive underperformers
+    await update_categories_from_analysis(
+        channel_id=channel_id, 
+        analysis=analysis_doc, 
+        db=db, 
         analysed_videos=new_videos,
     )
 

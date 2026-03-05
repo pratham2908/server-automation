@@ -1,7 +1,9 @@
 """Analysis router – run analysis updates and retrieve results."""
 
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import BaseModel, Field
 
 from app.database import get_db
 from app.dependencies import verify_api_key
@@ -66,3 +68,41 @@ async def get_latest_analysis(
         )
     doc.pop("_id", None)
     return doc
+
+
+# ------------------------------------------------------------------
+# POST /updateToDoList  –  generate n new videos based on latest analysis
+# ------------------------------------------------------------------
+
+class TodoGenerateRequest(BaseModel):
+    n: int = Field(gt=0, description="The number of videos to generate")
+
+
+@router.post("/updateToDoList")
+async def generate_todos(
+    channel_id: str,
+    body: TodoGenerateRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Generate `n` new to-do videos for *channel_id*."""
+    from app.services.todo_engine import generate_todo_videos
+
+    _, gemini_service = _get_services()
+
+    if gemini_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini service not initialised",
+        )
+
+    await generate_todo_videos(
+        channel_id=channel_id,
+        target_count=body.n,
+        db=db,
+        gemini_service=gemini_service,
+    )
+
+    return {
+        "ok": True,
+        "message": f"Successfully generated {body.n} new videos for the to-do list.",
+    }
