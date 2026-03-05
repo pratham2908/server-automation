@@ -38,7 +38,7 @@ async def get_queue(
 ):
     """Return the current posting queue sorted by position."""
     queue = (
-        await db.video_queue.find({"channel_id": channel_id})
+        await db.schedule_queue.find({"channel_id": channel_id})
         .sort("position", 1)
         .to_list(length=None)
     )
@@ -86,7 +86,7 @@ async def upload_all(
         )
 
     queue = (
-        await db.video_queue.find({"channel_id": channel_id})
+        await db.schedule_queue.find({"channel_id": channel_id})
         .sort("position", 1)
         .to_list(length=None)
     )
@@ -122,20 +122,20 @@ async def upload_all(
                 tags=video.get("tags", []),
             )
 
-            # Update video record with YouTube ID and mark done.
+            # Update video record with YouTube ID and mark published.
             await db.videos.update_one(
                 {"channel_id": channel_id, "video_id": video_id},
                 {
                     "$set": {
                         "youtube_video_id": yt_id,
-                        "status": "done",
+                        "status": "published",
                         "updated_at": datetime.utcnow(),
                     }
                 },
             )
 
-            # Remove from queue.
-            await db.video_queue.delete_one({"_id": entry["_id"]})
+            # Remove from schedule queue.
+            await db.schedule_queue.delete_one({"_id": entry["_id"]})
 
             details.append({"video_id": video_id, "status": "uploaded", "youtube_video_id": yt_id})
             uploaded += 1

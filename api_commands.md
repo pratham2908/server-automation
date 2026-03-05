@@ -118,29 +118,33 @@ curl http://localhost:8000/api/v1/channels/ch1/videos/ \
 curl "http://localhost:8000/api/v1/channels/ch1/videos/?status_filter=todo" \
   -H "X-API-Key: your-api-key"
 
-# List done videos
-curl "http://localhost:8000/api/v1/channels/ch1/videos/?status_filter=done" \
+# List published videos
+curl "http://localhost:8000/api/v1/channels/ch1/videos/?status_filter=published" \
   -H "X-API-Key: your-api-key"
 
-# List in_queue videos
-curl "http://localhost:8000/api/v1/channels/ch1/videos/?status_filter=in_queue" \
+# List ready videos
+curl "http://localhost:8000/api/v1/channels/ch1/videos/?status_filter=ready" \
+  -H "X-API-Key: your-api-key"
+
+# List scheduled videos
+curl "http://localhost:8000/api/v1/channels/ch1/videos/?status_filter=scheduled" \
   -H "X-API-Key: your-api-key"
 
 # List videos with top 3 suggestions
 curl "http://localhost:8000/api/v1/channels/ch1/videos/?suggest_n=3" \
   -H "X-API-Key: your-api-key"
 
-# Add video to queue (with file upload — sets status to in_queue)
+# Add video to queue (with file upload — sets status to ready)
 curl -X POST http://localhost:8000/api/v1/channels/ch1/videos/queue \
   -H "X-API-Key: your-api-key" \
   -F "file=@/path/to/video.mp4" \
   -F 'body={"title":"My Video","description":"Video description","tags":["tag1","tag2"],"category":"Tutorials","topic":"My video topic"}'
 
-# Mark a video as done (replace VIDEO_ID)
+# Mark a video as published (replace VIDEO_ID)
 curl -X PATCH http://localhost:8000/api/v1/channels/ch1/videos/VIDEO_ID/status \
   -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
-  -d '{"status": "done"}'
+  -d '{"status": "published"}'
 
 # Mark a video back to todo
 curl -X PATCH http://localhost:8000/api/v1/channels/ch1/videos/VIDEO_ID/status \
@@ -157,6 +161,10 @@ curl -X POST http://localhost:8000/api/v1/channels/ch1/videos/sync \
   -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"new_category_description": "Keep categories broad like Rankings, Comparisons, etc."}'
+
+# Schedule a ready video (move from posting_queue → schedule_queue)
+curl -X POST http://localhost:8000/api/v1/channels/ch1/videos/VIDEO_ID/schedule \
+  -H "X-API-Key: your-api-key"
 ```
 
 ---
@@ -171,6 +179,12 @@ curl -X POST http://localhost:8000/api/v1/channels/ch1/analysis/update \
 # Get latest analysis
 curl http://localhost:8000/api/v1/channels/ch1/analysis/latest \
   -H "X-API-Key: your-api-key"
+
+# Generate 5 new to-do videos based on latest analysis
+curl -X POST http://localhost:8000/api/v1/channels/ch1/analysis/updateToDoList \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"n": 5}'
 ```
 
 ---
@@ -178,7 +192,7 @@ curl http://localhost:8000/api/v1/channels/ch1/analysis/latest \
 ## Posting
 
 ```bash
-# View posting queue
+# View schedule queue
 curl http://localhost:8000/api/v1/channels/ch1/posting/queue \
   -H "X-API-Key: your-api-key"
 

@@ -30,7 +30,7 @@ async def run_analysis(
 
     Flow
     ----
-    1. Fetch all "done" videos from DB.
+    1. Fetch all "published" videos from DB.
     2. Compute delta against already-analysed video IDs.
     3. If no new videos, return early.
     4. Fetch YouTube stats for new videos.
@@ -41,7 +41,7 @@ async def run_analysis(
     """
     # 1  Fetch done videos
     done_videos = await db.videos.find(
-        {"channel_id": channel_id, "status": "done"}
+        {"channel_id": channel_id, "status": "published"}
     ).to_list(length=None)
     
     logger.info(

@@ -11,8 +11,9 @@ class VideoStatus(str, Enum):
     """Allowed lifecycle states for a video."""
 
     TODO = "todo"
-    IN_QUEUE = "in_queue"
-    DONE = "done"
+    READY = "ready"
+    SCHEDULED = "scheduled"
+    PUBLISHED = "published"
 
 
 class VideoMetadata(BaseModel):
@@ -60,8 +61,25 @@ class VideoStatusUpdate(BaseModel):
     status: VideoStatus
 
 
-class VideoQueue(BaseModel):
-    """An entry in the ``video_queue`` collection (posting order)."""
+class PostingQueue(BaseModel):
+    """An entry in the ``posting_queue`` collection.
+
+    Videos with status ``ready`` sit here after being uploaded to R2,
+    waiting to be scheduled.
+    """
+
+    channel_id: str
+    video_id: str = Field(..., description="References videos.video_id")
+    position: int = Field(..., ge=1, description="1-based queue ordering")
+    added_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ScheduleQueue(BaseModel):
+    """An entry in the ``schedule_queue`` collection.
+
+    Videos with status ``scheduled`` sit here, waiting to be uploaded
+    to YouTube via the upload-all endpoint.
+    """
 
     channel_id: str
     video_id: str = Field(..., description="References videos.video_id")

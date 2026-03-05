@@ -206,7 +206,7 @@ Returns all videos for a channel, with optional filtering and suggestion marking
 
 | Param           | Type   | Default | Description                                                                                           |
 | --------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------- |
-| `status_filter` | string | `all`   | Filter by status: `todo`, `in_queue`, `done`, or `all`                                                |
+| `status_filter` | string | `all`   | Filter by status: `todo`, `ready`, `scheduled`, `published`, or `all`                                 |
 | `suggest_n`     | int    | —       | If provided, marks the top N to-do videos as `suggested=true` (ordered by category score, best first) |
 
 **How `suggest_n` works:**
@@ -301,13 +301,13 @@ Changes a video's status.
 
 ```json
 {
-  "status": "done" // "todo", "in_queue", or "done"
+  "status": "published" // "todo", "ready", "scheduled", or "published"
 }
 ```
 
 **Side effects:**
 
-- When marking a video as `done`, the corresponding category's `video_count` is incremented by 1.
+- When marking a video as `published`, the corresponding category's `video_count` is incremented by 1.
 
 **Response (200):**
 
@@ -345,8 +345,8 @@ Creates a new video record AND adds it to the posting queue. The video file is s
 
 1. Generates a UUID for `video_id`
 2. Streams the file to R2 at `{channel_id}/{video_id}.mp4`
-3. Creates a video document in the `videos` collection with status `in_queue`
-4. Creates a queue entry in `video_queue` with the next available position
+3. Creates a video document in the `videos` collection with status `ready`
+4. Creates a queue entry in `posting_queue` with the next available position
 
 **Response (201):**
 
@@ -355,6 +355,34 @@ Creates a new video record AND adds it to the posting queue. The video file is s
   "ok": true,
   "video": { ...full video document... },
   "queue_position": 3
+}
+```
+
+---
+
+#### `POST /{video_id}/schedule` — Schedule a ready video
+
+Moves a video from `ready` → `scheduled`. Removes it from `posting_queue` and adds it to `schedule_queue`.
+
+**Path params:** `video_id` — the UUID of the video
+
+**Preconditions:** The video must be in `ready` status. Returns `400` otherwise.
+
+**What happens:**
+
+1. Validates the video exists and is in `ready` status
+2. Removes the entry from `posting_queue`
+3. Inserts a new entry into `schedule_queue` at the next available position
+4. Updates the video status to `scheduled`
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "video_id": "550e8400-...",
+  "status": "scheduled",
+  "schedule_position": 1
 }
 ```
 
@@ -558,13 +586,16 @@ Generates completely distinct new video ideas based on the latest analysis.
 
 Prefix: `/api/v1/channels/{channel_id}/posting`
 
-Manages the video posting queue and handles YouTube uploads.
+Manages the schedule queue and handles YouTube uploads.
+
+The posting queue (`posting_queue`) holds videos that are `ready` — uploaded to R2 but not yet scheduled.
+The schedule queue (`schedule_queue`) holds videos that are `scheduled` — confirmed for YouTube upload.
 
 ---
 
-#### `GET /queue` — View posting queue
+#### `GET /queue` — View schedule queue
 
-Returns the current posting queue sorted by position, enriched with video metadata.
+Returns the current schedule queue sorted by position, enriched with video metadata.
 
 **Response (200):**
 
@@ -588,8 +619,8 @@ Processes the entire queue in order. For each video:
 
 1. **Download** from Cloudflare R2 to a temp file
 2. **Upload** to YouTube via resumable upload (10MB chunks, private by default)
-3. **Update** the video record: set `youtube_video_id`, change status from `in_queue` → `done`
-4. **Remove** from the posting queue
+3. **Update** the video record: set `youtube_video_id`, change status from `scheduled` → `published`
+4. **Remove** from the schedule queue
 5. **Clean up** the temp file
 
 **Response (200):**
@@ -673,7 +704,7 @@ Stores all video records — both manually uploaded and AI-generated to-do items
   "tags": ["vscode", "productivity"],
   "category": "Tutorials",
   "topic": "VS Code productivity hacks", // the core content idea
-  "status": "todo", // "todo", "in_queue", or "done"
+  "status": "todo", // "todo", "ready", "scheduled", or "published"
   "suggested": false, // true when marked by suggest_n
   "basis_factor": "Auto-generated...", // why this video was created
   "youtube_video_id": null, // set after YouTube upload
@@ -697,14 +728,41 @@ Stores all video records — both manually uploaded and AI-generated to-do items
 **Status lifecycle:**
 
 - `todo` → Video idea exists (AI-generated or manual), not yet produced
-- `in_queue` → Video file uploaded to R2, waiting in posting queue
-- `done` → Video has been uploaded to YouTube
+- `ready` → Video file uploaded to R2, sitting in `posting_queue`
+- `scheduled` → Video confirmed for upload, sitting in `schedule_queue`
+- `published` → Video has been uploaded to YouTube
 
 ---
 
-### Collection: `video_queue`
+### Collection: `posting_queue`
 
-Stores the ordered posting queue. Each entry references a video by `video_id`.
+Stores videos that are **ready** — uploaded to R2 but not yet scheduled. Each entry references a video by `video_id`.
+
+```json
+{
+  "_id": "ObjectId",
+  "channel_id": "tech-tips",
+  "video_id": "550e8400-...", // references videos.video_id
+  "position": 1, // 1-based ordering
+  "added_at": "datetime"
+}
+```
+
+**Indexes:**
+| Fields | Type | Purpose |
+|---|---|---|
+| `(channel_id, position)` | Compound | Fast ordered queue retrieval |
+
+**Notes:**
+
+- Entries are removed when the video is scheduled (moved to `schedule_queue`).
+- Position determines the display order.
+
+---
+
+### Collection: `schedule_queue`
+
+Stores videos that are **scheduled** — confirmed and waiting for YouTube upload. Each entry references a video by `video_id`.
 
 ```json
 {

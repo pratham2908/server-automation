@@ -53,7 +53,7 @@ async def list_videos(
 
     Query params
     ------------
-    status : ``done`` | ``todo`` | ``all`` (default ``all``)
+    status : ``todo`` | ``ready`` | ``scheduled`` | ``published`` | ``all`` (default ``all``)
     suggest_n : if provided, mark the top *n* to-do videos as suggested.
     """
     query: dict = {"channel_id": channel_id}
@@ -129,8 +129,8 @@ async def update_video_status(
             detail=f"Video {video_id} not found",
         )
 
-    # Update category video count when marking done.
-    if body.status == VideoStatus.DONE:
+    # Update category video count when marking published.
+    if body.status == VideoStatus.PUBLISHED:
         video = await db.videos.find_one(
             {"channel_id": channel_id, "video_id": video_id}
         )
@@ -176,7 +176,7 @@ async def add_to_queue(
         "tags": body.tags,
         "category": body.category,
         "topic": body.topic,
-        "status": "in_queue",
+        "status": "ready",
         "suggested": False,
         "basis_factor": body.basis_factor,
         "youtube_video_id": None,
@@ -192,13 +192,13 @@ async def add_to_queue(
     await db.videos.insert_one(video_doc)
 
     # Determine next position in queue.
-    last = await db.video_queue.find_one(
+    last = await db.posting_queue.find_one(
         {"channel_id": channel_id},
         sort=[("position", -1)],
     )
     next_pos = (last["position"] + 1) if last else 1
 
-    await db.video_queue.insert_one(
+    await db.posting_queue.insert_one(
         {
             "channel_id": channel_id,
             "video_id": video_id,
@@ -209,6 +209,70 @@ async def add_to_queue(
 
     video_doc.pop("_id", None)
     return {"ok": True, "video": video_doc, "queue_position": next_pos}
+
+
+# ------------------------------------------------------------------
+# POST /{video_id}/schedule  –  move video from posting_queue → schedule_queue
+# ------------------------------------------------------------------
+
+
+@router.post("/{video_id}/schedule")
+async def schedule_video(
+    channel_id: str,
+    video_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Move a **ready** video into the schedule queue.
+
+    - Validates the video exists and is in ``ready`` status.
+    - Removes it from ``posting_queue``.
+    - Inserts it into ``schedule_queue`` at the next available position.
+    - Updates status to ``scheduled``.
+    """
+    video = await db.videos.find_one(
+        {"channel_id": channel_id, "video_id": video_id}
+    )
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+
+    if video.get("status") != "ready":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Video must be in 'ready' status to schedule (current: {video.get('status')})",
+        )
+
+    # Remove from posting_queue.
+    await db.posting_queue.delete_one(
+        {"channel_id": channel_id, "video_id": video_id}
+    )
+
+    # Determine next position in schedule_queue.
+    now = datetime.utcnow()
+    last = await db.schedule_queue.find_one(
+        {"channel_id": channel_id},
+        sort=[("position", -1)],
+    )
+    next_pos = (last["position"] + 1) if last else 1
+
+    await db.schedule_queue.insert_one(
+        {
+            "channel_id": channel_id,
+            "video_id": video_id,
+            "position": next_pos,
+            "added_at": now,
+        }
+    )
+
+    # Update video status.
+    await db.videos.update_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {"$set": {"status": "scheduled", "updated_at": now}},
+    )
+
+    return {"ok": True, "video_id": video_id, "status": "scheduled", "schedule_position": next_pos}
 
 
 # ------------------------------------------------------------------
@@ -465,7 +529,7 @@ async def sync_videos(
                 "tags": v["tags"],
                 "category": cat_info["category"],
                 "topic": cat_info["topic"],
-                "status": "done",
+                "status": "published",
                 "suggested": False,
                 "basis_factor": "Synced from YouTube",
                 "youtube_video_id": yt_id,

@@ -260,7 +260,8 @@ async def delete_channel(
     # Delete channel and all scoped data.
     await db.channels.delete_one({"channel_id": channel_id})
     await db.videos.delete_many({"channel_id": channel_id})
-    await db.video_queue.delete_many({"channel_id": channel_id})
+    await db.posting_queue.delete_many({"channel_id": channel_id})
+    await db.schedule_queue.delete_many({"channel_id": channel_id})
     await db.categories.delete_many({"channel_id": channel_id})
     await db.analysis.delete_many({"channel_id": channel_id})
     await db.analysis_history.delete_many({"channel_id": channel_id})
