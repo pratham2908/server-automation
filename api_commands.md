@@ -6,24 +6,6 @@ Replace `ch1` with your actual channel ID.
 
 ---
 
-## Server Start Commands
-
-```bash
-# Activate virtual environment
-source .venv/bin/activate
-
-# Development (with hot-reload)
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-
-# Production
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
-
-# Interactive API docs (open in browser)
-open http://localhost:8000/docs
-```
-
----
-
 ## Health Check
 
 ```bash
