@@ -6,6 +6,7 @@ Uses Motor (async driver) with a single client created at startup and shared
 across all requests.  Index creation runs once during the lifespan event.
 """
 
+import certifi
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 # Module-level reference – set during startup, closed during shutdown.
@@ -17,7 +18,7 @@ async def connect_db(mongodb_uri: str, db_name: str) -> AsyncIOMotorDatabase:
     """Create the Motor client, store references, and build indexes."""
     global _client, _db
 
-    _client = AsyncIOMotorClient(mongodb_uri)
+    _client = AsyncIOMotorClient(mongodb_uri, tlsCAFile=certifi.where())
     _db = _client[db_name]
 
     # ---------- indexes ----------

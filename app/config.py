@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     YOUTUBE_CLIENT_SECRET: str
     YOUTUBE_TOKEN_JSON: str = "youtube_token.json"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 def get_settings() -> Settings:
