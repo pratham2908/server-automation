@@ -214,6 +214,7 @@ X-API-Key: <your-api-key>
         "avg_view_duration_seconds": 22,
         "estimated_minutes_watched": 366.7
       },
+      "scheduled_at": "2026-03-01T09:00:00Z",
       "published_at": "2026-03-01T10:00:00Z"
     }
   ],
@@ -250,9 +251,9 @@ X-API-Key: <your-api-key>
 }
 ```
 
-### Upload to Queue (Mark Ready)
+### Upload Video File
 
-- **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/queue`
+- **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/upload`
 - **Method**: `POST`
 - **Content-Type**: `multipart/form-data`
 - **Form Fields**:
@@ -399,48 +400,5 @@ X-API-Key: <your-api-key>
 ]
 ```
 
----
 
-## Posting
-
-### View Scheduled Queue
-
-- **Endpoint**: `/api/v1/channels/{channel_id}/posting/queue`
-- **Method**: `GET`
-- **Response**: Array of queue items with scheduled publish times.
-
-```json
-[
-  {
-    "position": 1,
-    "video_id": "uuid-1234",
-    "added_at": "2026-03-01T12:00:00Z",
-    "scheduled_at": "2026-03-10T10:00:00+05:30",
-    "title": "10 VS Code Tricks",
-    "category": "Tutorials"
-  }
-]
-```
-
-### Schedule All
-
-- **Endpoint**: `/api/v1/channels/{channel_id}/posting/schedule-all`
-- **Method**: `POST`
-- **Description**: Schedules every video in the **ready queue** on YouTube. Uses the same core operation as the schedule endpoint. For each video: computes a publish slot, uploads to YouTube as private with `publishAt`, and on success moves from the ready queue to the scheduled queue with status `scheduled`.
-- **Response**:
-
-```json
-{
-  "ok": true,
-  "scheduled": 2,
-  "failed": 0,
-  "details": [
-    {
-      "video_id": "uuid-1234",
-      "status": "scheduled",
-      "youtube_video_id": "dQw4w...",
-      "scheduled_at": "2026-03-10T10:00:00+05:30"
-    }
-  ]
-}
-```
+> **Note:** To view scheduled videos, use `GET /api/v1/channels/{channel_id}/videos?status_filter=scheduled`. The `scheduled_at` field on each video shows the YouTube publish time. To schedule all ready videos at once, use `POST /api/v1/channels/{channel_id}/videos/all/schedule`.

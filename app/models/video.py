@@ -49,6 +49,10 @@ class Video(BaseModel):
     youtube_video_id: Optional[str] = None
     r2_object_key: Optional[str] = None
     metadata: VideoMetadata = Field(default_factory=VideoMetadata)
+    scheduled_at: Optional[datetime] = Field(
+        None,
+        description="When the video is scheduled to go live on YouTube. Set when scheduled.",
+    )
     published_at: Optional[datetime] = Field(
         None,
         description="When the video was published on YouTube. Null until published.",

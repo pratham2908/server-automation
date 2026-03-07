@@ -9,7 +9,6 @@
   - [Videos](#videos)
   - [Categories](#categories)
   - [Analysis](#analysis)
-  - [Posting](#posting)
 - [Database Schema](#database-schema)
   - [channels](#collection-channels)
   - [videos](#collection-videos)
@@ -249,6 +248,7 @@ The response is a wrapper with `videos` (the array) and `sync_status` (how many 
         "avg_view_duration_seconds": null,
         "estimated_minutes_watched": null
       },
+      "scheduled_at": null,
       "published_at": null,
       "created_at": "2024-01-15T10:30:00Z",
       "updated_at": "2024-01-15T10:30:00Z"
@@ -348,9 +348,9 @@ Changes a video's status.
 
 ---
 
-#### `POST /queue` — Add video to ready queue
+#### `POST /{video_id}/upload` — Upload video file
 
-Creates a new video record AND adds it to the ready queue. The video file is streamed to Cloudflare R2.
+Uploads a video file for an existing `todo` video, streams it to Cloudflare R2, sets status to `ready`, and adds it to the ready queue.
 
 **Request:** `multipart/form-data`
 
@@ -374,10 +374,10 @@ Creates a new video record AND adds it to the ready queue. The video file is str
 
 **What happens:**
 
-1. Generates a UUID for `video_id`
+1. Verifies the video exists and is in `todo` status
 2. Streams the file to R2 at `{channel_id}/{video_id}.mp4`
-3. Creates a video document in the `videos` collection with status `ready`
-4. Creates an entry in the ready queue (`posting_queue`) with the next available position
+3. Updates the video document: status → `ready`, sets `r2_object_key`
+4. Creates an entry in the ready queue with the next available position
 
 **Response (201):**
 
@@ -684,82 +684,6 @@ Returns the history of analysis runs for the channel.
 
 ---
 
-### Posting
-
-Prefix: `/api/v1/channels/{channel_id}/posting`
-
-Manages the ready queue, scheduled queue, and YouTube scheduling.
-
-The **ready queue** (`posting_queue` collection) holds videos that are `ready` — uploaded to R2 but not yet scheduled on YouTube.
-The **scheduled queue** (`schedule_queue` collection) holds videos that are `scheduled` — uploaded to YouTube as private with a future `publishAt` time, waiting for YouTube to auto-publish.
-
----
-
-#### `GET /queue` — View scheduled queue
-
-Returns the current scheduled queue sorted by position, enriched with video metadata and scheduled publish time.
-
-**Response (200):**
-
-```json
-[
-  {
-    "position": 1,
-    "video_id": "550e8400-...",
-    "added_at": "2024-01-15T10:30:00Z",
-    "scheduled_at": "2026-03-10T10:00:00+05:30",
-    "title": "10 VS Code Tricks",
-    "category": "Tutorials"
-  }
-]
-```
-
----
-
-#### `POST /schedule-all` — Schedule all ready videos on YouTube
-
-Schedules every video in the **ready queue** on YouTube. Uses the same core operation as the schedule endpoint (`POST /{video_id}/schedule` with `"all"`).
-
-For each video in the ready queue:
-
-1. Computes a publish slot from `best_posting_times`
-2. Downloads from R2 to a temp file
-3. Uploads to YouTube as private with `publishAt`
-4. **Only on success**: removes from the ready queue, adds to the scheduled queue, sets `youtube_video_id`, status → `scheduled`
-5. Cleans up the temp file
-
-**Response (200):**
-
-```json
-{
-  "ok": true,
-  "scheduled": 2,
-  "failed": 1,
-  "details": [
-    {
-      "video_id": "vid1",
-      "status": "scheduled",
-      "youtube_video_id": "dQw4w...",
-      "scheduled_at": "2026-03-10T10:00:00+05:30"
-    },
-    {
-      "video_id": "vid2",
-      "status": "scheduled",
-      "youtube_video_id": "xYz1a...",
-      "scheduled_at": "2026-03-10T14:00:00+05:30"
-    },
-    { "video_id": "vid3", "status": "failed" }
-  ]
-}
-```
-
-**Notes:**
-
-- Videos are uploaded as **private** with a future `publishAt` — YouTube auto-publishes them at the scheduled time.
-- Failed uploads don't stop the queue — the next video is attempted.
-- Requires a valid YouTube token and a channel analysis with `best_posting_times`.
-- Temp files are always cleaned up, even on failure.
-
 ---
 
 ## Database Schema
@@ -829,6 +753,7 @@ Stores all video records — both manually uploaded and AI-generated to-do items
     "avg_view_duration_seconds": null, // from YouTube Analytics API
     "estimated_minutes_watched": null // from YouTube Analytics API
   },
+  "scheduled_at": "datetime | null", // when the video is scheduled to go live on YouTube; null until scheduled
   "published_at": "datetime | null", // when the video was published on YouTube; null until published
   "created_at": "datetime",
   "updated_at": "datetime"
@@ -1079,8 +1004,8 @@ To-do video generation is triggered separately via the `/updateToDoList` endpoin
 ```
 Client                    Server                   R2                YouTube
   |                         |                      |                    |
-  |-- POST /videos/queue -->|                      |                    |
-  |   (file + metadata)     |                      |                    |
+  |-- POST /videos/upload ->|                      |                    |
+  |   (file)                 |                      |                    |
   |                         |-- upload_fileobj --->|                    |
   |                         |   (streaming)        |                    |
   |                         |                      |                    |
@@ -1089,7 +1014,6 @@ Client                    Server                   R2                YouTube
   |<-- 201 {video, pos} ----|                      |                    |
   |                         |                      |                    |
   |-- POST /schedule/all -->|                      |                    |
-  |  (or POST /schedule-all)|                      |                    |
   |                         |-- compute publish slot (best_posting_times)|
   |                         |-- download_fileobj --|                    |
   |                         |   (to temp file)     |                    |
@@ -1098,7 +1022,7 @@ Client                    Server                   R2                YouTube
   |                         |   (10MB chunks)      |                    |
   |                         |                      |                    |
   |                         |  ON SUCCESS:         |                    |
-  |                         |-- set youtube_video_id, status=scheduled  |
+  |                         |-- set youtube_video_id, scheduled_at, status=scheduled|
   |                         |-- remove from ready queue (MongoDB)       |
   |                         |-- insert into scheduled queue (MongoDB)   |
   |                         |-- delete temp file   |                    |

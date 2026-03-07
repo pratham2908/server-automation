@@ -1,8 +1,7 @@
 """Core schedule operation: upload a video to YouTube and update all DB state.
 
-Both the ``schedule`` endpoint (videos router) and ``schedule-all`` endpoint
-(posting router) delegate to :func:`schedule_single_video` so the logic lives
-in one place.
+The ``schedule`` endpoint (videos router) delegates to
+:func:`schedule_single_video` so the logic lives in one place.
 """
 
 import os
@@ -71,6 +70,7 @@ async def schedule_single_video(
                 "$set": {
                     "youtube_video_id": yt_id,
                     "status": "scheduled",
+                    "scheduled_at": scheduled_at,
                     "updated_at": now,
                 }
             },

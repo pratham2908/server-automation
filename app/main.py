@@ -93,13 +93,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.routers import analysis, categories, channels, migration, posting, videos  # noqa: E402
+from app.routers import analysis, categories, channels, migration, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
 app.include_router(categories.router)
 app.include_router(analysis.router)
-app.include_router(posting.router)
 app.include_router(migration.router)
 
 

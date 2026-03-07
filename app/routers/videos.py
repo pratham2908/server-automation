@@ -187,12 +187,12 @@ async def update_video_status(
 
 
 # ------------------------------------------------------------------
-# POST /queue  –  add video to ready queue (+ videos collection)
+# POST /upload  –  upload video file to R2 and mark ready
 # ------------------------------------------------------------------
 
 
-@router.post("/{video_id}/queue", status_code=status.HTTP_201_CREATED)
-async def add_to_queue(
+@router.post("/{video_id}/upload", status_code=status.HTTP_201_CREATED)
+async def upload_video(
     channel_id: str,
     video_id: str,
     file: UploadFile = File(...),
