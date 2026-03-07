@@ -265,6 +265,7 @@ The response is a wrapper with `videos` (the array) and `sync_status` (how many 
 ```
 
 `sync_status` fields:
+
 - `youtube_total` — total videos on the YouTube channel
 - `in_database` — videos in our DB that have a `youtube_video_id`
 - `new_videos_to_import` — videos on YouTube not yet in the DB
@@ -437,6 +438,37 @@ Moves video(s) from `ready` → `scheduled`. Removes from `posting_queue`, adds 
 - `400` — No analysis with `best_posting_times` found
 - `400` — Not enough posting slots for the number of videos
 - `404` — Video not found / no videos in posting queue
+
+---
+
+#### `POST /updateToDoList` — Bulk generate to-do videos
+
+Generates completely distinct new video ideas based on the latest analysis.
+
+**Request body:**
+
+```json
+{
+  "n": 5 // number of videos to generate
+}
+```
+
+**What happens:**
+
+1. **Delete** any existing "todo" status videos that belong to newly archived categories.
+2. **Distribute** the `n` slots across active categories weighted by their performance score.
+3. **Exclude** existing video titles from generation so Gemini doesn't repeat ideas.
+4. **Call Gemini** to bulk-generate distinct ideas in one shot per category.
+5. **Insert** new videos into the `videos` collection with `status: "todo"`.
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "message": "Successfully generated 5 new videos for the to-do list."
+}
+```
 
 ---
 
@@ -618,33 +650,31 @@ Returns the most recent analysis document for the channel.
 
 ---
 
-#### `POST /updateToDoList` — Bulk generate to-do videos
+#### `GET /history` — Get analysis history
 
-Generates completely distinct new video ideas based on the latest analysis.
+Returns the history of analysis runs for the channel.
 
-**Request body:**
+**Query params:**
 
-```json
-{
-  "n": 5 // number of videos to generate
-}
-```
-
-**What happens:**
-
-1. **Delete** any existing "todo" status videos that belong to newly archived categories.
-2. **Distribute** the `n` slots across active categories weighted by their performance score.
-3. **Exclude** existing video titles from generation so Gemini doesn't repeat ideas.
-4. **Call Gemini** to bulk-generate distinct ideas in one shot per category.
-5. **Insert** new videos into the `videos` collection with `status: "todo"`.
+| Param   | Type | Default | Description                   |
+| ------- | ---- | ------- | ----------------------------- |
+| `limit` | int  | 10      | Max number of history records |
 
 **Response (200):**
 
 ```json
-{
-  "ok": true,
-  "message": "Successfully generated 5 new videos for the to-do list."
-}
+[
+  {
+    "channel_id": "tech-tips",
+    "version": 3,
+    "input_videos": [ ... ],
+    "new_video_ids": ["vid1", "vid2"],
+    "result": { ... },
+    "total_analysed_count": 50,
+    "batch_count": 2,
+    "created_at": "2024-01-20T14:00:00Z"
+  }
+]
 ```
 
 ---

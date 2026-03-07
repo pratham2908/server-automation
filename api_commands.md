@@ -323,6 +323,29 @@ X-API-Key: <your-api-key>
 
 ---
 
+### Update To-Do List (Generate Videos)
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/videos/updateToDoList`
+- **Method**: `POST`
+- **Request Body**:
+
+```json
+{
+  "n": 5
+}
+```
+
+- **Description**: Tells Gemini to generate `n` new video ideas based on the latest analysis.
+- **Response**:
+
+```json
+{
+  "status": "generating in background"
+}
+```
+
+---
+
 ## Analysis
 
 ### Get Latest Analysis
@@ -353,25 +376,26 @@ X-API-Key: <your-api-key>
 - **Description**: Recalculates category scores and analysis using YouTube stats and Gemini.
 - **Response**: Returns the new Analysis object.
 
-### Update To-Do List (Generate Videos)
+### Get Analysis History
 
-- **Endpoint**: `/api/v1/channels/{channel_id}/analysis/updateToDoList`
-- **Method**: `POST`
-- **Request Body**:
-
-```json
-{
-  "n": 5
-}
-```
-
-- **Description**: Tells Gemini to generate `n` new video ideas based on the latest analysis.
-- **Response**:
+- **Endpoint**: `/api/v1/channels/{channel_id}/analysis/history`
+- **Method**: `GET`
+- **Query Params**: `?limit=10` (optional)
+- **Response**: Array of analysis history objects.
 
 ```json
-{
-  "status": "generating in background"
-}
+[
+  {
+    "channel_id": "ch1",
+    "version": 2,
+    "input_videos": [...],
+    "new_video_ids": [...],
+    "result": {...},
+    "total_analysed_count": 50,
+    "batch_count": 2,
+    "created_at": "2024-01-20T14:00:00Z"
+  }
+]
 ```
 
 ---

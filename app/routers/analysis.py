@@ -79,38 +79,18 @@ async def get_latest_analysis(
 
 
 # ------------------------------------------------------------------
-# POST /updateToDoList  –  generate n new videos based on latest analysis
+# GET /history  –  retrieve analysis history
 # ------------------------------------------------------------------
 
-class TodoGenerateRequest(BaseModel):
-    n: int = Field(gt=0, description="The number of videos to generate")
-
-
-@router.post("/updateToDoList")
-async def generate_todos(
+@router.get("/history")
+async def get_analysis_history(
     channel_id: str,
-    body: TodoGenerateRequest,
+    limit: int = 10,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Generate `n` new to-do videos for *channel_id*."""
-    from app.services.todo_engine import generate_todo_videos
-
-    _, gemini_service = _get_services(channel_id)
-
-    if gemini_service is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Gemini service not initialised",
-        )
-
-    await generate_todo_videos(
-        channel_id=channel_id,
-        target_count=body.n,
-        db=db,
-        gemini_service=gemini_service,
-    )
-
-    return {
-        "ok": True,
-        "message": f"Successfully generated {body.n} new videos for the to-do list.",
-    }
+    """Return the history of analysis runs for *channel_id*."""
+    cursor = db.analysis_history.find({"channel_id": channel_id}).sort("created_at", -1).limit(limit)
+    history = await cursor.to_list(length=limit)
+    for doc in history:
+        doc.pop("_id", None)
+    return history
