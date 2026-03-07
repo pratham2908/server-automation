@@ -72,6 +72,7 @@ async def add_categories(
             "score": item.score,
             "status": "active",
             "video_count": 0,
+            "metadata": {"total_videos": 0},
             "created_at": now,
             "updated_at": now,
         }

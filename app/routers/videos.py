@@ -626,6 +626,7 @@ async def sync_videos(
                         "score": 0,
                         "status": "active",
                         "video_count": 0,
+                        "metadata": {"total_videos": 0},
                         "created_at": now,
                         "updated_at": now,
                     }

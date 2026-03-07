@@ -24,15 +24,65 @@ _ARCHIVE_SCORE_THRESHOLD = 30.0
 _ARCHIVE_MIN_VIDEOS = 5
 
 
+async def _compute_category_metadata(
+    channel_id: str,
+    category_name: str,
+    db: AsyncIOMotorDatabase,
+) -> dict[str, Any]:
+    """Aggregate performance metrics for all published videos in a category."""
+    videos = await db.videos.find(
+        {"channel_id": channel_id, "category": category_name, "status": "published"}
+    ).to_list(length=None)
+
+    if not videos:
+        return {"total_videos": 0}
+
+    def _avg(key: str) -> float | None:
+        vals = [
+            v["metadata"][key]
+            for v in videos
+            if v.get("metadata") and v["metadata"].get(key) is not None
+        ]
+        return round(sum(vals) / len(vals), 2) if vals else None
+
+    total_views_vals = [
+        v["metadata"]["views"]
+        for v in videos
+        if v.get("metadata") and v["metadata"].get("views") is not None
+    ]
+    total_emw_vals = [
+        v["metadata"]["estimated_minutes_watched"]
+        for v in videos
+        if v.get("metadata") and v["metadata"].get("estimated_minutes_watched") is not None
+    ]
+
+    return {
+        "total_videos": len(videos),
+        "avg_views": _avg("views"),
+        "avg_likes": _avg("likes"),
+        "avg_comments": _avg("comments"),
+        "avg_duration_seconds": _avg("duration_seconds"),
+        "avg_engagement_rate": _avg("engagement_rate"),
+        "avg_like_rate": _avg("like_rate"),
+        "avg_comment_rate": _avg("comment_rate"),
+        "avg_percentage_viewed": _avg("avg_percentage_viewed"),
+        "avg_view_duration_seconds": _avg("avg_view_duration_seconds"),
+        "total_views": sum(total_views_vals) if total_views_vals else None,
+        "total_estimated_minutes_watched": (
+            round(sum(total_emw_vals), 1) if total_emw_vals else None
+        ),
+    }
+
+
 async def update_categories_from_analysis(
     channel_id: str,
     analysis: dict[str, Any],
     db: AsyncIOMotorDatabase,
     analysed_videos: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Update category scores, video counts, and archive underperformers."""
+    """Update category scores, video counts, metadata, and archive underperformers."""
     logger.info("🔄 Updating category scores & video counts from new analysis...", extra={"color": "BLUE"})
-    
+
     # 1. Update scores
     for cat_analysis in analysis.get("category_analysis", []):
         cat_name = cat_analysis.get("category", "")
@@ -62,7 +112,21 @@ async def update_categories_from_analysis(
                 {"$inc": {"video_count": count}},
             )
 
-    # 3. Archive underperformers
+    # 3. Compute and persist aggregated metadata per category
+    all_categories = await db.categories.find(
+        {"channel_id": channel_id}
+    ).to_list(length=None)
+
+    for cat_doc in all_categories:
+        cat_name = cat_doc["name"]
+        meta = await _compute_category_metadata(channel_id, cat_name, db)
+        await db.categories.update_one(
+            {"_id": cat_doc["_id"]},
+            {"$set": {"metadata": meta, "updated_at": datetime.utcnow()}},
+        )
+    logger.success("📊 Computed and saved metadata for %d categories", len(all_categories))
+
+    # 4. Archive underperformers
     for cat_analysis in analysis.get("category_analysis", []):
         cat_name = cat_analysis.get("category", "")
         score = cat_analysis.get("score", 100)

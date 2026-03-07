@@ -14,6 +14,23 @@ class CategoryStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class CategoryMetadata(BaseModel):
+    """Aggregated performance metrics across all published videos in a category."""
+
+    total_videos: int = 0
+    avg_views: Optional[float] = None
+    avg_likes: Optional[float] = None
+    avg_comments: Optional[float] = None
+    avg_duration_seconds: Optional[float] = None
+    avg_engagement_rate: Optional[float] = None
+    avg_like_rate: Optional[float] = None
+    avg_comment_rate: Optional[float] = None
+    avg_percentage_viewed: Optional[float] = None
+    avg_view_duration_seconds: Optional[float] = None
+    total_views: Optional[int] = None
+    total_estimated_minutes_watched: Optional[float] = None
+
+
 class Category(BaseModel):
     """Full category document in the ``categories`` collection."""
 
@@ -24,6 +41,7 @@ class Category(BaseModel):
     score: float = 0.0
     status: CategoryStatus = CategoryStatus.ACTIVE
     video_count: int = 0
+    metadata: CategoryMetadata = Field(default_factory=CategoryMetadata)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
