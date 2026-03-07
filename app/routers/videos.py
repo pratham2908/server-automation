@@ -150,48 +150,49 @@ async def update_video_status(
 # ------------------------------------------------------------------
 
 
-@router.post("/queue", status_code=status.HTTP_201_CREATED)
+@router.post("/{video_id}/queue", status_code=status.HTTP_201_CREATED)
 async def add_to_queue(
     channel_id: str,
-    body: VideoCreate,
+    video_id: str,
     file: UploadFile = File(...),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Create a video record **and** add it to the posting queue.
+    """Upload a video file for an existing ``todo`` video and add it to the posting queue.
 
     The video file is streamed to R2 storage.
     """
+    # Verify video exists and is in todo state
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+    if video.get("status") not in ("todo",):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Video must be in 'todo' status to upload (current: {video.get('status')})",
+        )
+
     r2 = _get_r2()
-    video_id = str(uuid.uuid4())
     r2_key = f"{channel_id}/{video_id}.mp4"
 
     # Stream file to R2.
     r2.upload_video(file.file, r2_key)
 
-    # Insert video document.
     now = datetime.utcnow()
-    video_doc = {
-        "channel_id": channel_id,
-        "video_id": video_id,
-        "title": body.title,
-        "description": body.description,
-        "tags": body.tags,
-        "category": body.category,
-        "topic": body.topic,
-        "status": "ready",
-        "suggested": False,
-        "basis_factor": body.basis_factor,
-        "youtube_video_id": None,
-        "r2_object_key": r2_key,
-        "metadata": {
-            "views": None,
-            "engagement": None,
-            "avg_percentage_viewed": None,
-        },
-        "created_at": now,
-        "updated_at": now,
-    }
-    await db.videos.insert_one(video_doc)
+
+    # Update video document.
+    await db.videos.update_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {
+            "$set": {
+                "status": "ready",
+                "r2_object_key": r2_key,
+                "updated_at": now,
+            }
+        }
+    )
 
     # Determine next position in queue.
     last = await db.posting_queue.find_one(
@@ -209,8 +210,12 @@ async def add_to_queue(
         }
     )
 
-    video_doc.pop("_id", None)
-    return {"ok": True, "video": video_doc, "queue_position": next_pos}
+    # Fetch updated document to return
+    updated_video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if updated_video:
+        updated_video.pop("_id", None)
+        
+    return {"ok": True, "video": updated_video, "queue_position": next_pos}
 
 
 # ------------------------------------------------------------------
