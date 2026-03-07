@@ -213,4 +213,7 @@ async def run_analysis(
     saved = await db.analysis.find_one({"channel_id": channel_id})
     if saved:
         saved.pop("_id", None)
-    return saved or analysis_doc
+        return saved
+    
+    analysis_doc.pop("_id", None)
+    return analysis_doc
