@@ -290,7 +290,7 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 1. Fetches all videos from the channel's uploads playlist (paginated) — pulls `snippet`, `statistics`, and `contentDetails` (duration)
 2. Enriches with YouTube Analytics API data (`avg_percentage_viewed`, `avg_view_duration_seconds`, `estimated_minutes_watched`) when available
 3. **Refreshes metadata** for all existing published videos in the DB — updates views, likes, comments, engagement rates, analytics, etc. with the latest data from YouTube
-4. **Reconciles the schedule queue** — checks if any videos currently in `schedule_queue` now appear on YouTube as published. If so, marks them as `published`, sets `published_at`, and removes them from the queue
+4. **Reconciles the scheduled queue** — checks if any videos currently in `schedule_queue` now appear on YouTube as published. If so, marks them as `published`, sets `published_at`, and removes them from the queue
 5. Skips any already in the `videos` collection (by `youtube_video_id`)
 6. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
 7. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
@@ -348,9 +348,9 @@ Changes a video's status.
 
 ---
 
-#### `POST /queue` — Add video to posting queue
+#### `POST /queue` — Add video to ready queue
 
-Creates a new video record AND adds it to the posting queue. The video file is streamed to Cloudflare R2.
+Creates a new video record AND adds it to the ready queue. The video file is streamed to Cloudflare R2.
 
 **Request:** `multipart/form-data`
 
@@ -377,7 +377,7 @@ Creates a new video record AND adds it to the posting queue. The video file is s
 1. Generates a UUID for `video_id`
 2. Streams the file to R2 at `{channel_id}/{video_id}.mp4`
 3. Creates a video document in the `videos` collection with status `ready`
-4. Creates a queue entry in `posting_queue` with the next available position
+4. Creates an entry in the ready queue (`posting_queue`) with the next available position
 
 **Response (201):**
 
@@ -393,41 +393,45 @@ Creates a new video record AND adds it to the posting queue. The video file is s
 
 #### `POST /{video_id}/schedule` — Schedule ready video(s)
 
-Moves video(s) from `ready` → `scheduled`. Removes from `posting_queue`, adds to `schedule_queue` with a computed `scheduled_at` datetime.
+Schedules video(s) on YouTube. Computes a publish time, uploads the video file to YouTube as private with `publishAt`, and **only on success**: removes from the ready queue, adds to the scheduled queue, sets status to `scheduled`.
 
-**Path params:** `video_id` — the UUID of a single video **OR** `"all"` to schedule every video in the posting queue.
+**Path params:** `video_id` — the UUID of a single video **OR** `"all"` to schedule every video in the ready queue.
 
 **Preconditions:**
 
-- The video(s) must be in `ready` status. Returns `400` otherwise.
+- The video(s) must be in `ready` status (uploaded to R2). Returns `400` otherwise.
 - A channel analysis with `best_posting_times` must exist. Returns `400` if missing.
+- A valid YouTube token must exist for the channel. Returns `503` if missing.
 
 **What happens:**
 
-1. If `video_id` is `"all"`, fetches all entries from `posting_queue`; otherwise fetches the single video
+1. If `video_id` is `"all"`, fetches all entries from the ready queue; otherwise fetches the single video
 2. Loads `best_posting_times` from the latest analysis document
-3. Gathers `scheduled_at` values from existing `schedule_queue` entries (occupied slots)
+3. Gathers `scheduled_at` values from existing scheduled queue entries (occupied slots)
 4. Computes the next available publish slot(s) from the weekly calendar, skipping past and occupied slots (timezone from `TIMEZONE` env var, default `Asia/Kolkata`)
-5. For each video: removes from `posting_queue`, inserts into `schedule_queue` with `scheduled_at`, updates status to `scheduled`
+5. For each video: downloads from R2, uploads to YouTube as private with `publishAt`. **Only on YouTube upload success**: removes from the ready queue, inserts into the scheduled queue with `scheduled_at`, sets `youtube_video_id`, updates status to `scheduled`
+
+The video remains in `scheduled` status until YouTube auto-publishes it at the `publishAt` time. The sync endpoint then reconciles it to `published`.
 
 **Response (200):**
 
 ```json
 {
   "ok": true,
-  "scheduled_count": 3,
+  "scheduled": 2,
+  "failed": 0,
   "videos": [
     {
       "video_id": "550e8400-...",
-      "title": "10 VS Code Tricks",
-      "scheduled_at": "2026-03-10T10:00:00+05:30",
-      "schedule_position": 1
+      "status": "scheduled",
+      "youtube_video_id": "dQw4w...",
+      "scheduled_at": "2026-03-10T10:00:00+05:30"
     },
     {
       "video_id": "660f9500-...",
-      "title": "iPhone 16 Review",
-      "scheduled_at": "2026-03-10T14:00:00+05:30",
-      "schedule_position": 2
+      "status": "scheduled",
+      "youtube_video_id": "xYz1a...",
+      "scheduled_at": "2026-03-10T14:00:00+05:30"
     }
   ]
 }
@@ -437,7 +441,8 @@ Moves video(s) from `ready` → `scheduled`. Removes from `posting_queue`, adds 
 
 - `400` — No analysis with `best_posting_times` found
 - `400` — Not enough posting slots for the number of videos
-- `404` — Video not found / no videos in posting queue
+- `404` — Video not found / no videos in ready queue
+- `503` — No YouTube token for the channel
 
 ---
 
@@ -683,16 +688,16 @@ Returns the history of analysis runs for the channel.
 
 Prefix: `/api/v1/channels/{channel_id}/posting`
 
-Manages the schedule queue and handles YouTube uploads.
+Manages the ready queue, scheduled queue, and YouTube scheduling.
 
-The posting queue (`posting_queue`) holds videos that are `ready` — uploaded to R2 but not yet scheduled.
-The schedule queue (`schedule_queue`) holds videos that are `scheduled` — confirmed for YouTube upload.
+The **ready queue** (`posting_queue` collection) holds videos that are `ready` — uploaded to R2 but not yet scheduled on YouTube.
+The **scheduled queue** (`schedule_queue` collection) holds videos that are `scheduled` — uploaded to YouTube as private with a future `publishAt` time, waiting for YouTube to auto-publish.
 
 ---
 
-#### `GET /queue` — View schedule queue
+#### `GET /queue` — View scheduled queue
 
-Returns the current schedule queue sorted by position, enriched with video metadata and scheduled publish time.
+Returns the current scheduled queue sorted by position, enriched with video metadata and scheduled publish time.
 
 **Response (200):**
 
@@ -711,33 +716,37 @@ Returns the current schedule queue sorted by position, enriched with video metad
 
 ---
 
-#### `POST /upload-all` — Upload all queued videos to YouTube
+#### `POST /schedule-all` — Schedule all ready videos on YouTube
 
-Processes the entire queue in order. For each video:
+Schedules every video in the **ready queue** on YouTube. Uses the same core operation as the schedule endpoint (`POST /{video_id}/schedule` with `"all"`).
 
-1. **Download** from Cloudflare R2 to a temp file
-2. **Upload** to YouTube via resumable upload (10MB chunks, private with `publishAt` set to the video's `scheduled_at` time so YouTube auto-publishes at the right moment)
-3. **Update** the video record: set `youtube_video_id`, change status from `scheduled` → `published`, set `published_at` to the `scheduled_at` time (or now if no scheduled time)
-4. **Remove** from the schedule queue
-5. **Clean up** the temp file
+For each video in the ready queue:
+
+1. Computes a publish slot from `best_posting_times`
+2. Downloads from R2 to a temp file
+3. Uploads to YouTube as private with `publishAt`
+4. **Only on success**: removes from the ready queue, adds to the scheduled queue, sets `youtube_video_id`, status → `scheduled`
+5. Cleans up the temp file
 
 **Response (200):**
 
 ```json
 {
   "ok": true,
-  "uploaded": 2,
+  "scheduled": 2,
   "failed": 1,
   "details": [
     {
       "video_id": "vid1",
-      "status": "uploaded",
-      "youtube_video_id": "dQw4w..."
+      "status": "scheduled",
+      "youtube_video_id": "dQw4w...",
+      "scheduled_at": "2026-03-10T10:00:00+05:30"
     },
     {
       "video_id": "vid2",
-      "status": "uploaded",
-      "youtube_video_id": "xYz1a..."
+      "status": "scheduled",
+      "youtube_video_id": "xYz1a...",
+      "scheduled_at": "2026-03-10T14:00:00+05:30"
     },
     { "video_id": "vid3", "status": "failed" }
   ]
@@ -746,8 +755,9 @@ Processes the entire queue in order. For each video:
 
 **Notes:**
 
-- Videos are uploaded as **private** by default (change visibility on YouTube after review).
+- Videos are uploaded as **private** with a future `publishAt` — YouTube auto-publishes them at the scheduled time.
 - Failed uploads don't stop the queue — the next video is attempted.
+- Requires a valid YouTube token and a channel analysis with `best_posting_times`.
 - Temp files are always cleaned up, even on failure.
 
 ---
@@ -834,15 +844,15 @@ Stores all video records — both manually uploaded and AI-generated to-do items
 **Status lifecycle:**
 
 - `todo` → Video idea exists (AI-generated or manual), not yet produced
-- `ready` → Video file uploaded to R2, sitting in `posting_queue`
-- `scheduled` → Video confirmed for upload, sitting in `schedule_queue`
-- `published` → Video has been uploaded to YouTube; `published_at` is set at this transition
+- `ready` → Video file uploaded to R2, sitting in the ready queue
+- `scheduled` → Video uploaded to YouTube as private with a future `publishAt`, sitting in the scheduled queue waiting for YouTube to auto-publish
+- `published` → Video is live on YouTube; `published_at` is set at this transition (reconciled by the sync endpoint)
 
 ---
 
-### Collection: `posting_queue`
+### Collection: `posting_queue` (Ready Queue)
 
-Stores videos that are **ready** — uploaded to R2 but not yet scheduled. Each entry references a video by `video_id`.
+The **ready queue**. Stores videos that are **ready** — uploaded to R2 but not yet scheduled on YouTube. Each entry references a video by `video_id`.
 
 ```json
 {
@@ -861,14 +871,14 @@ Stores videos that are **ready** — uploaded to R2 but not yet scheduled. Each 
 
 **Notes:**
 
-- Entries are removed when the video is scheduled (moved to `schedule_queue`).
+- Entries are removed when the video is successfully scheduled on YouTube (moved to the scheduled queue).
 - Position determines the display order.
 
 ---
 
-### Collection: `schedule_queue`
+### Collection: `schedule_queue` (Scheduled Queue)
 
-Stores videos that are **scheduled** — confirmed and waiting for YouTube upload. Each entry references a video by `video_id` and includes the target publish time.
+The **scheduled queue**. Stores videos that are **scheduled** — already uploaded to YouTube as private with a `publishAt` time, waiting for YouTube to auto-publish. Each entry references a video by `video_id` and includes the target publish time.
 
 ```json
 {
@@ -888,8 +898,9 @@ Stores videos that are **scheduled** — confirmed and waiting for YouTube uploa
 
 **Notes:**
 
-- Entries are removed after successful YouTube upload.
-- Position determines upload order in `upload-all`.
+- Entries are added when a video is successfully uploaded to YouTube as private with `publishAt` (during the schedule operation).
+- Entries are removed when the sync endpoint reconciles them as `published` (YouTube has auto-published them).
+- Position determines display order in the queue view.
 
 ---
 
@@ -1063,7 +1074,7 @@ To-do video generation is triggered separately via the `/updateToDoList` endpoin
 
 ## Data Flow Diagrams
 
-### Video Upload Flow
+### Video Upload & Schedule Flow
 
 ```
 Client                    Server                   R2                YouTube
@@ -1073,21 +1084,31 @@ Client                    Server                   R2                YouTube
   |                         |-- upload_fileobj --->|                    |
   |                         |   (streaming)        |                    |
   |                         |                      |                    |
-  |                         |-- insert video doc (MongoDB)              |
-  |                         |-- insert queue entry (MongoDB)            |
+  |                         |-- insert video doc (MongoDB, status=ready)|
+  |                         |-- insert into ready queue (MongoDB)       |
   |<-- 201 {video, pos} ----|                      |                    |
   |                         |                      |                    |
-  |-- POST /upload-all ---->|                      |                    |
+  |-- POST /schedule/all -->|                      |                    |
+  |  (or POST /schedule-all)|                      |                    |
+  |                         |-- compute publish slot (best_posting_times)|
   |                         |-- download_fileobj --|                    |
   |                         |   (to temp file)     |                    |
   |                         |                      |                    |
-  |                         |-- resumable upload ----------------->|
+  |                         |-- resumable upload (private+publishAt) -->|
   |                         |   (10MB chunks)      |                    |
   |                         |                      |                    |
-  |                         |-- update youtube_video_id (MongoDB)  |
-  |                         |-- delete queue entry (MongoDB)       |
+  |                         |  ON SUCCESS:         |                    |
+  |                         |-- set youtube_video_id, status=scheduled  |
+  |                         |-- remove from ready queue (MongoDB)       |
+  |                         |-- insert into scheduled queue (MongoDB)   |
   |                         |-- delete temp file   |                    |
-  |<-- {uploaded, failed} --|                      |                    |
+  |<-- {scheduled, failed} -|                      |                    |
+  |                         |                      |                    |
+  |  ... YouTube auto-publishes at publishAt ...   |                    |
+  |                         |                      |                    |
+  |-- POST /videos/sync --->|                      |                    |
+  |                         |-- reconcile: status=published, published_at|
+  |                         |-- remove from scheduled queue (MongoDB)   |
 ```
 
 ### Analysis Flow

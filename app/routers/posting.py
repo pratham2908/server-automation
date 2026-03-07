@@ -1,7 +1,6 @@
-"""Posting router – manage the posting queue and upload videos to YouTube."""
+"""Posting router – manage the ready queue, scheduled queue, and YouTube scheduling."""
 
 import logging
-import os
 from datetime import datetime
 from typing import Optional
 
@@ -29,7 +28,7 @@ def _get_services(channel_id: str):
 
 
 # ------------------------------------------------------------------
-# GET /queue  –  current posting queue
+# GET /queue  –  current scheduled queue
 # ------------------------------------------------------------------
 
 
@@ -48,7 +47,7 @@ async def get_queue(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Return the current posting queue sorted by position."""
+    """Return the current scheduled queue sorted by position."""
     queue = (
         await db.schedule_queue.find({"channel_id": channel_id})
         .sort("position", 1)
@@ -75,20 +74,30 @@ async def get_queue(
 
 
 # ------------------------------------------------------------------
-# POST /upload-all  –  upload all queued videos to YouTube
+# POST /schedule-all  –  schedule all ready videos on YouTube
 # ------------------------------------------------------------------
 
 
-@router.post("/upload-all")
-async def upload_all(
+@router.post("/schedule-all")
+async def schedule_all(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Download each queued video from R2 and upload to YouTube.
+    """Schedule every video in the **ready queue** on YouTube.
 
-    Processes the queue in order. Returns a summary of successes and
-    failures.
+    For each video in the ready queue:
+    1. Computes a publish slot from ``best_posting_times``.
+    2. Uploads to YouTube as private with ``publishAt``.
+    3. On success: removes from ready queue, adds to scheduled queue,
+       status → ``scheduled``.
+
+    Uses the same core operation as the schedule endpoint.
     """
+    from app.config import get_settings
+    from app.services.scheduler import compute_schedule_slots
+    from app.services.schedule_operation import schedule_single_video
+
+    settings = get_settings()
     r2_service, youtube_service = _get_services(channel_id)
 
     if r2_service is None:
@@ -102,83 +111,73 @@ async def upload_all(
             detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
         )
 
-    queue = (
-        await db.schedule_queue.find({"channel_id": channel_id})
+    # ---- Collect videos from the ready queue ----
+    posting_entries = (
+        await db.posting_queue.find({"channel_id": channel_id})
         .sort("position", 1)
         .to_list(length=None)
     )
 
-    if not queue:
-        return {"ok": True, "uploaded": 0, "failed": 0, "details": []}
+    if not posting_entries:
+        return {"ok": True, "scheduled": 0, "failed": 0, "details": []}
 
-    uploaded = 0
+    videos_to_schedule = []
+    for entry in posting_entries:
+        v = await db.videos.find_one(
+            {"channel_id": channel_id, "video_id": entry["video_id"]}
+        )
+        if v and v.get("status") == "ready":
+            videos_to_schedule.append(v)
+
+    if not videos_to_schedule:
+        return {"ok": True, "scheduled": 0, "failed": 0, "details": []}
+
+    # ---- Fetch best_posting_times from the latest analysis ----
+    analysis = await db.analysis.find_one({"channel_id": channel_id})
+    if not analysis or not analysis.get("best_posting_times"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No analysis with best_posting_times found — run analysis first",
+        )
+
+    # ---- Gather already-occupied slots ----
+    existing_scheduled = await db.schedule_queue.find(
+        {"channel_id": channel_id}
+    ).to_list(length=None)
+    occupied_datetimes = [e.get("scheduled_at") for e in existing_scheduled]
+
+    # ---- Compute publish slots ----
+    slots = compute_schedule_slots(
+        best_posting_times=analysis["best_posting_times"],
+        occupied_datetimes=occupied_datetimes,
+        num_videos=len(videos_to_schedule),
+        timezone_str=settings.TIMEZONE,
+    )
+
+    if len(slots) < len(videos_to_schedule):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could only find {len(slots)} available slots for {len(videos_to_schedule)} videos",
+        )
+
+    # ---- Schedule each video (upload to YouTube) ----
+    scheduled = 0
     failed = 0
     details: list[dict] = []
 
-    for entry in queue:
-        video_id = entry["video_id"]
-        video = await db.videos.find_one(
-            {"channel_id": channel_id, "video_id": video_id}
+    for video_doc, slot_dt in zip(videos_to_schedule, slots):
+        result = await schedule_single_video(
+            db=db,
+            r2_service=r2_service,
+            youtube_service=youtube_service,
+            channel_id=channel_id,
+            video_doc=video_doc,
+            scheduled_at=slot_dt,
         )
-
-        if not video or not video.get("r2_object_key"):
-            details.append({"video_id": video_id, "status": "skipped", "reason": "no R2 key"})
-            failed += 1
-            continue
-
-        tmp_path = None
-        try:
-            tmp_path = r2_service.download_video(video["r2_object_key"])
-
-            # Convert scheduled_at to UTC ISO string for YouTube's publishAt.
-            publish_at_str = None
-            scheduled_at = entry.get("scheduled_at")
-            if scheduled_at:
-                if scheduled_at.tzinfo is not None:
-                    import pytz
-                    utc_dt = scheduled_at.astimezone(pytz.utc)
-                else:
-                    utc_dt = scheduled_at
-                publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-            yt_id = youtube_service.upload_video(
-                file_path=tmp_path,
-                title=video.get("title", ""),
-                description=video.get("description", ""),
-                tags=video.get("tags", []),
-                publish_at=publish_at_str,
-            )
-
-            # Update video record with YouTube ID and mark published.
-            # published_at = the scheduled publish time (when YouTube will make it public),
-            # or now if no scheduled time was set.
-            published_at = scheduled_at if scheduled_at else datetime.utcnow()
-            await db.videos.update_one(
-                {"channel_id": channel_id, "video_id": video_id},
-                {
-                    "$set": {
-                        "youtube_video_id": yt_id,
-                        "status": "published",
-                        "published_at": published_at,
-                        "updated_at": datetime.utcnow(),
-                    }
-                },
-            )
-
-            # Remove from schedule queue.
-            await db.schedule_queue.delete_one({"_id": entry["_id"]})
-
-            details.append({"video_id": video_id, "status": "uploaded", "youtube_video_id": yt_id})
-            uploaded += 1
-
-        except Exception:
-            logger.exception("Failed to upload video %s", video_id)
-            details.append({"video_id": video_id, "status": "failed"})
+        details.append(result)
+        if result["status"] == "scheduled":
+            scheduled += 1
+        else:
             failed += 1
 
-        finally:
-            # Clean up temp file.
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-
-    return {"ok": True, "uploaded": uploaded, "failed": failed, "details": details}
+    return {"ok": True, "scheduled": scheduled, "failed": failed, "details": details}

@@ -75,10 +75,10 @@ class VideoStatusUpdate(BaseModel):
 
 
 class PostingQueue(BaseModel):
-    """An entry in the ``posting_queue`` collection.
+    """An entry in the ready queue (``posting_queue`` collection).
 
     Videos with status ``ready`` sit here after being uploaded to R2,
-    waiting to be scheduled.
+    waiting to be scheduled on YouTube.
     """
 
     channel_id: str
@@ -88,10 +88,11 @@ class PostingQueue(BaseModel):
 
 
 class ScheduleQueue(BaseModel):
-    """An entry in the ``schedule_queue`` collection.
+    """An entry in the scheduled queue (``schedule_queue`` collection).
 
-    Videos with status ``scheduled`` sit here, waiting to be uploaded
-    to YouTube via the upload-all endpoint.
+    Videos with status ``scheduled`` sit here after being uploaded to
+    YouTube as private with a ``publishAt`` time, waiting for YouTube
+    to auto-publish.
     """
 
     channel_id: str

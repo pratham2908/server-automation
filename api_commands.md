@@ -257,33 +257,34 @@ X-API-Key: <your-api-key>
 - **Content-Type**: `multipart/form-data`
 - **Form Fields**:
   - `file`: The actual video file.
-- **Description**: Uploads the video file to R2 for an existing `todo` video, changing its status to `ready` and placing it in the posting queue.
+- **Description**: Uploads the video file to R2 for an existing `todo` video, changing its status to `ready` and placing it in the ready queue.
 - **Response**: Returns the updated Video object (status becomes `ready`) and `queue_position`.
 
 ### Schedule Ready Video(s)
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/schedule`
 - **Method**: `POST`
-- **Path Params**: `video_id` — a specific video UUID **OR** `"all"` to schedule every video in the posting queue.
-- **Description**: Moves video(s) from `ready` (posting_queue) to `scheduled` (schedule_queue). Computes `scheduled_at` publish times from the channel's `best_posting_times` analysis, skipping any slots already occupied by previously scheduled videos. Requires an analysis with `best_posting_times` to exist.
+- **Path Params**: `video_id` — a specific video UUID **OR** `"all"` to schedule every video in the ready queue.
+- **Description**: Schedules video(s) on YouTube. Computes `scheduled_at` publish times from the channel's `best_posting_times` analysis, downloads from R2, uploads to YouTube as private with `publishAt`. **Only on success**: removes from the ready queue, adds to the scheduled queue, status → `scheduled`. Requires an analysis with `best_posting_times` and a YouTube token.
 - **Response**:
 
 ```json
 {
   "ok": true,
-  "scheduled_count": 2,
+  "scheduled": 2,
+  "failed": 0,
   "videos": [
     {
       "video_id": "550e8400-...",
-      "title": "10 VS Code Tricks",
-      "scheduled_at": "2026-03-10T10:00:00+05:30",
-      "schedule_position": 1
+      "status": "scheduled",
+      "youtube_video_id": "dQw4w...",
+      "scheduled_at": "2026-03-10T10:00:00+05:30"
     },
     {
       "video_id": "660f9500-...",
-      "title": "iPhone 16 Review",
-      "scheduled_at": "2026-03-10T14:00:00+05:30",
-      "schedule_position": 2
+      "status": "scheduled",
+      "youtube_video_id": "xYz1a...",
+      "scheduled_at": "2026-03-10T14:00:00+05:30"
     }
   ]
 }
@@ -304,7 +305,7 @@ X-API-Key: <your-api-key>
 - **What it does**:
   - Fetches all videos from the YouTube channel
   - **Refreshes metadata** (views, likes, comments, engagement rates, analytics) for every existing video in the DB
-  - Reconciles the schedule queue (marks scheduled videos as published if they're now live on YouTube)
+  - Reconciles the scheduled queue (marks scheduled videos as published if they're now live on YouTube)
   - Imports any new videos not yet in the DB, categorizes them via Gemini
 
 - **Response**:
@@ -402,7 +403,7 @@ X-API-Key: <your-api-key>
 
 ## Posting
 
-### View Schedule Queue
+### View Scheduled Queue
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/posting/queue`
 - **Method**: `GET`
@@ -421,23 +422,24 @@ X-API-Key: <your-api-key>
 ]
 ```
 
-### Upload All Scheduled
+### Schedule All
 
-- **Endpoint**: `/api/v1/channels/{channel_id}/posting/upload-all`
+- **Endpoint**: `/api/v1/channels/{channel_id}/posting/schedule-all`
 - **Method**: `POST`
-- **Description**: Triggers the server to pop all videos from the `schedule_queue` and upload them to YouTube one-by-one. Each video is uploaded as private with YouTube's `publishAt` set to the video's `scheduled_at` time, so YouTube auto-publishes at the correct moment.
+- **Description**: Schedules every video in the **ready queue** on YouTube. Uses the same core operation as the schedule endpoint. For each video: computes a publish slot, uploads to YouTube as private with `publishAt`, and on success moves from the ready queue to the scheduled queue with status `scheduled`.
 - **Response**:
 
 ```json
 {
   "ok": true,
-  "uploaded": 2,
+  "scheduled": 2,
   "failed": 0,
   "details": [
     {
       "video_id": "uuid-1234",
-      "status": "uploaded",
-      "youtube_video_id": "dQw4w..."
+      "status": "scheduled",
+      "youtube_video_id": "dQw4w...",
+      "scheduled_at": "2026-03-10T10:00:00+05:30"
     }
   ]
 }

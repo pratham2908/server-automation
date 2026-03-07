@@ -187,7 +187,7 @@ async def update_video_status(
 
 
 # ------------------------------------------------------------------
-# POST /queue  –  add video to posting queue (+ videos collection)
+# POST /queue  –  add video to ready queue (+ videos collection)
 # ------------------------------------------------------------------
 
 
@@ -198,7 +198,7 @@ async def add_to_queue(
     file: UploadFile = File(...),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Upload a video file for an existing ``todo`` video and add it to the posting queue.
+    """Upload a video file for an existing ``todo`` video and add it to the ready queue.
 
     The video file is streamed to R2 storage.
     """
@@ -260,7 +260,7 @@ async def add_to_queue(
 
 
 # ------------------------------------------------------------------
-# POST /{video_id}/schedule  –  move video from posting_queue → schedule_queue
+# POST /{video_id}/schedule  –  schedule video(s) on YouTube
 # ------------------------------------------------------------------
 
 
@@ -270,19 +270,31 @@ async def schedule_video(
     video_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Move **ready** video(s) into the schedule queue with publish times.
+    """Schedule video(s) from the **ready queue** on YouTube.
 
     - Pass a specific ``video_id`` to schedule one video.
-    - Pass ``"all"`` as ``video_id`` to schedule every video in the posting queue.
+    - Pass ``"all"`` as ``video_id`` to schedule every video in the ready queue.
 
-    Publish times are computed from the channel's ``best_posting_times``
-    analysis, skipping any slots already occupied by previously scheduled
-    videos.
+    For each video the operation:
+    1. Computes a publish slot from the channel's ``best_posting_times``.
+    2. Downloads the file from R2.
+    3. Uploads to YouTube as private with ``publishAt``.
+    4. **Only on success**: removes from the ready queue, inserts into
+       the scheduled queue, sets status to ``scheduled``.
     """
     from app.config import get_settings
     from app.services.scheduler import compute_schedule_slots
+    from app.services.schedule_operation import schedule_single_video
 
     settings = get_settings()
+    r2_service = _get_r2()
+    youtube_service, _ = _get_services(channel_id)
+
+    if youtube_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
+        )
 
     # ---- Collect the videos to schedule ----
     if video_id.lower() == "all":
@@ -294,7 +306,7 @@ async def schedule_video(
         if not posting_entries:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="No videos in the posting queue to schedule",
+                detail="No videos in the ready queue to schedule",
             )
         videos_to_schedule = []
         for entry in posting_entries:
@@ -333,7 +345,7 @@ async def schedule_video(
             detail="No analysis with best_posting_times found — run analysis first",
         )
 
-    # ---- Gather already-occupied slots from existing schedule queue ----
+    # ---- Gather already-occupied slots from existing scheduled queue ----
     existing_scheduled = await db.schedule_queue.find(
         {"channel_id": channel_id}
     ).to_list(length=None)
@@ -353,49 +365,30 @@ async def schedule_video(
             detail=f"Could only find {len(slots)} available slots for {len(videos_to_schedule)} videos — not enough posting slots in analysis",
         )
 
-    # ---- Determine starting position ----
-    last = await db.schedule_queue.find_one(
-        {"channel_id": channel_id},
-        sort=[("position", -1)],
-    )
-    next_pos = (last["position"] + 1) if last else 1
-
-    now = datetime.utcnow()
+    # ---- Schedule each video (upload to YouTube) ----
     results = []
+    scheduled = 0
+    failed = 0
 
     for video_doc, slot_dt in zip(videos_to_schedule, slots):
-        vid = video_doc["video_id"]
-
-        await db.posting_queue.delete_one(
-            {"channel_id": channel_id, "video_id": vid}
+        result = await schedule_single_video(
+            db=db,
+            r2_service=r2_service,
+            youtube_service=youtube_service,
+            channel_id=channel_id,
+            video_doc=video_doc,
+            scheduled_at=slot_dt,
         )
-
-        await db.schedule_queue.insert_one(
-            {
-                "channel_id": channel_id,
-                "video_id": vid,
-                "position": next_pos,
-                "scheduled_at": slot_dt,
-                "added_at": now,
-            }
-        )
-
-        await db.videos.update_one(
-            {"channel_id": channel_id, "video_id": vid},
-            {"$set": {"status": "scheduled", "updated_at": now}},
-        )
-
-        results.append({
-            "video_id": vid,
-            "title": video_doc.get("title", ""),
-            "scheduled_at": slot_dt.isoformat(),
-            "schedule_position": next_pos,
-        })
-        next_pos += 1
+        results.append(result)
+        if result["status"] == "scheduled":
+            scheduled += 1
+        else:
+            failed += 1
 
     return {
         "ok": True,
-        "scheduled_count": len(results),
+        "scheduled": scheduled,
+        "failed": failed,
         "videos": results,
     }
 
@@ -714,7 +707,7 @@ async def sync_videos(
                 logger.success(f"Created new category: '{cat}'")
 
     # ------------------------------------------------------------------
-    # Reconcile schedule_queue: mark scheduled videos that are now live
+    # Reconcile scheduled queue: mark scheduled videos that are now live
     # on YouTube as published and set their published_at.
     # ------------------------------------------------------------------
     yt_id_set = {v["youtube_video_id"] for v in all_yt_videos}
