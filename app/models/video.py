@@ -17,11 +17,20 @@ class VideoStatus(str, Enum):
 
 
 class VideoMetadata(BaseModel):
-    """YouTube performance metrics (populated after upload + stats fetch)."""
+    """YouTube performance metrics (populated during sync / stats fetch)."""
 
+    # Data API v3
     views: Optional[int] = None
-    engagement: Optional[float] = None
+    likes: Optional[int] = None
+    comments: Optional[int] = None
+    duration_seconds: Optional[int] = None
+    engagement_rate: Optional[float] = None
+    like_rate: Optional[float] = None
+    comment_rate: Optional[float] = None
+    # Analytics API v2
     avg_percentage_viewed: Optional[float] = None
+    avg_view_duration_seconds: Optional[int] = None
+    estimated_minutes_watched: Optional[float] = None
 
 
 class Video(BaseModel):

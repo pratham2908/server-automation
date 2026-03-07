@@ -371,6 +371,30 @@ def _get_services():
     return youtube_service, gemini_service
 
 
+def _parse_iso8601_duration(duration: str) -> int:
+    """Convert ISO 8601 duration (e.g. 'PT1H2M30S') to total seconds."""
+    import re
+
+    match = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", duration or "")
+    if not match:
+        return 0
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = int(match.group(3) or 0)
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _compute_rates(views: int, likes: int, comments: int) -> dict:
+    """Derive engagement, like, and comment rates from raw counts."""
+    if views > 0:
+        return {
+            "engagement_rate": round((likes + comments) / views * 100, 4),
+            "like_rate": round(likes / views * 100, 4),
+            "comment_rate": round(comments / views * 100, 4),
+        }
+    return {"engagement_rate": None, "like_rate": None, "comment_rate": None}
+
+
 def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
     """Fetch every video from a channel's uploads playlist."""
     uploads_playlist_id = "UU" + youtube_channel_id[2:]
@@ -392,18 +416,28 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
         if not next_page:
             break
 
-    # Fetch snippets + stats in batches of 50.
     videos = []
     for i in range(0, len(video_ids), 50):
         batch_ids = video_ids[i : i + 50]
         resp = (
             yt._youtube.videos()
-            .list(part="snippet,statistics", id=",".join(batch_ids))
+            .list(
+                part="snippet,statistics,contentDetails",
+                id=",".join(batch_ids),
+            )
             .execute()
         )
         for item in resp.get("items", []):
             snippet = item.get("snippet", {})
             stats = item.get("statistics", {})
+            content = item.get("contentDetails", {})
+
+            views = int(stats.get("viewCount", 0))
+            likes = int(stats.get("likeCount", 0))
+            comments = int(stats.get("commentCount", 0))
+            duration_seconds = _parse_iso8601_duration(content.get("duration"))
+            rates = _compute_rates(views, likes, comments)
+
             videos.append(
                 {
                     "youtube_video_id": item["id"],
@@ -411,9 +445,11 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
                     "description": snippet.get("description", ""),
                     "tags": snippet.get("tags", []),
                     "published_at": snippet.get("publishedAt", ""),
-                    "views": int(stats.get("viewCount", 0)),
-                    "likes": int(stats.get("likeCount", 0)),
-                    "comments": int(stats.get("commentCount", 0)),
+                    "views": views,
+                    "likes": likes,
+                    "comments": comments,
+                    "duration_seconds": duration_seconds,
+                    **rates,
                 }
             )
 
@@ -506,8 +542,15 @@ async def sync_videos(
     youtube_channel_id = channel["youtube_channel_id"]
     channel_description = channel.get("description", "")
 
-    # Fetch all YouTube videos.
+    # Fetch all YouTube videos (Data API: snippet + statistics + contentDetails).
     all_yt_videos = _fetch_all_youtube_videos(youtube_service, youtube_channel_id)
+
+    # Enrich with Analytics API data (avg_percentage_viewed, avg_view_duration, etc.)
+    all_yt_ids = [v["youtube_video_id"] for v in all_yt_videos]
+    analytics_data = youtube_service.get_video_analytics(all_yt_ids)
+    for v in all_yt_videos:
+        extra = analytics_data.get(v["youtube_video_id"], {})
+        v.update(extra)
 
     # Find already-imported youtube_video_ids.
     existing_yt_ids = set()
@@ -620,8 +663,15 @@ async def sync_videos(
                 "r2_object_key": None,
                 "metadata": {
                     "views": v.get("views"),
-                    "engagement": None,
-                    "avg_percentage_viewed": None,
+                    "likes": v.get("likes"),
+                    "comments": v.get("comments"),
+                    "duration_seconds": v.get("duration_seconds"),
+                    "engagement_rate": v.get("engagement_rate"),
+                    "like_rate": v.get("like_rate"),
+                    "comment_rate": v.get("comment_rate"),
+                    "avg_percentage_viewed": v.get("avg_percentage_viewed"),
+                    "avg_view_duration_seconds": v.get("avg_view_duration_seconds"),
+                    "estimated_minutes_watched": v.get("estimated_minutes_watched"),
                 },
                 "created_at": published_at,
                 "updated_at": now,

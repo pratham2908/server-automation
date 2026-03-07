@@ -112,6 +112,20 @@ async def run_analysis(
         yt_id = v.get("youtube_video_id")
         if yt_id and yt_id in yt_stats:
             entry["stats"] = yt_stats[yt_id]
+        else:
+            meta = v.get("metadata") or {}
+            stored_stats = {
+                k: meta[k]
+                for k in (
+                    "views", "likes", "comments", "duration_seconds",
+                    "engagement_rate", "like_rate", "comment_rate",
+                    "avg_percentage_viewed", "avg_view_duration_seconds",
+                    "estimated_minutes_watched",
+                )
+                if meta.get(k) is not None
+            }
+            if stored_stats:
+                entry["stats"] = stored_stats
         video_data.append(entry)
 
     # 5  Send to Gemini in batches of 5

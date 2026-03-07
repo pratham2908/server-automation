@@ -222,6 +222,20 @@ Guidelines:
   - Identify the most effective title patterns and description templates.
   - List the best-performing tags.
   - Score each category from 0-100 based on overall engagement and performance.
+- **Engagement metrics** (available per video in the `stats` object):
+  - `views`, `likes`, `comments` — raw counts.
+  - `engagement_rate` — (likes + comments) / views × 100.
+  - `like_rate` — likes / views × 100.
+  - `comment_rate` — comments / views × 100.
+  - `duration_seconds` — video length in seconds.
+  - `avg_percentage_viewed` — average % of the video watched by viewers (from YouTube Analytics).
+  - `avg_view_duration_seconds` — average watch time per view in seconds.
+  - `estimated_minutes_watched` — total accumulated watch time in minutes.
+  Use ALL of these to judge which categories, title patterns, tags, and video
+  lengths drive the best audience retention and engagement — not just raw views.
+  High `avg_percentage_viewed` is the strongest signal of content quality.
+  A video with fewer views but high engagement_rate and avg_percentage_viewed
+  is more valuable than one with many views but low retention.
 - If previous analysis exists, **refine it incrementally** — do not discard
   prior insights without good reason. Merge new observations with existing ones."""
 
