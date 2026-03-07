@@ -123,7 +123,21 @@ X-API-Key: <your-api-key>
     "description": "How-to guides",
     "score": 85.5,
     "status": "active",
-    "video_count": 10
+    "video_count": 10,
+    "metadata": {
+      "total_videos": 10,
+      "avg_views": 1500.0,
+      "avg_likes": 15.5,
+      "avg_comments": 3.2,
+      "avg_duration_seconds": 28.0,
+      "avg_engagement_rate": 1.25,
+      "avg_like_rate": 1.03,
+      "avg_comment_rate": 0.22,
+      "avg_percentage_viewed": 72.5,
+      "avg_view_duration_seconds": 20,
+      "total_views": 15000,
+      "total_estimated_minutes_watched": 560.0
+    }
   }
 ]
 ```
@@ -190,8 +204,15 @@ X-API-Key: <your-api-key>
     "basis_factor": "Auto-generated...",
     "metadata": {
       "views": 1000,
-      "engagement": 0.05,
-      "avg_percentage_viewed": 45.5
+      "likes": 25,
+      "comments": 5,
+      "duration_seconds": 30,
+      "engagement_rate": 3.0,
+      "like_rate": 2.5,
+      "comment_rate": 0.5,
+      "avg_percentage_viewed": 72.5,
+      "avg_view_duration_seconds": 22,
+      "estimated_minutes_watched": 366.7
     }
   }
 ]

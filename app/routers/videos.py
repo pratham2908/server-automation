@@ -672,7 +672,7 @@ async def sync_videos(
                     "comment_rate": v.get("comment_rate"),
                     "avg_percentage_viewed": v.get("avg_percentage_viewed"),
                     "avg_view_duration_seconds": v.get("avg_view_duration_seconds"),
-                    "estimated_minutes_watched": v.get("estimated_minutes_watched"),
+                    "estimated_hours_watched": v.get("estimated_hours_watched"),
                 },
                 "created_at": published_at,
                 "updated_at": now,

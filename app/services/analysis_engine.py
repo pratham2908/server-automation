@@ -120,7 +120,7 @@ async def run_analysis(
                     "views", "likes", "comments", "duration_seconds",
                     "engagement_rate", "like_rate", "comment_rate",
                     "avg_percentage_viewed", "avg_view_duration_seconds",
-                    "estimated_minutes_watched",
+                    "estimated_hours_watched",
                 )
                 if meta.get(k) is not None
             }

@@ -1,0 +1,14 @@
+---
+description: Always update documentation files when making code changes
+alwaysApply: true
+---
+
+# Keep documentation in sync
+
+Whenever you modify **any** code in this project (models, routers, services, config, etc.), you MUST also update the relevant documentation files in the same change:
+
+- **`DOCUMENTATION.md`** — Full technical docs: API endpoints, database schema, services architecture, data flow diagrams. Update response examples, schema fields, service descriptions, and flow diagrams to match code changes.
+- **`api_commands.md`** — Frontend-facing API reference. Update endpoint descriptions, request/response examples, and field lists.
+- **`system_commands.md`** — Infrastructure and deployment commands. Update if server management, SSH, deploy workflow, or local dev instructions change.
+
+Do NOT wait to be asked — update docs as part of every code change.

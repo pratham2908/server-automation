@@ -212,8 +212,8 @@ class YouTubeService:
                         "avg_view_duration_seconds": round(
                             float(row_dict.get("averageViewDuration", 0))
                         ),
-                        "estimated_minutes_watched": round(
-                            float(row_dict.get("estimatedMinutesWatched", 0)), 1
+                        "estimated_hours_watched": round(
+                            float(row_dict.get("estimatedMinutesWatched", 0)) / 60, 2
                         ),
                     }
 
@@ -298,7 +298,7 @@ class YouTubeService:
 
         Returns the ``youtube_video_id`` of the newly created video.
         """
-        video_status: dict = {"privacyStatus": "private"}
+        video_status: dict = {"privacyStatus": "public"}
         if publish_at:
             video_status["publishAt"] = publish_at
 

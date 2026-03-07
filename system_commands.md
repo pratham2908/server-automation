@@ -99,6 +99,32 @@ sudo journalctl -u automation-server -n 50 --no-pager
 
 ---
 
+## 🔑 YouTube Token Re-authentication
+
+If you need to re-authenticate the YouTube token (e.g. after adding a new OAuth scope), do this **locally** (it requires a browser):
+
+```bash
+# 1. Delete the old token
+rm youtube_token.json
+
+# 2. Start the server — it will open a browser for OAuth consent
+source .venv/bin/activate
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 3. Grant access in the browser (approve all scopes)
+# The new token is saved automatically to youtube_token.json
+
+# 4. Copy the new token to the production server
+scp -i ssh-key-2.key youtube_token.json ubuntu@68.233.115.135:~/automation-server/youtube_token.json
+
+# 5. Restart the production server
+ssh -i ssh-key-2.key ubuntu@68.233.115.135 "sudo systemctl restart automation-server"
+```
+
+Current OAuth scopes: `youtube.upload`, `youtube.readonly`, `yt-analytics.readonly`
+
+---
+
 ## 💻 Local Development
 
 If you need to run the server locally on your own machine for testing:

@@ -30,7 +30,7 @@ class VideoMetadata(BaseModel):
     # Analytics API v2
     avg_percentage_viewed: Optional[float] = None
     avg_view_duration_seconds: Optional[int] = None
-    estimated_minutes_watched: Optional[float] = None
+    estimated_hours_watched: Optional[float] = None
 
 
 class Video(BaseModel):

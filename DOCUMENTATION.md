@@ -236,8 +236,15 @@ Returns all videos for a channel, with optional filtering and suggestion marking
     "r2_object_key": null,
     "metadata": {
       "views": null,
-      "engagement": null,
-      "avg_percentage_viewed": null
+      "likes": null,
+      "comments": null,
+      "duration_seconds": null,
+      "engagement_rate": null,
+      "like_rate": null,
+      "comment_rate": null,
+      "avg_percentage_viewed": null,
+      "avg_view_duration_seconds": null,
+      "estimated_minutes_watched": null
     },
     "created_at": "2024-01-15T10:30:00Z",
     "updated_at": "2024-01-15T10:30:00Z"
@@ -261,11 +268,12 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 
 **What happens:**
 
-1. Fetches all videos from the channel's uploads playlist (paginated)
-2. Skips any already in the `videos` collection (by `youtube_video_id`)
-3. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
-4. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
-5. Inserts videos as `done` with `category` and `topic` assigned; `created_at` is set to the **YouTube publish date**
+1. Fetches all videos from the channel's uploads playlist (paginated) — pulls `snippet`, `statistics`, and `contentDetails` (duration)
+2. Enriches with YouTube Analytics API data (`avg_percentage_viewed`, `avg_view_duration_seconds`, `estimated_minutes_watched`) when available
+3. Skips any already in the `videos` collection (by `youtube_video_id`)
+4. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
+5. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
+6. Inserts videos as `published` with `category` and `topic` assigned; `created_at` is set to the **YouTube publish date**; `metadata` is fully populated with views, likes, comments, duration, rates, and analytics
 
 **Response (200):**
 
@@ -441,6 +449,20 @@ Returns all categories sorted by score (highest first).
     "score": 85.5,
     "status": "active",
     "video_count": 12,
+    "metadata": {
+      "total_videos": 12,
+      "avg_views": 1500.0,
+      "avg_likes": 15.5,
+      "avg_comments": 3.2,
+      "avg_duration_seconds": 28.0,
+      "avg_engagement_rate": 1.25,
+      "avg_like_rate": 1.03,
+      "avg_comment_rate": 0.22,
+      "avg_percentage_viewed": 72.5,
+      "avg_view_duration_seconds": 20,
+      "total_views": 18000,
+      "total_estimated_minutes_watched": 560.0
+    },
     "created_at": "2024-01-15T10:30:00Z",
     "updated_at": "2024-01-15T10:30:00Z"
   }
@@ -523,13 +545,14 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 2. **Compute delta** — compare with already-analysed video IDs to find new ones
 3. **Exclude recent videos** — skip any with `created_at` less than 3 days ago (hard limit, no exceptions)
 4. **Early exit** if no new videos to analyse
-5. **Fetch YouTube stats** (views, likes, comments) for new videos that have a `youtube_video_id`
-6. **Send to Gemini in batches of 5** — each batch receives the running analysis from prior batches, so insights accumulate incrementally
+5. **Fetch YouTube stats** (views, likes, comments, duration, engagement rates) + **YouTube Analytics** (avg % viewed, avg view duration, est. minutes watched) for new videos
+6. **Send to Gemini in batches of 5** — each batch receives the running analysis from prior batches, so insights accumulate incrementally. Gemini is instructed to weigh engagement metrics (`engagement_rate`, `avg_percentage_viewed`, etc.) heavily when scoring categories
 7. **Save updated analysis** to DB (increments version number)
 8. **Save audit snapshot** to `analysis_history` collection
 9. **Run to-do engine:**
    - Updates **all category scores** from Gemini's analysis output
    - Increments **category video_count** for each newly analysed video
+   - **Computes and saves category metadata** — aggregates avg views, likes, comments, engagement rates, avg % viewed, total watch time, etc. from all published videos in each category
    - Archives categories with score < 30 AND ≥ 5 videos
    - Note: It no longer auto-generates video ideas. Use the `/updateToDoList` endpoint to generate videos explicitly.
 
@@ -733,9 +756,16 @@ Stores all video records — both manually uploaded and AI-generated to-do items
   "youtube_video_id": null, // set after YouTube upload
   "r2_object_key": "tech-tips/vid.mp4", // set when file is stored in R2
   "metadata": {
-    "views": null, // from YouTube stats
-    "engagement": null, // from YouTube stats
-    "avg_percentage_viewed": null // from YouTube stats
+    "views": null, // from YouTube Data API
+    "likes": null, // from YouTube Data API
+    "comments": null, // from YouTube Data API
+    "duration_seconds": null, // from YouTube Data API (contentDetails)
+    "engagement_rate": null, // (likes + comments) / views × 100
+    "like_rate": null, // likes / views × 100
+    "comment_rate": null, // comments / views × 100
+    "avg_percentage_viewed": null, // from YouTube Analytics API
+    "avg_view_duration_seconds": null, // from YouTube Analytics API
+    "estimated_minutes_watched": null // from YouTube Analytics API
   },
   "created_at": "datetime",
   "updated_at": "datetime"
@@ -824,6 +854,20 @@ Stores content categories with their performance scores.
   "score": 85.5, // 0-100, updated by analysis engine
   "status": "active", // "active" or "archived"
   "video_count": 12, // incremented when videos marked done
+  "metadata": {
+    "total_videos": 12, // published videos in this category
+    "avg_views": 1500.0,
+    "avg_likes": 15.5,
+    "avg_comments": 3.2,
+    "avg_duration_seconds": 28.0,
+    "avg_engagement_rate": 1.25, // avg (likes+comments)/views × 100
+    "avg_like_rate": 1.03,
+    "avg_comment_rate": 0.22,
+    "avg_percentage_viewed": 72.5, // from YouTube Analytics API
+    "avg_view_duration_seconds": 20, // from YouTube Analytics API
+    "total_views": 18000,
+    "total_estimated_minutes_watched": 560.0
+  },
   "created_at": "datetime",
   "updated_at": "datetime"
 }
@@ -920,9 +964,10 @@ Audit trail — one document per analysis run. Stores the inputs and outputs of 
 
 ### YouTube Service (`app/services/youtube.py`)
 
-- **Auth**: OAuth2 with stored token (auto-refreshes, initial setup requires browser consent)
+- **Auth**: OAuth2 with stored token (auto-refreshes, initial setup requires browser consent). Scopes: `youtube.upload`, `youtube.readonly`, `yt-analytics.readonly`
 - **Get channel info**: Fetches channel metadata (name, subscribers, etc.)
-- **Get video stats**: Fetches views/likes/comments for batches of up to 50 videos
+- **Get video stats**: Fetches views, likes, comments, duration (from Data API `statistics` + `contentDetails`), plus computed engagement/like/comment rates. Also merges YouTube Analytics data (avg % viewed, avg view duration, estimated minutes watched) when available
+- **Get video analytics**: Queries the YouTube Analytics API for `averageViewPercentage`, `averageViewDuration`, and `estimatedMinutesWatched` per video. Batches by 40 IDs. Returns empty data for videos less than ~48 hours old (YouTube Analytics processing delay)
 - **Upload video**: Resumable upload in 10MB chunks, defaults to private. Accepts an optional `publish_at` ISO 8601 UTC datetime — when provided, the video is uploaded as private with YouTube's `publishAt` field so it auto-publishes at the scheduled time
 
 ### Scheduler Service (`app/services/scheduler.py`)
@@ -953,8 +998,10 @@ Post-analysis step:
 
 1. Updates all category scores from Gemini analysis
 2. Increments category video_count for newly analysed videos
-3. Archives underperforming categories (score < 30, ≥ 5 videos)
-4. Generates N new to-do videos (N = newly analysed count), distributed across categories weighted by score
+3. Computes and saves **category metadata** — aggregated performance metrics (avg views, likes, comments, engagement rates, avg % viewed, total views, total watch time) from all published videos in each category
+4. Archives underperforming categories (score < 30, ≥ 5 videos)
+
+To-do video generation is triggered separately via the `/updateToDoList` endpoint, which distributes N slots across active categories weighted by score
 
 ---
 
@@ -997,18 +1044,17 @@ Client                    Server              YouTube API         Gemini AI
   |                         |-- compute delta (new vs analysed)        |
   |                         |                      |                   |
   |                         |-- get_video_stats -->|                   |
-  |                         |<-- views/likes ------|                   |
+  |                         |<-- views/likes/dur --|                   |
+  |                         |-- get_video_analytics|                   |
+  |                         |<-- avg%/watchtime ---|                   |
   |                         |                      |                   |
   |                         |-- analyze_videos ---------------------->|
-  |                         |   (video data + prev analysis)          |
+  |                         |   (video data + stats + prev analysis)  |
   |                         |<-- updated analysis --------------------|
   |                         |                      |                   |
   |                         |-- save analysis (MongoDB)                |
-  |                         |                      |                   |
+  |                         |-- compute category metadata (MongoDB)    |
   |                         |-- archive bad categories (MongoDB)       |
-  |                         |-- generate_video_content -------------->|
-  |                         |<-- title/desc/tags ----------------------|
-  |                         |-- insert todo videos (MongoDB)           |
   |                         |                      |                   |
   |<-- updated analysis ----|                      |                   |
 ```

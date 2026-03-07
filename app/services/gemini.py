@@ -230,7 +230,7 @@ Guidelines:
   - `duration_seconds` — video length in seconds.
   - `avg_percentage_viewed` — average % of the video watched by viewers (from YouTube Analytics).
   - `avg_view_duration_seconds` — average watch time per view in seconds.
-  - `estimated_minutes_watched` — total accumulated watch time in minutes.
+  - `estimated_hours_watched` — total accumulated watch time in hours.
   Use ALL of these to judge which categories, title patterns, tags, and video
   lengths drive the best audience retention and engagement — not just raw views.
   High `avg_percentage_viewed` is the strongest signal of content quality.
