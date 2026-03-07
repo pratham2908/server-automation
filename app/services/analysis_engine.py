@@ -83,6 +83,8 @@ async def run_analysis(
 
     # 3  Early exit
     if not new_videos:
+        if existing_analysis:
+            existing_analysis.pop("_id", None)
         return existing_analysis or {}
 
     # 4  Fetch YouTube stats for videos that have a youtube_video_id
