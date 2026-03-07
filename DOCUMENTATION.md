@@ -219,38 +219,56 @@ Returns all videos for a channel, with optional filtering and suggestion marking
 
 **Response (200):**
 
+The response is a wrapper with `videos` (the array) and `sync_status` (how many videos need syncing).
+
 ```json
-[
-  {
-    "channel_id": "tech-tips",
-    "video_id": "550e8400-e29b-41d4-a716-446655440000",
-    "title": "10 VS Code Tricks You Didn't Know",
-    "description": "In this video...",
-    "tags": ["vscode", "productivity", "coding"],
-    "category": "Tutorials",
-    "topic": "VS Code productivity hacks",
-    "status": "todo",
-    "suggested": true,
-    "basis_factor": "Auto-generated from analysis v3",
-    "youtube_video_id": null,
-    "r2_object_key": null,
-    "metadata": {
-      "views": null,
-      "likes": null,
-      "comments": null,
-      "duration_seconds": null,
-      "engagement_rate": null,
-      "like_rate": null,
-      "comment_rate": null,
-      "avg_percentage_viewed": null,
-      "avg_view_duration_seconds": null,
-      "estimated_minutes_watched": null
-    },
-    "created_at": "2024-01-15T10:30:00Z",
-    "updated_at": "2024-01-15T10:30:00Z"
+{
+  "videos": [
+    {
+      "channel_id": "tech-tips",
+      "video_id": "550e8400-e29b-41d4-a716-446655440000",
+      "title": "10 VS Code Tricks You Didn't Know",
+      "description": "In this video...",
+      "tags": ["vscode", "productivity", "coding"],
+      "category": "Tutorials",
+      "topic": "VS Code productivity hacks",
+      "status": "todo",
+      "suggested": true,
+      "basis_factor": "Auto-generated from analysis v3",
+      "youtube_video_id": null,
+      "r2_object_key": null,
+      "metadata": {
+        "views": null,
+        "likes": null,
+        "comments": null,
+        "duration_seconds": null,
+        "engagement_rate": null,
+        "like_rate": null,
+        "comment_rate": null,
+        "avg_percentage_viewed": null,
+        "avg_view_duration_seconds": null,
+        "estimated_minutes_watched": null
+      },
+      "published_at": null,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ],
+  "sync_status": {
+    "available": true,
+    "youtube_total": 60,
+    "in_database": 55,
+    "new_videos_to_import": 5,
+    "metadata_to_refresh": 55
   }
-]
+}
 ```
+
+`sync_status` fields:
+- `youtube_total` — total videos on the YouTube channel
+- `in_database` — videos in our DB that have a `youtube_video_id`
+- `new_videos_to_import` — videos on YouTube not yet in the DB
+- `metadata_to_refresh` — existing videos whose stats will be refreshed on next sync
 
 ---
 
@@ -270,10 +288,12 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 
 1. Fetches all videos from the channel's uploads playlist (paginated) — pulls `snippet`, `statistics`, and `contentDetails` (duration)
 2. Enriches with YouTube Analytics API data (`avg_percentage_viewed`, `avg_view_duration_seconds`, `estimated_minutes_watched`) when available
-3. Skips any already in the `videos` collection (by `youtube_video_id`)
-4. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
-5. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
-6. Inserts videos as `published` with `category` and `topic` assigned; `created_at` is set to the **YouTube publish date**; `metadata` is fully populated with views, likes, comments, duration, rates, and analytics
+3. **Refreshes metadata** for all existing published videos in the DB — updates views, likes, comments, engagement rates, analytics, etc. with the latest data from YouTube
+4. **Reconciles the schedule queue** — checks if any videos currently in `schedule_queue` now appear on YouTube as published. If so, marks them as `published`, sets `published_at`, and removes them from the queue
+5. Skips any already in the `videos` collection (by `youtube_video_id`)
+6. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
+7. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
+8. Inserts videos as `published` with `category` and `topic` assigned; `created_at` and `published_at` are set to the **YouTube publish date**; `metadata` is fully populated with views, likes, comments, duration, rates, and analytics
 
 **Response (200):**
 
@@ -281,6 +301,7 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 {
   "ok": true,
   "synced": 15,
+  "metadata_refreshed": 45,
   "categories_created": ["Tutorials", "Reviews", "Vlogs"],
   "videos": [
     {
@@ -316,6 +337,7 @@ Changes a video's status.
 **Side effects:**
 
 - When marking a video as `published`, the corresponding category's `video_count` is incremented by 1.
+- When marking as `published`, `published_at` is automatically set to the current time.
 
 **Response (200):**
 
@@ -665,7 +687,7 @@ Processes the entire queue in order. For each video:
 
 1. **Download** from Cloudflare R2 to a temp file
 2. **Upload** to YouTube via resumable upload (10MB chunks, private with `publishAt` set to the video's `scheduled_at` time so YouTube auto-publishes at the right moment)
-3. **Update** the video record: set `youtube_video_id`, change status from `scheduled` → `published`
+3. **Update** the video record: set `youtube_video_id`, change status from `scheduled` → `published`, set `published_at` to the `scheduled_at` time (or now if no scheduled time)
 4. **Remove** from the schedule queue
 5. **Clean up** the temp file
 
@@ -767,6 +789,7 @@ Stores all video records — both manually uploaded and AI-generated to-do items
     "avg_view_duration_seconds": null, // from YouTube Analytics API
     "estimated_minutes_watched": null // from YouTube Analytics API
   },
+  "published_at": "datetime | null", // when the video was published on YouTube; null until published
   "created_at": "datetime",
   "updated_at": "datetime"
 }
@@ -783,7 +806,7 @@ Stores all video records — both manually uploaded and AI-generated to-do items
 - `todo` → Video idea exists (AI-generated or manual), not yet produced
 - `ready` → Video file uploaded to R2, sitting in `posting_queue`
 - `scheduled` → Video confirmed for upload, sitting in `schedule_queue`
-- `published` → Video has been uploaded to YouTube
+- `published` → Video has been uploaded to YouTube; `published_at` is set at this transition
 
 ---
 

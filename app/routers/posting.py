@@ -150,12 +150,16 @@ async def upload_all(
             )
 
             # Update video record with YouTube ID and mark published.
+            # published_at = the scheduled publish time (when YouTube will make it public),
+            # or now if no scheduled time was set.
+            published_at = scheduled_at if scheduled_at else datetime.utcnow()
             await db.videos.update_one(
                 {"channel_id": channel_id, "video_id": video_id},
                 {
                     "$set": {
                         "youtube_video_id": yt_id,
                         "status": "published",
+                        "published_at": published_at,
                         "updated_at": datetime.utcnow(),
                     }
                 },

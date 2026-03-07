@@ -44,7 +44,7 @@ def _get_r2() -> R2Service:
 
 from app.models.video import Video
 
-@router.get("/", response_model=list[Video])
+@router.get("/")
 async def list_videos(
     channel_id: str,
     status_filter: Optional[str] = None,
@@ -100,7 +100,46 @@ async def list_videos(
     for v in videos:
         v.pop("_id", None)
 
-    return videos
+    # Build sync status: compare YouTube video count vs DB published count.
+    sync_status = await _get_sync_status(channel_id, db)
+
+    return {
+        "videos": videos,
+        "sync_status": sync_status,
+    }
+
+
+async def _get_sync_status(channel_id: str, db) -> dict:
+    """Lightweight check: how many videos on YouTube vs in our DB."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel or not channel.get("youtube_channel_id"):
+        return {"available": False, "reason": "No YouTube channel linked"}
+
+    youtube_service, _ = _get_services(channel_id)
+    if youtube_service is None:
+        return {"available": False, "reason": "No YouTube token for this channel"}
+
+    try:
+        info = youtube_service.get_channel_info(channel["youtube_channel_id"])
+        yt_video_count = info.get("video_count", 0)
+    except Exception as exc:
+        logger.warning("Could not fetch YouTube channel info for sync status: %s", exc)
+        return {"available": False, "reason": "Failed to reach YouTube API"}
+
+    db_published_count = await db.videos.count_documents(
+        {"channel_id": channel_id, "youtube_video_id": {"$ne": None}}
+    )
+
+    not_in_db = max(yt_video_count - db_published_count, 0)
+    needs_metadata_refresh = db_published_count
+
+    return {
+        "available": True,
+        "youtube_total": yt_video_count,
+        "in_database": db_published_count,
+        "new_videos_to_import": not_in_db,
+        "metadata_to_refresh": needs_metadata_refresh,
+    }
 
 
 # ------------------------------------------------------------------
@@ -116,14 +155,16 @@ async def update_video_status(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Toggle video status between ``done`` and ``todo``."""
+    update_fields = {
+        "status": body.status.value,
+        "updated_at": datetime.utcnow(),
+    }
+    if body.status == VideoStatus.PUBLISHED:
+        update_fields["published_at"] = datetime.utcnow()
+
     result = await db.videos.update_one(
         {"channel_id": channel_id, "video_id": video_id},
-        {
-            "$set": {
-                "status": body.status.value,
-                "updated_at": datetime.utcnow(),
-            }
-        },
+        {"$set": update_fields},
     )
     if result.matched_count == 0:
         raise HTTPException(
@@ -558,20 +599,52 @@ async def sync_videos(
         extra = analytics_data.get(v["youtube_video_id"], {})
         v.update(extra)
 
-    # Find already-imported youtube_video_ids.
+    # Build a lookup from youtube_video_id → fresh stats for quick access.
+    yt_stats_lookup = {v["youtube_video_id"]: v for v in all_yt_videos}
+
+    # Find already-imported youtube_video_ids and refresh their metadata.
     existing_yt_ids = set()
+    metadata_updated = 0
     async for doc in db.videos.find(
-        {"channel_id": channel_id}, {"youtube_video_id": 1}
+        {"channel_id": channel_id, "youtube_video_id": {"$ne": None}},
+        {"youtube_video_id": 1},
     ):
-        if doc.get("youtube_video_id"):
-            existing_yt_ids.add(doc["youtube_video_id"])
+        yt_id = doc["youtube_video_id"]
+        existing_yt_ids.add(yt_id)
+
+        fresh = yt_stats_lookup.get(yt_id)
+        if not fresh:
+            continue
+
+        await db.videos.update_one(
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "metadata.views": fresh.get("views"),
+                    "metadata.likes": fresh.get("likes"),
+                    "metadata.comments": fresh.get("comments"),
+                    "metadata.duration_seconds": fresh.get("duration_seconds"),
+                    "metadata.engagement_rate": fresh.get("engagement_rate"),
+                    "metadata.like_rate": fresh.get("like_rate"),
+                    "metadata.comment_rate": fresh.get("comment_rate"),
+                    "metadata.avg_percentage_viewed": fresh.get("avg_percentage_viewed"),
+                    "metadata.avg_view_duration_seconds": fresh.get("avg_view_duration_seconds"),
+                    "metadata.estimated_minutes_watched": fresh.get("estimated_minutes_watched"),
+                    "updated_at": datetime.utcnow(),
+                }
+            },
+        )
+        metadata_updated += 1
+
+    if metadata_updated:
+        logger.success(f"Refreshed metadata for {metadata_updated} existing video(s).")
 
     new_videos = [
         v for v in all_yt_videos if v["youtube_video_id"] not in existing_yt_ids
     ]
     
     logger.info(
-        "Found %d total videos on channel. Skipped %d already imported, %d new to process.",
+        "Found %d total videos on channel. %d existing (metadata refreshed), %d new to process.",
         len(all_yt_videos),
         len(existing_yt_ids),
         len(new_videos),
@@ -582,7 +655,8 @@ async def sync_videos(
         return {
             "ok": True,
             "synced": 0,
-            "message": f"All {len(all_yt_videos)} videos already in DB",
+            "metadata_refreshed": metadata_updated,
+            "message": f"All {len(all_yt_videos)} videos already in DB — metadata refreshed",
             "videos": [],
         }
 
@@ -639,18 +713,67 @@ async def sync_videos(
                 )
                 logger.success(f"Created new category: '{cat}'")
 
-    # Insert videos.
+    # ------------------------------------------------------------------
+    # Reconcile schedule_queue: mark scheduled videos that are now live
+    # on YouTube as published and set their published_at.
+    # ------------------------------------------------------------------
+    yt_id_set = {v["youtube_video_id"] for v in all_yt_videos}
+    schedule_entries = await db.schedule_queue.find(
+        {"channel_id": channel_id}
+    ).to_list(length=None)
+
+    reconciled = 0
+    for entry in schedule_entries:
+        vid = await db.videos.find_one(
+            {"channel_id": channel_id, "video_id": entry["video_id"]}
+        )
+        if not vid or not vid.get("youtube_video_id"):
+            continue
+        if vid["youtube_video_id"] in yt_id_set:
+            yt_published = None
+            for yv in all_yt_videos:
+                if yv["youtube_video_id"] == vid["youtube_video_id"]:
+                    if yv.get("published_at"):
+                        try:
+                            yt_published = isoparse(yv["published_at"]).replace(tzinfo=None)
+                        except (ValueError, TypeError):
+                            pass
+                    break
+
+            await db.videos.update_one(
+                {"_id": vid["_id"]},
+                {
+                    "$set": {
+                        "status": "published",
+                        "published_at": yt_published or datetime.utcnow(),
+                        "updated_at": datetime.utcnow(),
+                    }
+                },
+            )
+            await db.schedule_queue.delete_one({"_id": entry["_id"]})
+            reconciled += 1
+            logger.info(
+                "Reconciled scheduled video '%s' — now published.",
+                vid.get("title", entry["video_id"]),
+            )
+
+    if reconciled:
+        logger.success(f"Reconciled {reconciled} scheduled video(s) as published.")
+
+    # ------------------------------------------------------------------
+    # Insert newly discovered videos.
+    # ------------------------------------------------------------------
     docs = []
     for v in new_videos:
         yt_id = v["youtube_video_id"]
         cat_info = categorizations.get(yt_id, {"category": "Uncategorized", "topic": ""})
         now = datetime.utcnow()
 
-        # Use YouTube publish date as created_at so the 3-day filter works.
-        published_at = now
+        # Use YouTube publish date as both created_at and published_at.
+        yt_published_at = now
         if v.get("published_at"):
             try:
-                published_at = isoparse(v["published_at"]).replace(tzinfo=None)
+                yt_published_at = isoparse(v["published_at"]).replace(tzinfo=None)
             except (ValueError, TypeError):
                 pass
 
@@ -680,7 +803,8 @@ async def sync_videos(
                     "avg_view_duration_seconds": v.get("avg_view_duration_seconds"),
                     "estimated_minutes_watched": v.get("estimated_minutes_watched"),
                 },
-                "created_at": published_at,
+                "published_at": yt_published_at,
+                "created_at": yt_published_at,
                 "updated_at": now,
             }
         )
@@ -705,6 +829,7 @@ async def sync_videos(
     return {
         "ok": True,
         "synced": len(docs),
+        "metadata_refreshed": metadata_updated,
         "categories_created": [
             c for c in existing_cats
         ],

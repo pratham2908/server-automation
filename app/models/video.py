@@ -49,6 +49,10 @@ class Video(BaseModel):
     youtube_video_id: Optional[str] = None
     r2_object_key: Optional[str] = None
     metadata: VideoMetadata = Field(default_factory=VideoMetadata)
+    published_at: Optional[datetime] = Field(
+        None,
+        description="When the video was published on YouTube. Null until published.",
+    )
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

@@ -186,36 +186,45 @@ X-API-Key: <your-api-key>
 - **Query Params**:
   - `status_filter=todo|ready|scheduled|published` (optional)
   - `suggest_n=3` (optional, brings top N suggestions first)
-- **Response**: Array of Video objects.
+- **Response**: Object with `videos` array and `sync_status` summary.
 
 ```json
-[
-  {
-    "_id": "651f8a8...",
-    "channel_id": "ch1",
-    "video_id": "uuid-1234",
-    "title": "How to code",
-    "description": "...",
-    "tags": ["coding", "tutorial"],
-    "category": "Tutorials",
-    "topic": "Python basics",
-    "status": "todo",
-    "suggested": false,
-    "basis_factor": "Auto-generated...",
-    "metadata": {
-      "views": 1000,
-      "likes": 25,
-      "comments": 5,
-      "duration_seconds": 30,
-      "engagement_rate": 3.0,
-      "like_rate": 2.5,
-      "comment_rate": 0.5,
-      "avg_percentage_viewed": 72.5,
-      "avg_view_duration_seconds": 22,
-      "estimated_minutes_watched": 366.7
+{
+  "videos": [
+    {
+      "channel_id": "ch1",
+      "video_id": "uuid-1234",
+      "title": "How to code",
+      "description": "...",
+      "tags": ["coding", "tutorial"],
+      "category": "Tutorials",
+      "topic": "Python basics",
+      "status": "todo",
+      "suggested": false,
+      "basis_factor": "Auto-generated...",
+      "metadata": {
+        "views": 1000,
+        "likes": 25,
+        "comments": 5,
+        "duration_seconds": 30,
+        "engagement_rate": 3.0,
+        "like_rate": 2.5,
+        "comment_rate": 0.5,
+        "avg_percentage_viewed": 72.5,
+        "avg_view_duration_seconds": 22,
+        "estimated_minutes_watched": 366.7
+      },
+      "published_at": "2026-03-01T10:00:00Z"
     }
+  ],
+  "sync_status": {
+    "available": true,
+    "youtube_total": 60,
+    "in_database": 55,
+    "new_videos_to_import": 5,
+    "metadata_to_refresh": 55
   }
-]
+}
 ```
 
 ### Update Video Status
@@ -229,6 +238,8 @@ X-API-Key: <your-api-key>
   "status": "published" // Can be "todo", "ready", "scheduled", "published"
 }
 ```
+
+- **Notes**: When status is set to `published`, `published_at` is automatically set to the current time.
 
 - **Response**:
 
@@ -290,11 +301,23 @@ X-API-Key: <your-api-key>
 }
 ```
 
+- **What it does**:
+  - Fetches all videos from the YouTube channel
+  - **Refreshes metadata** (views, likes, comments, engagement rates, analytics) for every existing video in the DB
+  - Reconciles the schedule queue (marks scheduled videos as published if they're now live on YouTube)
+  - Imports any new videos not yet in the DB, categorizes them via Gemini
+
 - **Response**:
 
 ```json
 {
-  "status": "sync started in background"
+  "ok": true,
+  "synced": 5,
+  "metadata_refreshed": 45,
+  "categories_created": ["Tutorials"],
+  "videos": [
+    { "title": "New Video Title", "category": "Tutorials", "topic": "..." }
+  ]
 }
 ```
 
