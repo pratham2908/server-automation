@@ -99,25 +99,35 @@ sudo journalctl -u automation-server -n 50 --no-pager
 
 ---
 
-## 🔑 YouTube Token Re-authentication
+## 🔑 YouTube Token Management (Per-Channel)
 
-If you need to re-authenticate the YouTube token (e.g. after adding a new OAuth scope), do this **locally** (it requires a browser):
+Each channel has its own OAuth token at `youtube_tokens/{channel_id}.json`. This ensures analytics and uploads go to the correct YouTube account.
+
+### Generate a token for a new channel
+
+Run this **locally** (requires a browser):
 
 ```bash
-# 1. Delete the old token
-rm youtube_token.json
-
-# 2. Start the server — it will open a browser for OAuth consent
 source .venv/bin/activate
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python generate_youtube_token.py <channel_id>
+```
 
-# 3. Grant access in the browser (approve all scopes)
-# The new token is saved automatically to youtube_token.json
+Example: `python generate_youtube_token.py physicsasmr_official`
 
-# 4. Copy the new token to the production server
-scp -i ssh-key-2.key youtube_token.json ubuntu@68.233.115.135:~/automation-server/youtube_token.json
+Sign in with the Google account that **owns** that YouTube channel.
 
-# 5. Restart the production server
+### Re-generate a token for an existing channel
+
+```bash
+# Delete the old token and re-run the script
+rm youtube_tokens/<channel_id>.json
+python generate_youtube_token.py <channel_id>
+```
+
+### Copy tokens to the production server
+
+```bash
+scp -i ssh-key-2.key youtube_tokens/*.json ubuntu@68.233.115.135:~/automation-server/youtube_tokens/
 ssh -i ssh-key-2.key ubuntu@68.233.115.135 "sudo systemctl restart automation-server"
 ```
 

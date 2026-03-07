@@ -51,9 +51,9 @@ async def _compute_category_metadata(
         if v.get("metadata") and v["metadata"].get("views") is not None
     ]
     total_emw_vals = [
-        v["metadata"]["estimated_hours_watched"]
+        v["metadata"]["estimated_minutes_watched"]
         for v in videos
-        if v.get("metadata") and v["metadata"].get("estimated_hours_watched") is not None
+        if v.get("metadata") and v["metadata"].get("estimated_minutes_watched") is not None
     ]
 
     return {
@@ -68,7 +68,7 @@ async def _compute_category_metadata(
         "avg_percentage_viewed": _avg("avg_percentage_viewed"),
         "avg_view_duration_seconds": _avg("avg_view_duration_seconds"),
         "total_views": sum(total_views_vals) if total_views_vals else None,
-        "total_estimated_hours_watched": (
+        "total_estimated_minutes_watched": (
             round(sum(total_emw_vals), 1) if total_emw_vals else None
         ),
     }

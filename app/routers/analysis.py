@@ -15,10 +15,11 @@ router = APIRouter(
 )
 
 
-def _get_services():
-    """Lazy import to avoid circular dependency – replaced at startup."""
-    from app.main import youtube_service, gemini_service  # type: ignore[import]
+def _get_services(channel_id: str):
+    """Lazy import to avoid circular dependency."""
+    from app.main import youtube_service_manager, gemini_service  # type: ignore[import]
 
+    youtube_service = youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
     return youtube_service, gemini_service
 
 
@@ -35,12 +36,17 @@ async def run_analysis_update(
     """Trigger a full analysis update for *channel_id*."""
     from app.services.analysis_engine import run_analysis
 
-    youtube_service, gemini_service = _get_services()
+    youtube_service, gemini_service = _get_services(channel_id)
 
-    if youtube_service is None or gemini_service is None:
+    if youtube_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="YouTube or Gemini service not initialised",
+            detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
+        )
+    if gemini_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini service not initialised",
         )
 
     result = await run_analysis(
@@ -89,7 +95,7 @@ async def generate_todos(
     """Generate `n` new to-do videos for *channel_id*."""
     from app.services.todo_engine import generate_todo_videos
 
-    _, gemini_service = _get_services()
+    _, gemini_service = _get_services(channel_id)
 
     if gemini_service is None:
         raise HTTPException(

@@ -28,7 +28,7 @@ class CategoryMetadata(BaseModel):
     avg_percentage_viewed: Optional[float] = None
     avg_view_duration_seconds: Optional[float] = None
     total_views: Optional[int] = None
-    total_estimated_hours_watched: Optional[float] = None
+    total_estimated_minutes_watched: Optional[float] = None
 
 
 class Category(BaseModel):

@@ -364,10 +364,11 @@ async def schedule_video(
 # ------------------------------------------------------------------
 
 
-def _get_services():
+def _get_services(channel_id: str):
     """Lazy import to avoid circular dependency."""
-    from app.main import youtube_service, gemini_service  # type: ignore[import]
+    from app.main import youtube_service_manager, gemini_service  # type: ignore[import]
 
+    youtube_service = youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
     return youtube_service, gemini_service
 
 
@@ -523,12 +524,17 @@ async def sync_videos(
     already in the ``videos`` collection, categorises them via Gemini,
     and inserts them as ``done``.
     """
-    youtube_service, gemini_service = _get_services()
+    youtube_service, gemini_service = _get_services(channel_id)
 
-    if youtube_service is None or gemini_service is None:
+    if youtube_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="YouTube or Gemini service not initialised",
+            detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
+        )
+    if gemini_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini service not initialised",
         )
 
     # Look up channel.
@@ -672,7 +678,7 @@ async def sync_videos(
                     "comment_rate": v.get("comment_rate"),
                     "avg_percentage_viewed": v.get("avg_percentage_viewed"),
                     "avg_view_duration_seconds": v.get("avg_view_duration_seconds"),
-                    "estimated_hours_watched": v.get("estimated_hours_watched"),
+                    "estimated_minutes_watched": v.get("estimated_minutes_watched"),
                 },
                 "created_at": published_at,
                 "updated_at": now,

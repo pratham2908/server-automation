@@ -212,8 +212,8 @@ class YouTubeService:
                         "avg_view_duration_seconds": round(
                             float(row_dict.get("averageViewDuration", 0))
                         ),
-                        "estimated_hours_watched": round(
-                            float(row_dict.get("estimatedMinutesWatched", 0)) / 60, 2
+                        "estimated_minutes_watched": round(
+                            float(row_dict.get("estimatedMinutesWatched", 0)), 1
                         ),
                     }
 
@@ -298,7 +298,7 @@ class YouTubeService:
 
         Returns the ``youtube_video_id`` of the newly created video.
         """
-        video_status: dict = {"privacyStatus": "public"}
+        video_status: dict = {"privacyStatus": "private"}
         if publish_at:
             video_status["publishAt"] = publish_at
 
@@ -330,3 +330,51 @@ class YouTubeService:
             _, response = request.next_chunk()
 
         return response["id"]
+
+
+class YouTubeServiceManager:
+    """Manages per-channel YouTubeService instances.
+
+    Each channel has its own OAuth token (stored at
+    ``youtube_tokens/{channel_id}.json``), so analytics and uploads go
+    to the correct account.  Instances are lazily created and cached.
+    """
+
+    def __init__(self, client_id: str, client_secret: str, tokens_dir: str = "youtube_tokens") -> None:
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._tokens_dir = tokens_dir
+        self._cache: dict[str, YouTubeService] = {}
+
+    def get_service(self, channel_id: str) -> YouTubeService | None:
+        """Return the YouTubeService for *channel_id*, or ``None`` if no token exists."""
+        if channel_id in self._cache:
+            return self._cache[channel_id]
+
+        import os
+        token_path = os.path.join(self._tokens_dir, f"{channel_id}.json")
+        if not os.path.exists(token_path):
+            logger.warning(
+                "No YouTube token found for channel '%s' at %s",
+                channel_id,
+                token_path,
+            )
+            return None
+
+        try:
+            service = YouTubeService(
+                client_id=self._client_id,
+                client_secret=self._client_secret,
+                token_path=token_path,
+            )
+            self._cache[channel_id] = service
+            logger.info("YouTube service initialised for channel '%s'", channel_id)
+            return service
+        except Exception:
+            logger.exception("Failed to initialise YouTube service for channel '%s'", channel_id)
+            return None
+
+    def has_token(self, channel_id: str) -> bool:
+        """Check if a token file exists for *channel_id*."""
+        import os
+        return os.path.exists(os.path.join(self._tokens_dir, f"{channel_id}.json"))

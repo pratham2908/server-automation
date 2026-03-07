@@ -16,7 +16,7 @@ from app.database import close_db, connect_db
 
 # Services – initialised during lifespan, accessible to routers.
 r2_service = None
-youtube_service = None
+youtube_service_manager = None
 gemini_service = None
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     - Initialises R2, YouTube, and Gemini service singletons.
     - On shutdown, closes the database connection.
     """
-    global r2_service, youtube_service, gemini_service
+    global r2_service, youtube_service_manager, gemini_service
 
     settings = get_settings()
 
@@ -49,21 +49,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("R2 service initialised")
 
-    # ---- YouTube ----
-    from app.services.youtube import YouTubeService
+    # ---- YouTube (per-channel token manager) ----
+    from app.services.youtube import YouTubeServiceManager
 
-    try:
-        youtube_service = YouTubeService(
-            client_id=settings.YOUTUBE_CLIENT_ID,
-            client_secret=settings.YOUTUBE_CLIENT_SECRET,
-            token_path=settings.YOUTUBE_TOKEN_JSON,
-        )
-        logger.info("YouTube service initialised")
-    except Exception:
-        logger.warning(
-            "YouTube service failed to initialise – upload endpoints will be unavailable",
-            exc_info=True,
-        )
+    youtube_service_manager = YouTubeServiceManager(
+        client_id=settings.YOUTUBE_CLIENT_ID,
+        client_secret=settings.YOUTUBE_CLIENT_SECRET,
+        tokens_dir="youtube_tokens",
+    )
+    logger.info("YouTube service manager initialised (per-channel tokens in youtube_tokens/)")
 
     # ---- Gemini ----
     from app.services.gemini import GeminiService

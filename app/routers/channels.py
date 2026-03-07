@@ -21,16 +21,16 @@ router = APIRouter(
 )
 
 
-def _get_youtube():
+def _get_youtube_manager():
     """Lazy import to avoid circular dependency."""
-    from app.main import youtube_service  # type: ignore[import]
+    from app.main import youtube_service_manager  # type: ignore[import]
 
-    if youtube_service is None:
+    if youtube_service_manager is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="YouTube service not initialised",
+            detail="YouTube service manager not initialised",
         )
-    return youtube_service
+    return youtube_service_manager
 
 
 # ------------------------------------------------------------------
@@ -112,7 +112,32 @@ async def create_channel(
     Provide the ``youtube_channel_id`` (the UC... ID) and the server
     will fetch the channel name, description, subscriber count, etc.
     """
-    yt = _get_youtube()
+    manager = _get_youtube_manager()
+
+    # For channel registration we need any valid YouTube client (read-only).
+    # Use the new channel_id's token if it exists, otherwise any cached one.
+    channel_id_for_token = body.channel_id
+    yt = (
+        manager.get_service(channel_id_for_token) if channel_id_for_token else None
+    )
+    if yt is None:
+        # Fall back to any available service instance.
+        if manager._cache:
+            yt = next(iter(manager._cache.values()))
+        else:
+            # Try to load any token file from the tokens dir.
+            import os
+            for f in os.listdir(manager._tokens_dir):
+                if f.endswith(".json"):
+                    cid = f.removesuffix(".json")
+                    yt = manager.get_service(cid)
+                    if yt:
+                        break
+    if yt is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No YouTube token available. Generate one with: python generate_youtube_token.py <channel_id>",
+        )
 
     # Fetch channel data from YouTube.
     try:
@@ -214,7 +239,13 @@ async def refresh_channel(
             detail=f"Channel '{channel_id}' not found",
         )
 
-    yt = _get_youtube()
+    manager = _get_youtube_manager()
+    yt = manager.get_service(channel_id)
+    if yt is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
+        )
     try:
         yt_data = yt.get_channel_info(doc["youtube_channel_id"])
     except ValueError as e:

@@ -3,3 +3,4 @@ ssh-key-2.pub
 .env
 .venv
 youtube_token.json
+youtube_tokens/

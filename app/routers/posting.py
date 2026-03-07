@@ -20,10 +20,11 @@ router = APIRouter(
 )
 
 
-def _get_services():
+def _get_services(channel_id: str):
     """Lazy import to avoid circular dependency."""
-    from app.main import r2_service, youtube_service  # type: ignore[import]
+    from app.main import r2_service, youtube_service_manager  # type: ignore[import]
 
+    youtube_service = youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
     return r2_service, youtube_service
 
 
@@ -88,12 +89,17 @@ async def upload_all(
     Processes the queue in order. Returns a summary of successes and
     failures.
     """
-    r2_service, youtube_service = _get_services()
+    r2_service, youtube_service = _get_services(channel_id)
 
-    if r2_service is None or youtube_service is None:
+    if r2_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="R2 or YouTube service not initialised",
+            detail="R2 service not initialised",
+        )
+    if youtube_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
         )
 
     queue = (
