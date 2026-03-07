@@ -228,17 +228,32 @@ X-API-Key: <your-api-key>
 - **Description**: Uploads the video file to R2 for an existing `todo` video, changing its status to `ready` and placing it in the posting queue.
 - **Response**: Returns the updated Video object (status becomes `ready`) and `queue_position`.
 
-### Schedule a Ready Video
+### Schedule Ready Video(s)
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/schedule`
 - **Method**: `POST`
-- **Description**: Moves a video from `ready` (posting_queue) to `scheduled` (schedule_queue).
+- **Path Params**: `video_id` — a specific video UUID **OR** `"all"` to schedule every video in the posting queue.
+- **Description**: Moves video(s) from `ready` (posting_queue) to `scheduled` (schedule_queue). Computes `scheduled_at` publish times from the channel's `best_posting_times` analysis, skipping any slots already occupied by previously scheduled videos. Requires an analysis with `best_posting_times` to exist.
 - **Response**:
 
 ```json
 {
-  "status": "scheduled",
-  "queue_position": 1
+  "ok": true,
+  "scheduled_count": 2,
+  "videos": [
+    {
+      "video_id": "550e8400-...",
+      "title": "10 VS Code Tricks",
+      "scheduled_at": "2026-03-10T10:00:00+05:30",
+      "schedule_position": 1
+    },
+    {
+      "video_id": "660f9500-...",
+      "title": "iPhone 16 Review",
+      "scheduled_at": "2026-03-10T14:00:00+05:30",
+      "schedule_position": 2
+    }
+  ]
 }
 ```
 
@@ -323,15 +338,17 @@ X-API-Key: <your-api-key>
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/posting/queue`
 - **Method**: `GET`
-- **Response**: Array of queue items.
+- **Response**: Array of queue items with scheduled publish times.
 
 ```json
 [
   {
-    "channel_id": "ch1",
-    "video_id": "uuid-1234",
     "position": 1,
-    "added_at": "2026-03-01T12:00:00Z"
+    "video_id": "uuid-1234",
+    "added_at": "2026-03-01T12:00:00Z",
+    "scheduled_at": "2026-03-10T10:00:00+05:30",
+    "title": "10 VS Code Tricks",
+    "category": "Tutorials"
   }
 ]
 ```
@@ -340,11 +357,20 @@ X-API-Key: <your-api-key>
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/posting/upload-all`
 - **Method**: `POST`
-- **Description**: Triggers the server to pop all videos from the `schedule_queue` and upload them to YouTube one-by-one.
+- **Description**: Triggers the server to pop all videos from the `schedule_queue` and upload them to YouTube one-by-one. Each video is uploaded as private with YouTube's `publishAt` set to the video's `scheduled_at` time, so YouTube auto-publishes at the correct moment.
 - **Response**:
 
 ```json
 {
-  "status": "uploading in background"
+  "ok": true,
+  "uploaded": 2,
+  "failed": 0,
+  "details": [
+    {
+      "video_id": "uuid-1234",
+      "status": "uploaded",
+      "youtube_video_id": "dQw4w..."
+    }
+  ]
 }
 ```

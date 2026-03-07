@@ -84,4 +84,8 @@ class ScheduleQueue(BaseModel):
     channel_id: str
     video_id: str = Field(..., description="References videos.video_id")
     position: int = Field(..., ge=1, description="1-based queue ordering")
+    scheduled_at: Optional[datetime] = Field(
+        None,
+        description="The exact datetime (timezone-aware) when this video should be published on YouTube",
+    )
     added_at: datetime = Field(default_factory=datetime.utcnow)

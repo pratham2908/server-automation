@@ -158,11 +158,24 @@ class YouTubeService:
         description: str,
         tags: list[str],
         category_id: str = "22",  # "People & Blogs" default
+        publish_at: str | None = None,
     ) -> str:
         """Upload a video file to YouTube via resumable upload.
 
+        Parameters
+        ----------
+        publish_at:
+            ISO 8601 datetime in UTC (e.g. ``"2026-03-10T04:30:00Z"``).
+            When provided the video is uploaded as ``private`` with a
+            ``publishAt`` timestamp so YouTube auto-publishes it at the
+            given time.
+
         Returns the ``youtube_video_id`` of the newly created video.
         """
+        video_status: dict = {"privacyStatus": "private"}
+        if publish_at:
+            video_status["publishAt"] = publish_at
+
         body = {
             "snippet": {
                 "title": title,
@@ -170,7 +183,7 @@ class YouTubeService:
                 "tags": tags,
                 "categoryId": category_id,
             },
-            "status": {"privacyStatus": "private"},
+            "status": video_status,
         }
 
         media = MediaFileUpload(

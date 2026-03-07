@@ -229,57 +229,134 @@ async def schedule_video(
     video_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Move a **ready** video into the schedule queue.
+    """Move **ready** video(s) into the schedule queue with publish times.
 
-    - Validates the video exists and is in ``ready`` status.
-    - Removes it from ``posting_queue``.
-    - Inserts it into ``schedule_queue`` at the next available position.
-    - Updates status to ``scheduled``.
+    - Pass a specific ``video_id`` to schedule one video.
+    - Pass ``"all"`` as ``video_id`` to schedule every video in the posting queue.
+
+    Publish times are computed from the channel's ``best_posting_times``
+    analysis, skipping any slots already occupied by previously scheduled
+    videos.
     """
-    video = await db.videos.find_one(
-        {"channel_id": channel_id, "video_id": video_id}
-    )
-    if not video:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Video {video_id} not found",
-        )
+    from app.config import get_settings
+    from app.services.scheduler import compute_schedule_slots
 
-    if video.get("status") != "ready":
+    settings = get_settings()
+
+    # ---- Collect the videos to schedule ----
+    if video_id.lower() == "all":
+        posting_entries = (
+            await db.posting_queue.find({"channel_id": channel_id})
+            .sort("position", 1)
+            .to_list(length=None)
+        )
+        if not posting_entries:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No videos in the posting queue to schedule",
+            )
+        videos_to_schedule = []
+        for entry in posting_entries:
+            v = await db.videos.find_one(
+                {"channel_id": channel_id, "video_id": entry["video_id"]}
+            )
+            if v and v.get("status") == "ready":
+                videos_to_schedule.append(v)
+    else:
+        video = await db.videos.find_one(
+            {"channel_id": channel_id, "video_id": video_id}
+        )
+        if not video:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Video {video_id} not found",
+            )
+        if video.get("status") != "ready":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Video must be in 'ready' status to schedule (current: {video.get('status')})",
+            )
+        videos_to_schedule = [video]
+
+    if not videos_to_schedule:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Video must be in 'ready' status to schedule (current: {video.get('status')})",
+            detail="No ready videos found to schedule",
         )
 
-    # Remove from posting_queue.
-    await db.posting_queue.delete_one(
-        {"channel_id": channel_id, "video_id": video_id}
+    # ---- Fetch best_posting_times from the latest analysis ----
+    analysis = await db.analysis.find_one({"channel_id": channel_id})
+    if not analysis or not analysis.get("best_posting_times"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No analysis with best_posting_times found — run analysis first",
+        )
+
+    # ---- Gather already-occupied slots from existing schedule queue ----
+    existing_scheduled = await db.schedule_queue.find(
+        {"channel_id": channel_id}
+    ).to_list(length=None)
+    occupied_datetimes = [e.get("scheduled_at") for e in existing_scheduled]
+
+    # ---- Compute publish slots ----
+    slots = compute_schedule_slots(
+        best_posting_times=analysis["best_posting_times"],
+        occupied_datetimes=occupied_datetimes,
+        num_videos=len(videos_to_schedule),
+        timezone_str=settings.TIMEZONE,
     )
 
-    # Determine next position in schedule_queue.
-    now = datetime.utcnow()
+    if len(slots) < len(videos_to_schedule):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could only find {len(slots)} available slots for {len(videos_to_schedule)} videos — not enough posting slots in analysis",
+        )
+
+    # ---- Determine starting position ----
     last = await db.schedule_queue.find_one(
         {"channel_id": channel_id},
         sort=[("position", -1)],
     )
     next_pos = (last["position"] + 1) if last else 1
 
-    await db.schedule_queue.insert_one(
-        {
-            "channel_id": channel_id,
-            "video_id": video_id,
-            "position": next_pos,
-            "added_at": now,
-        }
-    )
+    now = datetime.utcnow()
+    results = []
 
-    # Update video status.
-    await db.videos.update_one(
-        {"channel_id": channel_id, "video_id": video_id},
-        {"$set": {"status": "scheduled", "updated_at": now}},
-    )
+    for video_doc, slot_dt in zip(videos_to_schedule, slots):
+        vid = video_doc["video_id"]
 
-    return {"ok": True, "video_id": video_id, "status": "scheduled", "schedule_position": next_pos}
+        await db.posting_queue.delete_one(
+            {"channel_id": channel_id, "video_id": vid}
+        )
+
+        await db.schedule_queue.insert_one(
+            {
+                "channel_id": channel_id,
+                "video_id": vid,
+                "position": next_pos,
+                "scheduled_at": slot_dt,
+                "added_at": now,
+            }
+        )
+
+        await db.videos.update_one(
+            {"channel_id": channel_id, "video_id": vid},
+            {"$set": {"status": "scheduled", "updated_at": now}},
+        )
+
+        results.append({
+            "video_id": vid,
+            "title": video_doc.get("title", ""),
+            "scheduled_at": slot_dt.isoformat(),
+            "schedule_position": next_pos,
+        })
+        next_pos += 1
+
+    return {
+        "ok": True,
+        "scheduled_count": len(results),
+        "videos": results,
+    }
 
 
 # ------------------------------------------------------------------

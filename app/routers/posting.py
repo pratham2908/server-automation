@@ -3,6 +3,7 @@
 import logging
 import os
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -37,6 +38,7 @@ class QueueItem(BaseModel):
     position: int
     video_id: str
     added_at: datetime
+    scheduled_at: Optional[datetime] = None
     title: str = ""
     category: str = ""
 
@@ -52,7 +54,6 @@ async def get_queue(
         .to_list(length=None)
     )
 
-    # Enrich with video metadata.
     result = []
     for entry in queue:
         video = await db.videos.find_one(
@@ -62,6 +63,7 @@ async def get_queue(
             "position": entry["position"],
             "video_id": entry["video_id"],
             "added_at": entry["added_at"],
+            "scheduled_at": entry.get("scheduled_at"),
         }
         if video:
             item["title"] = video.get("title", "")
@@ -120,15 +122,25 @@ async def upload_all(
 
         tmp_path = None
         try:
-            # Download from R2 to temp file.
             tmp_path = r2_service.download_video(video["r2_object_key"])
 
-            # Upload to YouTube.
+            # Convert scheduled_at to UTC ISO string for YouTube's publishAt.
+            publish_at_str = None
+            scheduled_at = entry.get("scheduled_at")
+            if scheduled_at:
+                if scheduled_at.tzinfo is not None:
+                    import pytz
+                    utc_dt = scheduled_at.astimezone(pytz.utc)
+                else:
+                    utc_dt = scheduled_at
+                publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
             yt_id = youtube_service.upload_video(
                 file_path=tmp_path,
                 title=video.get("title", ""),
                 description=video.get("description", ""),
                 tags=video.get("tags", []),
+                publish_at=publish_at_str,
             )
 
             # Update video record with YouTube ID and mark published.

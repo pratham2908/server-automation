@@ -4,6 +4,25 @@ This document contains the commands necessary to manage the automation server in
 
 ---
 
+## 🚀 Deploy Workflow (commit → push → deploy)
+
+When asked to **commit changes, push, and deploy** (or similar), run these steps in order:
+
+1. **Commit** with an appropriate message (e.g. based on git status / changes).
+2. **Push**: `git push origin main`
+3. **Deploy to Oracle server**: SSH in, pull code, restart the service:
+
+   Connection details are in `.env`: `ORACLE_SERVER_SSH_COMMAND`, and the app directory on the server is `automation-server`. From the **project root** (so `ssh-key-2.key` resolves), run:
+
+   ```bash
+   ssh -i ssh-key-2.key ubuntu@68.233.115.135 "cd automation-server && git pull && sudo systemctl restart automation-server"
+   ```
+
+   Or using the env value: run the command stored in `ORACLE_SERVER_SSH_COMMAND` with the remote part appended, e.g.  
+   `"<ORACLE_SERVER_SSH_COMMAND>" "cd automation-server && git pull && sudo systemctl restart automation-server"`
+
+---
+
 ## 🔐 SSH Access
 
 To connect to the production Ubuntu server from your local machine, run:

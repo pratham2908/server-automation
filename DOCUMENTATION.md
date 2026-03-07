@@ -360,31 +360,53 @@ Creates a new video record AND adds it to the posting queue. The video file is s
 
 ---
 
-#### `POST /{video_id}/schedule` — Schedule a ready video
+#### `POST /{video_id}/schedule` — Schedule ready video(s)
 
-Moves a video from `ready` → `scheduled`. Removes it from `posting_queue` and adds it to `schedule_queue`.
+Moves video(s) from `ready` → `scheduled`. Removes from `posting_queue`, adds to `schedule_queue` with a computed `scheduled_at` datetime.
 
-**Path params:** `video_id` — the UUID of the video
+**Path params:** `video_id` — the UUID of a single video **OR** `"all"` to schedule every video in the posting queue.
 
-**Preconditions:** The video must be in `ready` status. Returns `400` otherwise.
+**Preconditions:**
+
+- The video(s) must be in `ready` status. Returns `400` otherwise.
+- A channel analysis with `best_posting_times` must exist. Returns `400` if missing.
 
 **What happens:**
 
-1. Validates the video exists and is in `ready` status
-2. Removes the entry from `posting_queue`
-3. Inserts a new entry into `schedule_queue` at the next available position
-4. Updates the video status to `scheduled`
+1. If `video_id` is `"all"`, fetches all entries from `posting_queue`; otherwise fetches the single video
+2. Loads `best_posting_times` from the latest analysis document
+3. Gathers `scheduled_at` values from existing `schedule_queue` entries (occupied slots)
+4. Computes the next available publish slot(s) from the weekly calendar, skipping past and occupied slots (timezone from `TIMEZONE` env var, default `Asia/Kolkata`)
+5. For each video: removes from `posting_queue`, inserts into `schedule_queue` with `scheduled_at`, updates status to `scheduled`
 
 **Response (200):**
 
 ```json
 {
   "ok": true,
-  "video_id": "550e8400-...",
-  "status": "scheduled",
-  "schedule_position": 1
+  "scheduled_count": 3,
+  "videos": [
+    {
+      "video_id": "550e8400-...",
+      "title": "10 VS Code Tricks",
+      "scheduled_at": "2026-03-10T10:00:00+05:30",
+      "schedule_position": 1
+    },
+    {
+      "video_id": "660f9500-...",
+      "title": "iPhone 16 Review",
+      "scheduled_at": "2026-03-10T14:00:00+05:30",
+      "schedule_position": 2
+    }
+  ]
 }
 ```
+
+**Errors:**
+
+- `400` — No analysis with `best_posting_times` found
+- `400` — Not enough posting slots for the number of videos
+- `404` — Video not found / no videos in posting queue
 
 ---
 
@@ -595,7 +617,7 @@ The schedule queue (`schedule_queue`) holds videos that are `scheduled` — conf
 
 #### `GET /queue` — View schedule queue
 
-Returns the current schedule queue sorted by position, enriched with video metadata.
+Returns the current schedule queue sorted by position, enriched with video metadata and scheduled publish time.
 
 **Response (200):**
 
@@ -605,6 +627,7 @@ Returns the current schedule queue sorted by position, enriched with video metad
     "position": 1,
     "video_id": "550e8400-...",
     "added_at": "2024-01-15T10:30:00Z",
+    "scheduled_at": "2026-03-10T10:00:00+05:30",
     "title": "10 VS Code Tricks",
     "category": "Tutorials"
   }
@@ -618,7 +641,7 @@ Returns the current schedule queue sorted by position, enriched with video metad
 Processes the entire queue in order. For each video:
 
 1. **Download** from Cloudflare R2 to a temp file
-2. **Upload** to YouTube via resumable upload (10MB chunks, private by default)
+2. **Upload** to YouTube via resumable upload (10MB chunks, private with `publishAt` set to the video's `scheduled_at` time so YouTube auto-publishes at the right moment)
 3. **Update** the video record: set `youtube_video_id`, change status from `scheduled` → `published`
 4. **Remove** from the schedule queue
 5. **Clean up** the temp file
@@ -762,7 +785,7 @@ Stores videos that are **ready** — uploaded to R2 but not yet scheduled. Each 
 
 ### Collection: `schedule_queue`
 
-Stores videos that are **scheduled** — confirmed and waiting for YouTube upload. Each entry references a video by `video_id`.
+Stores videos that are **scheduled** — confirmed and waiting for YouTube upload. Each entry references a video by `video_id` and includes the target publish time.
 
 ```json
 {
@@ -770,6 +793,7 @@ Stores videos that are **scheduled** — confirmed and waiting for YouTube uploa
   "channel_id": "tech-tips",
   "video_id": "550e8400-...", // references videos.video_id
   "position": 1, // 1-based ordering
+  "scheduled_at": "datetime", // timezone-aware publish time (computed from best_posting_times)
   "added_at": "datetime"
 }
 ```
@@ -899,7 +923,15 @@ Audit trail — one document per analysis run. Stores the inputs and outputs of 
 - **Auth**: OAuth2 with stored token (auto-refreshes, initial setup requires browser consent)
 - **Get channel info**: Fetches channel metadata (name, subscribers, etc.)
 - **Get video stats**: Fetches views/likes/comments for batches of up to 50 videos
-- **Upload video**: Resumable upload in 10MB chunks, defaults to private
+- **Upload video**: Resumable upload in 10MB chunks, defaults to private. Accepts an optional `publish_at` ISO 8601 UTC datetime — when provided, the video is uploaded as private with YouTube's `publishAt` field so it auto-publishes at the scheduled time
+
+### Scheduler Service (`app/services/scheduler.py`)
+
+- **Compute schedule slots**: Takes `best_posting_times` from analysis, a list of already-occupied datetimes, and the number of videos to schedule
+- Builds a weekly slot calendar from `best_posting_times` (day + time pairs)
+- Starts from the current moment, walks forward week by week, skipping past and occupied slots
+- Returns timezone-aware datetimes (timezone from `TIMEZONE` env var, default `Asia/Kolkata`)
+- Safety cap of 52 weeks forward
 
 ### Gemini Service (`app/services/gemini.py`)
 
