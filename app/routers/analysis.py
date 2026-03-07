@@ -54,7 +54,9 @@ async def run_analysis_update(
 # ------------------------------------------------------------------
 
 
-@router.get("/latest")
+from app.models.analysis import Analysis
+
+@router.get("/latest", response_model=Analysis)
 async def get_latest_analysis(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),

@@ -31,7 +31,16 @@ def _get_services():
 # ------------------------------------------------------------------
 
 
-@router.get("/queue")
+from pydantic import BaseModel, Field
+
+class QueueItem(BaseModel):
+    position: int
+    video_id: str
+    added_at: datetime
+    title: str = ""
+    category: str = ""
+
+@router.get("/queue", response_model=list[QueueItem])
 async def get_queue(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),

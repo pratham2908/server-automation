@@ -42,7 +42,9 @@ def _get_r2() -> R2Service:
 # ------------------------------------------------------------------
 
 
-@router.get("/")
+from app.models.video import Video
+
+@router.get("/", response_model=list[Video])
 async def list_videos(
     channel_id: str,
     status_filter: Optional[str] = None,

@@ -63,7 +63,9 @@ class ChannelUpdate(BaseModel):
 # ------------------------------------------------------------------
 
 
-@router.get("/")
+from app.models.channel import Channel
+
+@router.get("/", response_model=list[Channel])
 async def list_channels(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -79,7 +81,7 @@ async def list_channels(
 # ------------------------------------------------------------------
 
 
-@router.get("/{channel_id}")
+@router.get("/{channel_id}", response_model=Channel)
 async def get_channel(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -100,7 +102,7 @@ async def get_channel(
 # ------------------------------------------------------------------
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=Channel)
 async def create_channel(
     body: ChannelCreate,
     db: AsyncIOMotorDatabase = Depends(get_db),

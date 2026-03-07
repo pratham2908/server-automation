@@ -23,7 +23,9 @@ router = APIRouter(
 # ------------------------------------------------------------------
 
 
-@router.get("/")
+from app.models.category import Category
+
+@router.get("/", response_model=list[Category])
 async def list_categories(
     channel_id: str,
     status_filter: Optional[str] = None,
@@ -89,7 +91,7 @@ async def add_categories(
 # ------------------------------------------------------------------
 
 
-@router.patch("/{category_id}")
+@router.patch("/{category_id}", response_model=Category)
 async def update_category(
     channel_id: str,
     category_id: str,
