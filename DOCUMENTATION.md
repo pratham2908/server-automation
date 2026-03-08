@@ -5,6 +5,7 @@
 - [Authentication](#authentication)
 - [API Endpoints](#api-endpoints)
   - [Health](#health)
+  - [API Schema](#api-schema)
   - [Channels](#channels)
   - [Videos](#videos)
   - [Categories](#categories)
@@ -51,6 +52,35 @@ Simple liveness check. No authentication required.
 
 ```json
 { "status": "ok" }
+```
+
+---
+
+### API Schema
+
+#### `GET /api/schema`
+
+Returns the full API schema with method, path, description, request body, query params, and example response for every endpoint. Useful for building clients, documentation, or AI integrations. No authentication required.
+
+**Response:**
+
+```json
+{
+  "service": "YouTube Automation Server",
+  "version": "1.0.0",
+  "auth": { "header": "X-API-Key", "required_for": "/api/v1/*" },
+  "endpoints": [
+    {
+      "group": "Videos",
+      "method": "GET",
+      "path": "/api/v1/channels/{channel_id}/videos/",
+      "description": "List videos with sync status",
+      "query_params": { "status_filter": { "type": "string", "enum": ["todo","ready","scheduled","published"], "optional": true } },
+      "request": null,
+      "response": { "videos": ["..."], "sync_status": {"...": "..."} }
+    }
+  ]
+}
 ```
 
 ---
