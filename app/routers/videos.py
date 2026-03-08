@@ -135,6 +135,48 @@ def _fetch_youtube_video_ids(yt, youtube_channel_id: str) -> list[str]:
     return video_ids
 
 
+def _check_youtube_live_status(yt, youtube_video_ids: list[str]) -> dict[str, dict]:
+    """Check which videos are live (public) on YouTube.
+
+    Returns a dict mapping youtube_video_id → {\"live\": bool, \"published_at\": str | None}
+    for each ID that is publicly visible.
+    """
+    from app.timezone import IST
+
+    result: dict[str, dict] = {}
+    now = now_ist()
+
+    for i in range(0, len(youtube_video_ids), 50):
+        batch = youtube_video_ids[i : i + 50]
+        resp = (
+            yt._youtube.videos()
+            .list(part="status,snippet", id=",".join(batch))
+            .execute()
+        )
+        for item in resp.get("items", []):
+            vid_id = item["id"]
+            privacy = item.get("status", {}).get("privacyStatus", "")
+            published_at_str = item.get("snippet", {}).get("publishedAt")
+
+            is_live = privacy == "public"
+
+            published_at_dt = None
+            if published_at_str:
+                try:
+                    published_at_dt = isoparse(published_at_str).astimezone(IST)
+                    if published_at_dt > now:
+                        is_live = False
+                except (ValueError, TypeError):
+                    pass
+
+            result[vid_id] = {
+                "live": is_live,
+                "published_at": published_at_dt,
+            }
+
+    return result
+
+
 async def _get_sync_status(channel_id: str, db) -> dict:
     """Compare YouTube video IDs against our DB to get accurate sync numbers."""
     channel = await db.channels.find_one({"channel_id": channel_id})
@@ -163,15 +205,26 @@ async def _get_sync_status(channel_id: str, db) -> dict:
     new_videos_to_import = yt_video_ids - db_yt_ids
     metadata_to_refresh = yt_video_ids & db_yt_ids
 
-    now = now_ist()
-    pending_reconciliation = await db.videos.count_documents(
+    # Check how many scheduled videos are actually live on YouTube.
+    scheduled_docs = await db.videos.find(
         {
             "channel_id": channel_id,
             "status": "scheduled",
             "youtube_video_id": {"$ne": None},
-            "scheduled_at": {"$lte": now},
-        }
-    )
+        },
+        {"youtube_video_id": 1},
+    ).to_list(length=None)
+
+    pending_reconciliation = 0
+    if scheduled_docs:
+        scheduled_yt_ids = [d["youtube_video_id"] for d in scheduled_docs]
+        try:
+            live_status = _check_youtube_live_status(youtube_service, scheduled_yt_ids)
+            pending_reconciliation = sum(
+                1 for info in live_status.values() if info["live"]
+            )
+        except Exception as exc:
+            logger.warning("Could not check live status for scheduled videos: %s", exc)
 
     return {
         "available": True,
@@ -748,8 +801,8 @@ async def sync_videos(
                 logger.success(f"Created new category: '{cat}'")
 
     # ------------------------------------------------------------------
-    # Reconcile: find videos still marked "scheduled" in the DB whose
-    # scheduled_at has passed — they're now live on YouTube.
+    # Reconcile: find videos marked "scheduled" in the DB and check if
+    # they are actually live (public) on YouTube.
     # ------------------------------------------------------------------
     now = now_ist()
     scheduled_videos = await db.videos.find(
@@ -760,43 +813,38 @@ async def sync_videos(
         }
     ).to_list(length=None)
 
-    yt_stats_by_id = {v["youtube_video_id"]: v for v in all_yt_videos}
     reconciled = 0
 
-    for vid in scheduled_videos:
-        scheduled_at = vid.get("scheduled_at")
-        # If scheduled_at is in the past, YouTube has auto-published it.
-        if scheduled_at and scheduled_at > now:
-            continue
+    if scheduled_videos:
+        scheduled_yt_ids = [v["youtube_video_id"] for v in scheduled_videos]
+        live_status = _check_youtube_live_status(youtube_service, scheduled_yt_ids)
 
-        yt_data = yt_stats_by_id.get(vid["youtube_video_id"])
-        yt_published = None
-        if yt_data and yt_data.get("published_at"):
-            try:
-                from app.timezone import IST
-                yt_published = isoparse(yt_data["published_at"]).astimezone(IST)
-            except (ValueError, TypeError):
-                pass
+        for vid in scheduled_videos:
+            yt_id = vid["youtube_video_id"]
+            info = live_status.get(yt_id)
+            if not info or not info["live"]:
+                continue
 
-        await db.videos.update_one(
-            {"_id": vid["_id"]},
-            {
-                "$set": {
-                    "status": "published",
-                    "published_at": yt_published or scheduled_at or now,
-                    "updated_at": now,
-                }
-            },
-        )
-        # Clean up the scheduled queue entry if it exists.
-        await db.schedule_queue.delete_one(
-            {"channel_id": channel_id, "video_id": vid["video_id"]}
-        )
-        reconciled += 1
-        logger.info(
-            "Reconciled scheduled video '%s' — now published.",
-            vid.get("title", vid["video_id"]),
-        )
+            published_at = info.get("published_at") or vid.get("scheduled_at") or now
+
+            await db.videos.update_one(
+                {"_id": vid["_id"]},
+                {
+                    "$set": {
+                        "status": "published",
+                        "published_at": published_at,
+                        "updated_at": now,
+                    }
+                },
+            )
+            await db.schedule_queue.delete_one(
+                {"channel_id": channel_id, "video_id": vid["video_id"]}
+            )
+            reconciled += 1
+            logger.info(
+                "Reconciled scheduled video '%s' — now live on YouTube.",
+                vid.get("title", vid["video_id"]),
+            )
 
     if reconciled:
         logger.success(f"Reconciled {reconciled} scheduled video(s) as published.")

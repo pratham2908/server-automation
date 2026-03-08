@@ -311,7 +311,7 @@ The response is a wrapper with `videos` (the array) and `sync_status` (how many 
 - `youtube_total` — total videos on the YouTube channel
 - `in_database` — videos in our DB that have a `youtube_video_id`
 - `new_videos_to_import` — videos on YouTube not yet in the DB
-- `pending_reconciliation` — videos still in `scheduled` status whose `scheduled_at` has passed (should now be `published`; reconciled on next sync)
+- `pending_reconciliation` — videos in `scheduled` status whose YouTube video is actually live (public) on YouTube (reconciled to `published` on next sync)
 - `metadata_to_refresh` — existing videos whose stats will be refreshed on next sync
 
 ---
@@ -333,7 +333,7 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 1. Fetches all videos from the channel's uploads playlist (paginated) — pulls `snippet`, `statistics`, and `contentDetails` (duration)
 2. Enriches with YouTube Analytics API data (`avg_percentage_viewed`, `avg_view_duration_seconds`, `estimated_minutes_watched`) when available
 3. **Refreshes metadata** for all existing published videos in the DB — updates views, likes, comments, engagement rates, analytics, etc. with the latest data from YouTube
-4. **Reconciles scheduled videos** — finds all videos in the DB with status `scheduled` whose `scheduled_at` has passed (YouTube has auto-published them). Marks them as `published`, sets `published_at`, and cleans up their `schedule_queue` entry
+4. **Reconciles scheduled videos** — finds all videos in the DB with status `scheduled` and checks YouTube to see if they are actually live (privacy status is `public`). If live, marks them as `published`, sets `published_at` from YouTube's publish time, and cleans up their `schedule_queue` entry
 5. Skips any already in the `videos` collection (by `youtube_video_id`)
 6. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
 7. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)

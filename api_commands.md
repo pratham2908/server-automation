@@ -342,7 +342,7 @@ X-API-Key: <your-api-key>
 - **What it does**:
   - Fetches all videos from the YouTube channel
   - **Refreshes metadata** (views, likes, comments, engagement rates, analytics) for every existing video in the DB
-  - Reconciles scheduled videos whose `scheduled_at` has passed (marks them as `published`, sets `published_at`)
+  - Reconciles scheduled videos that are actually live (public) on YouTube (marks them as `published`, sets `published_at` from YouTube's publish time)
   - Imports any new videos not yet in the DB, categorizes them via Gemini
 
 - **Response**:
