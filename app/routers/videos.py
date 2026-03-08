@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from app.timezone import now_ist
+from app.timezone import now_ist, to_ist_iso
 
 from dateutil.parser import isoparse
 
@@ -105,9 +105,12 @@ async def list_videos(
 
     videos = await db.videos.find(query).to_list(length=None)
 
-    # Strip Mongo _id for JSON serialisation.
+    # Strip Mongo _id and serialize datetimes in GMT+5:30 (IST) for API response.
     for v in videos:
         v.pop("_id", None)
+        for key in ("scheduled_at", "published_at", "created_at", "updated_at"):
+            if v.get(key) is not None:
+                v[key] = to_ist_iso(v[key])
 
     # Build sync status: compare YouTube video count vs DB published count.
     sync_status = await _get_sync_status(channel_id, db)

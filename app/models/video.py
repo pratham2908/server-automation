@@ -4,9 +4,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
-from app.timezone import now_ist
+from app.timezone import now_ist, to_ist_iso
 
 
 class VideoStatus(str, Enum):
@@ -68,6 +68,11 @@ class Video(BaseModel):
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)
 
+    @field_serializer("scheduled_at", "published_at", "created_at", "updated_at")
+    def _serialize_dt_ist(self, dt: Optional[datetime]) -> Optional[str]:
+        """Serialize datetimes in GMT+5:30 (IST) for API responses."""
+        return to_ist_iso(dt)
+
 
 class VideoCreate(BaseModel):
     """Payload accepted when adding a new video to the queue."""
@@ -96,6 +101,10 @@ class PostingQueue(BaseModel):
     position: int = Field(..., ge=1, description="1-based queue ordering")
     added_at: datetime = Field(default_factory=now_ist)
 
+    @field_serializer("added_at")
+    def _serialize_dt_ist(self, dt: datetime) -> str:
+        return to_ist_iso(dt) or ""
+
 
 class ScheduleQueue(BaseModel):
     """An entry in the scheduled queue (``schedule_queue`` collection).
@@ -113,3 +122,8 @@ class ScheduleQueue(BaseModel):
         description="The exact datetime (timezone-aware) when this video should be published on YouTube",
     )
     added_at: datetime = Field(default_factory=now_ist)
+
+    @field_serializer("scheduled_at", "added_at")
+    def _serialize_dt_ist(self, dt: Optional[datetime]) -> Optional[str]:
+        """Serialize datetimes in GMT+5:30 (IST) for API responses."""
+        return to_ist_iso(dt)

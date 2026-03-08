@@ -11,7 +11,7 @@ from typing import Any
 import pytz
 
 from app.logger import get_logger
-from app.timezone import now_ist
+from app.timezone import now_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
@@ -111,7 +111,7 @@ async def schedule_single_video(
             "video_id": video_id,
             "status": "scheduled",
             "youtube_video_id": yt_id,
-            "scheduled_at": scheduled_at.isoformat(),
+            "scheduled_at": to_ist_iso(scheduled_at),
         }
 
     except Exception:
