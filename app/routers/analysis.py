@@ -70,7 +70,7 @@ async def get_latest_analysis(
     """Return the latest analysis document for *channel_id*,
     plus counts of videos ready / not yet ready for analysis."""
     from datetime import datetime, timedelta
-    from app.timezone import now_ist
+    from app.timezone import now_ist, IST
 
     doc = await db.analysis.find_one({"channel_id": channel_id})
     if not doc:
@@ -81,7 +81,8 @@ async def get_latest_analysis(
     doc.pop("_id", None)
 
     already_analysed = set(doc.get("analysis_done_video_ids", []))
-    three_days_ago = now_ist() - timedelta(days=3)
+    now = now_ist()
+    three_days_ago = now - timedelta(days=3)
 
     unanalysed = await db.videos.find(
         {
@@ -92,10 +93,21 @@ async def get_latest_analysis(
         {"created_at": 1},
     ).to_list(length=None)
 
-    ready_for_analysis = sum(
-        1 for v in unanalysed
-        if v.get("created_at", datetime.min) <= three_days_ago
-    )
+    ready_for_analysis = 0
+    for v in unanalysed:
+        v_created_at = v.get("created_at")
+        if not v_created_at:
+            # Fallback for legacy records, consider ready
+            ready_for_analysis += 1
+            continue
+        
+        # Ensure comparison is aware vs aware
+        if v_created_at.tzinfo is None:
+            v_created_at = v_created_at.replace(tzinfo=IST)
+            
+        if v_created_at <= three_days_ago:
+            ready_for_analysis += 1
+
     not_ready_yet = len(unanalysed) - ready_for_analysis
 
     return {

@@ -73,11 +73,25 @@ async def run_analysis(
     )
 
     # 2b  Exclude videos posted less than 3 days ago (not enough data yet).
+    from app.timezone import IST
     three_days_ago = now_ist() - timedelta(days=3)
-    new_videos = [
-        v for v in new_videos
-        if v.get("created_at", datetime.min) <= three_days_ago
-    ]
+    
+    filtered_videos = []
+    for v in new_videos:
+        v_created_at = v.get("created_at")
+        if not v_created_at:
+            # If no date, assume it's old enough
+            filtered_videos.append(v)
+            continue
+        
+        # Ensure aware comparison
+        if v_created_at.tzinfo is None:
+            v_created_at = v_created_at.replace(tzinfo=IST)
+            
+        if v_created_at <= three_days_ago:
+            filtered_videos.append(v)
+            
+    new_videos = filtered_videos
     
     skipped = len(done_videos) - len(already_analysed) - len(new_videos)
     if skipped > 0:
