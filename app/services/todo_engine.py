@@ -267,11 +267,16 @@ async def generate_todo_videos(
             
         cat_insights = analysis_by_cat[cat_name]
 
-        # Fetch existing titles to avoid duplication
+        # Fetch existing titles AND content_params to avoid duplication
         existing_docs = await db.videos.find(
-            {"channel_id": channel_id, "category": cat_name}, {"title": 1}
+            {"channel_id": channel_id, "category": cat_name},
+            {"title": 1, "content_params": 1},
         ).to_list(length=None)
         existing_titles = [doc.get("title", "") for doc in existing_docs if doc.get("title")]
+        existing_content_params = [
+            doc["content_params"] for doc in existing_docs
+            if doc.get("content_params")
+        ]
 
         try:
             generated_list = await gemini_service.generate_video_content(
@@ -283,6 +288,7 @@ async def generate_todo_videos(
                 content_schema=content_schema or None,
                 content_param_analysis=content_param_analysis or None,
                 best_combinations=best_combinations or None,
+                existing_content_params=existing_content_params or None,
             )
         except Exception:
             logger.exception("Failed to generate content for category '%s'", cat_name)

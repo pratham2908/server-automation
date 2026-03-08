@@ -122,6 +122,7 @@ class GeminiService:
         content_schema: list[dict[str, Any]] | None = None,
         content_param_analysis: list[dict[str, Any]] | None = None,
         best_combinations: list[dict[str, Any]] | None = None,
+        existing_content_params: list[dict[str, str]] | None = None,
     ) -> list[dict[str, Any]]:
         """Generate titles, descriptions, tags, and content_params for new to-do videos.
 
@@ -143,6 +144,9 @@ class GeminiService:
             Performance insights for each content parameter dimension.
         best_combinations:
             Top-performing parameter combinations.
+        existing_content_params:
+            Content params from all existing videos — used to avoid repeating
+            the same topic/ranking_factor/etc. combinations.
 
         Returns
         -------
@@ -158,6 +162,7 @@ class GeminiService:
         prompt = self._build_content_prompt(
             channel_id, category, category_analysis, count, existing_titles,
             content_schema, content_param_analysis, best_combinations,
+            existing_content_params,
         )
         text = await self._generate(prompt)
 
@@ -285,6 +290,7 @@ Guidelines:
         content_schema: list[dict[str, Any]] | None = None,
         content_param_analysis: list[dict[str, Any]] | None = None,
         best_combinations: list[dict[str, Any]] | None = None,
+        existing_content_params: list[dict[str, str]] | None = None,
     ) -> str:
         existing_section = ""
         if existing_titles:
@@ -294,6 +300,20 @@ Guidelines:
                 "already exist. Find completely distinct angles or new topics within the category:\n"
                 + "\n".join(f"- {title}" for title in existing_titles)
             )
+
+        if existing_content_params:
+            has_video_topic = any("video_topic" in p for p in existing_content_params)
+            if has_video_topic:
+                used_topics = sorted({
+                    p["video_topic"] for p in existing_content_params if p.get("video_topic")
+                })
+                existing_section += (
+                    "\n\n## Already-Used video_topic Values — DO NOT REPEAT\n"
+                    "These video_topic values have already been covered. You MUST pick completely "
+                    "NEW, UNUSED video_topic values. Do NOT reuse any from this list, "
+                    "even with a different ranking_factor or angle.\n"
+                    + "\n".join(f"- {t}" for t in used_topics)
+                )
 
         params_section = ""
         if content_schema:
@@ -314,8 +334,7 @@ Guidelines:
                 f"```json\n{json.dumps(best_combinations, indent=2)}\n```"
             )
 
-        return f"""You are a YouTube content strategist. Generate metadata for {count} completely distinct new videos
-in the "{category}" category.
+        return f"""You are a top-tier YouTube content strategist obsessed with virality, click-through rate, and watch time. Generate metadata for {count} completely distinct new videos in the "{category}" category.
 
 ## Category Insights
 ```json
@@ -329,17 +348,39 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 
 [
   {{
-    "title": "Engaging video title following the best patterns",
-    "description": "Full description using the best template",
+    "title": "Catchy, scroll-stopping title",
+    "description": "Compelling description optimized for search and engagement",
     "tags": ["tag1", "tag2", "tag3"],
-    "content_params": {{"simulation_type": "battle", "music": "Epic Orchestral - Two Steps From Hell"}}
+    "content_params": {{"simulation_type": "battle", "music": "Epic Orchestral - Two Steps From Hell"}},
+    "basis_factor": "Reasoning or comparison basis"
   }}
 ]
 
-Guidelines:
+## Title Guidelines — Make Them CATCHY
+- Titles MUST be scroll-stopping and irresistible. Think about what makes someone click while scrolling.
+- Use proven psychological hooks: curiosity gaps ("You Won't Believe..."), strong numbers ("100 vs 1"), superlatives ("The MOST Insane..."), challenges, versus formats, countdowns.
+- Reference trending memes, pop culture, or viral formats when it fits naturally.
+- Keep titles punchy — ideally under 60 characters. Front-load the hook.
+- Study the `best_title_patterns` from category insights and push them further. Don't just copy — evolve the pattern to be even more clickable.
+- NEVER use generic or descriptive titles. Every title should create an urge to click.
+
+## Description Guidelines — Optimize for Search & Watch Time
+- Open with a bold, attention-grabbing first line (this shows in search results and suggested videos).
+- Include relevant keywords naturally for YouTube SEO — think about what viewers would search for.
+- Add a brief teaser of what happens in the video without spoiling the payoff (keep them watching).
+- Keep it concise but compelling — 2-4 short paragraphs max.
+- Include a call-to-action ("Subscribe for more", "Comment your prediction") to drive engagement.
+
+## Tag Guidelines — Maximize Discoverability
+- Include 10-15 tags per video.
+- Mix broad high-volume tags (e.g. "simulation", "challenge") with specific long-tail tags (e.g. "1v1 battle simulation", "epic tournament challenge").
+- Include the category name and key content_params values as tags.
+- Add trending/seasonal tags if relevant.
+- Order tags from most specific to most broad.
+
+## Other Rules
 - Generate exactly {count} completely distinct video ideas. DO NOT repeat titles or topics.
-- The titles should follow the best-performing patterns identified.
-- The descriptions should use the best templates but feel natural and unique.
-- Include 5-15 relevant tags per video.
-- **content_params**: MUST include values for every parameter in the content schema. ALWAYS include a "music" key with a specific music/audio track recommendation that fits the video's theme and mood. If the channel has a "ranking_factor" parameter, describe the exact data source, logic, or criteria used for the ranking.
+- **content_params**: MUST include values for every parameter in the content schema. ALWAYS include a "music" key with a specific music/audio track recommendation that fits the video's theme and mood.
+- **basis_factor**: Provide a short reasoning for why this video idea should perform well.
+- If an "Already-Used video_topic Values" list is provided above, you MUST NOT reuse ANY video_topic from that list. Every `video_topic` value must be completely new and never covered before.
 - Strictly return a JSON array of objects (`[]`), even if count is 1."""
