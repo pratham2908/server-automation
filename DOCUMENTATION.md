@@ -345,6 +345,7 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 {
   "ok": true,
   "synced": 15,
+  "reconciled": 2,
   "metadata_refreshed": 45,
   "categories_created": ["Tutorials", "Reviews", "Vlogs"],
   "videos": [

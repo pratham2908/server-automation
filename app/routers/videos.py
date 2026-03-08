@@ -726,6 +726,56 @@ async def sync_videos(
     if metadata_updated:
         logger.success(f"Refreshed metadata for {metadata_updated} existing video(s).")
 
+    # ------------------------------------------------------------------
+    # Reconcile: find videos marked "scheduled" in the DB and check if
+    # they are actually live (public) on YouTube.
+    # Runs before the new-video check so it always executes.
+    # ------------------------------------------------------------------
+    now = now_ist()
+    scheduled_videos = await db.videos.find(
+        {
+            "channel_id": channel_id,
+            "status": "scheduled",
+            "youtube_video_id": {"$ne": None},
+        }
+    ).to_list(length=None)
+
+    reconciled = 0
+
+    if scheduled_videos:
+        scheduled_yt_ids = [v["youtube_video_id"] for v in scheduled_videos]
+        live_status = _check_youtube_live_status(youtube_service, scheduled_yt_ids)
+
+        for vid in scheduled_videos:
+            yt_id = vid["youtube_video_id"]
+            info = live_status.get(yt_id)
+            if not info or not info["live"]:
+                continue
+
+            published_at = info.get("published_at") or vid.get("scheduled_at") or now
+
+            await db.videos.update_one(
+                {"_id": vid["_id"]},
+                {
+                    "$set": {
+                        "status": "published",
+                        "published_at": published_at,
+                        "updated_at": now,
+                    }
+                },
+            )
+            await db.schedule_queue.delete_one(
+                {"channel_id": channel_id, "video_id": vid["video_id"]}
+            )
+            reconciled += 1
+            logger.info(
+                "Reconciled scheduled video '%s' — now live on YouTube.",
+                vid.get("title", vid["video_id"]),
+            )
+
+    if reconciled:
+        logger.success(f"Reconciled {reconciled} scheduled video(s) as published.")
+
     new_videos = [
         v for v in all_yt_videos if v["youtube_video_id"] not in existing_yt_ids
     ]
@@ -742,6 +792,7 @@ async def sync_videos(
         return {
             "ok": True,
             "synced": 0,
+            "reconciled": reconciled,
             "metadata_refreshed": metadata_updated,
             "message": f"All {len(all_yt_videos)} videos already in DB — metadata refreshed",
             "videos": [],
@@ -799,55 +850,6 @@ async def sync_videos(
                     }
                 )
                 logger.success(f"Created new category: '{cat}'")
-
-    # ------------------------------------------------------------------
-    # Reconcile: find videos marked "scheduled" in the DB and check if
-    # they are actually live (public) on YouTube.
-    # ------------------------------------------------------------------
-    now = now_ist()
-    scheduled_videos = await db.videos.find(
-        {
-            "channel_id": channel_id,
-            "status": "scheduled",
-            "youtube_video_id": {"$ne": None},
-        }
-    ).to_list(length=None)
-
-    reconciled = 0
-
-    if scheduled_videos:
-        scheduled_yt_ids = [v["youtube_video_id"] for v in scheduled_videos]
-        live_status = _check_youtube_live_status(youtube_service, scheduled_yt_ids)
-
-        for vid in scheduled_videos:
-            yt_id = vid["youtube_video_id"]
-            info = live_status.get(yt_id)
-            if not info or not info["live"]:
-                continue
-
-            published_at = info.get("published_at") or vid.get("scheduled_at") or now
-
-            await db.videos.update_one(
-                {"_id": vid["_id"]},
-                {
-                    "$set": {
-                        "status": "published",
-                        "published_at": published_at,
-                        "updated_at": now,
-                    }
-                },
-            )
-            await db.schedule_queue.delete_one(
-                {"channel_id": channel_id, "video_id": vid["video_id"]}
-            )
-            reconciled += 1
-            logger.info(
-                "Reconciled scheduled video '%s' — now live on YouTube.",
-                vid.get("title", vid["video_id"]),
-            )
-
-    if reconciled:
-        logger.success(f"Reconciled {reconciled} scheduled video(s) as published.")
 
     # ------------------------------------------------------------------
     # Insert newly discovered videos.
@@ -919,6 +921,7 @@ async def sync_videos(
     return {
         "ok": True,
         "synced": len(docs),
+        "reconciled": reconciled,
         "metadata_refreshed": metadata_updated,
         "categories_created": [
             c for c in existing_cats

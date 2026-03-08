@@ -351,6 +351,7 @@ X-API-Key: <your-api-key>
 {
   "ok": true,
   "synced": 5,
+  "reconciled": 2,
   "metadata_refreshed": 45,
   "categories_created": ["Tutorials"],
   "videos": [
