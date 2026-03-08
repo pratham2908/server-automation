@@ -44,10 +44,8 @@ class Video(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     category: str = ""
-    topic: str = ""
     status: VideoStatus = VideoStatus.TODO
     suggested: bool = False
-    basis_factor: str = ""
     youtube_video_id: Optional[str] = None
     r2_object_key: Optional[str] = None
     metadata: VideoMetadata = Field(default_factory=VideoMetadata)
@@ -78,8 +76,6 @@ class VideoCreate(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     category: str = ""
-    topic: str = ""
-    basis_factor: str = ""
 
 
 class VideoStatusUpdate(BaseModel):

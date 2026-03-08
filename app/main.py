@@ -93,13 +93,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.routers import analysis, categories, channels, migration, videos  # noqa: E402
+from app.routers import analysis, categories, channels, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
 app.include_router(categories.router)
 app.include_router(analysis.router)
-app.include_router(migration.router)
 
 
 @app.get("/health", tags=["health"])
@@ -281,10 +280,8 @@ async def api_schema():
                             "description": "...",
                             "tags": ["coding", "tutorial"],
                             "category": "Tutorials",
-                            "topic": "Python basics",
                             "status": "todo",
                             "suggested": False,
-                            "basis_factor": "Auto-generated...",
                             "youtube_video_id": None,
                             "r2_object_key": None,
                             "metadata": {
@@ -401,7 +398,7 @@ async def api_schema():
                     "synced": 5,
                     "metadata_refreshed": 45,
                     "categories_created": ["Tutorials"],
-                    "videos": [{"title": "New Video", "category": "Tutorials", "topic": "..."}],
+                    "videos": [{"title": "New Video", "category": "Tutorials"}],
                 },
             },
             {

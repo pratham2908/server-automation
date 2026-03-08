@@ -212,6 +212,8 @@ Sets or replaces the channel's content parameter schema. This defines the custom
 - `description` — what this parameter represents
 - `values` — allowed values; empty list means free-form (Gemini infers)
 
+For the **officialgeoranking** channel, the schema includes **video_topic** (the thing the video is ranking different regions/states/countries/cities on) and **ranking_factor** (the factor on which to rank contenders — e.g. a metric, report, or study). Both are free-form (`values: []`).
+
 **Response (200):** `{"ok": true, "channel_id": "...", "params_defined": 3}`
 
 ---
@@ -308,10 +310,8 @@ The response is a wrapper with `videos` (the array) and `sync_status` (how many 
       "description": "In this video...",
       "tags": ["vscode", "productivity", "coding"],
       "category": "Tutorials",
-      "topic": "VS Code productivity hacks",
       "status": "todo",
       "suggested": true,
-      "basis_factor": "Auto-generated from analysis v3",
       "youtube_video_id": null,
       "r2_object_key": null,
       "metadata": {
@@ -374,7 +374,7 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 5. Skips any already in the `videos` collection (by `youtube_video_id`)
 6. **Extracts content params AND derives category** for new videos in batches of 5 via a single Gemini call — extracts `content_params` (including music) based on the channel's `content_schema`, then derives `category` from those extracted parameters (not from title/description/tags directly). Content params are saved as `"unverified"`
 7. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
-8. Inserts videos as `published` with `category`, `topic`, `content_params`, and `content_params_status` assigned; `created_at` and `published_at` are set to the **YouTube publish date**; `metadata` is fully populated
+8. Inserts videos as `published` with `category`, `content_params`, and `content_params_status` assigned; `created_at` and `published_at` are set to the **YouTube publish date**; `metadata` is fully populated
 
 **Response (200):**
 
@@ -388,13 +388,11 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
   "videos": [
     {
       "title": "10 VS Code Tricks",
-      "category": "Tutorials",
-      "topic": "VS Code productivity"
+      "category": "Tutorials"
     },
     {
       "title": "iPhone 16 Review",
-      "category": "Reviews",
-      "topic": "iPhone 16 deep dive"
+      "category": "Reviews"
     }
   ]
 }
@@ -515,9 +513,7 @@ Uploads a video file for an existing `todo` video, streams it to Cloudflare R2, 
   "title": "My Video Title", // required
   "description": "Description...", // optional
   "tags": ["tag1", "tag2"], // optional
-  "category": "Tutorials", // optional
-  "topic": "VS Code productivity hacks", // optional
-  "basis_factor": "Manual upload" // optional
+  "category": "Tutorials" // optional
 }
 ```
 
@@ -913,10 +909,8 @@ Stores all video records — both manually uploaded and AI-generated to-do items
   "description": "In this video...",
   "tags": ["vscode", "productivity"],
   "category": "Tutorials",
-  "topic": "VS Code productivity hacks", // the core content idea
   "status": "todo", // "todo", "ready", "scheduled", or "published"
   "suggested": false, // true when marked by suggest_n
-  "basis_factor": "Auto-generated...", // why this video was created
   "youtube_video_id": null, // set after YouTube upload
   "r2_object_key": "tech-tips/vid.mp4", // set when file is stored in R2
   "metadata": {

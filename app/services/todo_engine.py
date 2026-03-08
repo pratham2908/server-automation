@@ -290,10 +290,6 @@ async def generate_todo_videos(
 
         for content in generated_list:
             global_idx += 1
-            basis_factor = content.get(
-                "basis_factor",
-                f"Auto-generated from analysis v{latest_analysis.get('version', '?')}"
-            )
 
             logger.success(f"💡 Generated [{global_idx}/{total_slots}] - \"{content.get('title', 'Untitled')}\" (Category: {cat_name})")
 
@@ -306,10 +302,8 @@ async def generate_todo_videos(
                 "description": content.get("description", ""),
                 "tags": content.get("tags", []),
                 "category": cat_name,
-                "topic": "",
                 "status": "todo",
                 "suggested": False,
-                "basis_factor": basis_factor,
                 "youtube_video_id": None,
                 "r2_object_key": None,
                 "metadata": {

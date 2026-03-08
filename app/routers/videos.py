@@ -825,7 +825,7 @@ async def _extract_params_and_categorize_batch(
     """Extract content params AND derive category for a batch of videos in one Gemini call.
 
     Returns a list of dicts:
-    [{"youtube_video_id": "...", "content_params": {...}, "category": "...", "topic": "..."}]
+    [{"youtube_video_id": "...", "content_params": {...}, "category": "..."}]
     """
     import json
 
@@ -873,7 +873,7 @@ async def _extract_params_and_categorize_batch(
 {f"## Additional Instructions" + chr(10) + category_instructions if category_instructions else ""}
 
 Return a JSON array:
-[{{"youtube_video_id": "...", "content_params": {{"param1": "value1", "music": "..."}}, "category": "...", "topic": "..."}}]
+[{{"youtube_video_id": "...", "content_params": {{"param1": "value1", "music": "..."}}, "category": "..."}}]
 
 Reuse existing categories. Only create new ones if truly needed."""
 
@@ -1084,11 +1084,9 @@ async def sync_videos(
         for r in results:
             yt_id = r.get("youtube_video_id", "")
             cat = r.get("category", "Uncategorized")
-            topic = r.get("topic", "")
             params = r.get("content_params", {})
             categorizations[yt_id] = {
                 "category": cat,
-                "topic": topic,
                 "content_params": params,
             }
 
@@ -1117,7 +1115,7 @@ async def sync_videos(
     docs = []
     for v in new_videos:
         yt_id = v["youtube_video_id"]
-        cat_info = categorizations.get(yt_id, {"category": "Uncategorized", "topic": "", "content_params": {}})
+        cat_info = categorizations.get(yt_id, {"category": "Uncategorized", "content_params": {}})
         now = now_ist()
 
         yt_published_at = now
@@ -1138,10 +1136,8 @@ async def sync_videos(
                 "description": v["description"],
                 "tags": v["tags"],
                 "category": cat_info["category"],
-                "topic": cat_info["topic"],
                 "status": "published",
                 "suggested": False,
-                "basis_factor": "Synced from YouTube",
                 "youtube_video_id": yt_id,
                 "r2_object_key": None,
                 "metadata": {
@@ -1170,7 +1166,7 @@ async def sync_videos(
 
     # Build per-video summary.
     video_summary = [
-        {"title": d["title"], "category": d["category"], "topic": d["topic"]}
+        {"title": d["title"], "category": d["category"]}
         for d in docs
     ]
     

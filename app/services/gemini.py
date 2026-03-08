@@ -332,8 +332,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
     "title": "Engaging video title following the best patterns",
     "description": "Full description using the best template",
     "tags": ["tag1", "tag2", "tag3"],
-    "content_params": {{"simulation_type": "battle", "music": "Epic Orchestral - Two Steps From Hell"}},
-    "basis_factor": "Reasoning or comparison basis"
+    "content_params": {{"simulation_type": "battle", "music": "Epic Orchestral - Two Steps From Hell"}}
   }}
 ]
 
@@ -342,6 +341,5 @@ Guidelines:
 - The titles should follow the best-performing patterns identified.
 - The descriptions should use the best templates but feel natural and unique.
 - Include 5-15 relevant tags per video.
-- **content_params**: MUST include values for every parameter in the content schema. ALWAYS include a "music" key with a specific music/audio track recommendation that fits the video's theme and mood.
-- **basis_factor**: If the channel is `officialgeoranking`, this MUST describe the exact data source, logic, or criteria used for the ranking. For other channels, provide a short reason for the suggestion.
+- **content_params**: MUST include values for every parameter in the content schema. ALWAYS include a "music" key with a specific music/audio track recommendation that fits the video's theme and mood. If the channel has a "ranking_factor" parameter, describe the exact data source, logic, or criteria used for the ranking.
 - Strictly return a JSON array of objects (`[]`), even if count is 1."""

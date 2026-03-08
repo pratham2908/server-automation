@@ -253,10 +253,8 @@ X-API-Key: <your-api-key>
       "description": "...",
       "tags": ["coding", "tutorial"],
       "category": "Tutorials",
-      "topic": "Python basics",
       "status": "todo",
       "suggested": false,
-      "basis_factor": "Auto-generated...",
       "metadata": {
         "views": 1000,
         "likes": 25,
@@ -413,7 +411,7 @@ X-API-Key: <your-api-key>
   "metadata_refreshed": 45,
   "categories_created": ["Tutorials"],
   "videos": [
-    { "title": "New Video Title", "category": "Tutorials", "topic": "..." }
+    { "title": "New Video Title", "category": "Tutorials" }
   ]
 }
 ```
@@ -504,3 +502,4 @@ X-API-Key: <your-api-key>
 
 
 > **Note:** To view scheduled videos, use `GET /api/v1/channels/{channel_id}/videos?status_filter=scheduled`. The `scheduled_at` field on each video shows the YouTube publish time. To schedule all ready videos at once, use `POST /api/v1/channels/{channel_id}/videos/all/schedule`.
+
