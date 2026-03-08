@@ -259,6 +259,7 @@ The response is a wrapper with `videos` (the array) and `sync_status` (how many 
     "youtube_total": 60,
     "in_database": 55,
     "new_videos_to_import": 5,
+    "pending_reconciliation": 2,
     "metadata_to_refresh": 55
   }
 }
@@ -269,6 +270,7 @@ The response is a wrapper with `videos` (the array) and `sync_status` (how many 
 - `youtube_total` — total videos on the YouTube channel
 - `in_database` — videos in our DB that have a `youtube_video_id`
 - `new_videos_to_import` — videos on YouTube not yet in the DB
+- `pending_reconciliation` — videos still in `scheduled` status whose `scheduled_at` has passed (should now be `published`; reconciled on next sync)
 - `metadata_to_refresh` — existing videos whose stats will be refreshed on next sync
 
 ---
@@ -290,7 +292,7 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 1. Fetches all videos from the channel's uploads playlist (paginated) — pulls `snippet`, `statistics`, and `contentDetails` (duration)
 2. Enriches with YouTube Analytics API data (`avg_percentage_viewed`, `avg_view_duration_seconds`, `estimated_minutes_watched`) when available
 3. **Refreshes metadata** for all existing published videos in the DB — updates views, likes, comments, engagement rates, analytics, etc. with the latest data from YouTube
-4. **Reconciles the scheduled queue** — checks if any videos currently in `schedule_queue` now appear on YouTube as published. If so, marks them as `published`, sets `published_at`, and removes them from the queue
+4. **Reconciles scheduled videos** — finds all videos in the DB with status `scheduled` whose `scheduled_at` has passed (YouTube has auto-published them). Marks them as `published`, sets `published_at`, and cleans up their `schedule_queue` entry
 5. Skips any already in the `videos` collection (by `youtube_video_id`)
 6. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
 7. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
@@ -647,9 +649,22 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 
 #### `GET /latest` — Get latest analysis
 
-Returns the most recent analysis document for the channel.
+Returns the most recent analysis document for the channel, plus an `analysis_status` summary showing how many published videos are ready for analysis and how many are too recent (< 3 days old).
 
-**Response (200):** Same format as the POST response above.
+**Response (200):** Same format as the POST response above, with an additional `analysis_status` field:
+
+```json
+{
+  "...all analysis fields...",
+  "analysis_status": {
+    "ready_for_analysis": 5,
+    "not_ready_yet": 2
+  }
+}
+```
+
+- `ready_for_analysis` — published videos not yet analysed and older than 3 days (will be included in the next analysis run)
+- `not_ready_yet` — published videos not yet analysed but less than 3 days old (too recent, not enough YouTube data)
 
 **Errors:** `404` — No analysis exists yet for this channel.
 

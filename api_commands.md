@@ -223,6 +223,7 @@ X-API-Key: <your-api-key>
     "youtube_total": 60,
     "in_database": 55,
     "new_videos_to_import": 5,
+    "pending_reconciliation": 2,
     "metadata_to_refresh": 55
   }
 }
@@ -306,7 +307,7 @@ X-API-Key: <your-api-key>
 - **What it does**:
   - Fetches all videos from the YouTube channel
   - **Refreshes metadata** (views, likes, comments, engagement rates, analytics) for every existing video in the DB
-  - Reconciles the scheduled queue (marks scheduled videos as published if they're now live on YouTube)
+  - Reconciles scheduled videos whose `scheduled_at` has passed (marks them as `published`, sets `published_at`)
   - Imports any new videos not yet in the DB, categorizes them via Gemini
 
 - **Response**:
@@ -354,7 +355,7 @@ X-API-Key: <your-api-key>
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/analysis/latest`
 - **Method**: `GET`
-- **Response**: Analysis object.
+- **Response**: Analysis object plus `analysis_status`.
 
 ```json
 {
@@ -367,9 +368,16 @@ X-API-Key: <your-api-key>
       "reasoning": "High engagement on these videos."
     }
   ],
-  "best_times_to_post": ["14:00", "18:00"]
+  "best_times_to_post": ["14:00", "18:00"],
+  "analysis_status": {
+    "ready_for_analysis": 5,
+    "not_ready_yet": 2
+  }
 }
 ```
+
+- `ready_for_analysis`: published videos not yet analysed, older than 3 days
+- `not_ready_yet`: published videos not yet analysed, less than 3 days old (too recent)
 
 ### Trigger Analysis Update
 

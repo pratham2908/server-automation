@@ -62,12 +62,15 @@ async def run_analysis_update(
 
 from app.models.analysis import Analysis
 
-@router.get("/latest", response_model=Analysis)
+@router.get("/latest")
 async def get_latest_analysis(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Return the latest analysis document for *channel_id*."""
+    """Return the latest analysis document for *channel_id*,
+    plus counts of videos ready / not yet ready for analysis."""
+    from datetime import datetime, timedelta
+
     doc = await db.analysis.find_one({"channel_id": channel_id})
     if not doc:
         raise HTTPException(
@@ -75,7 +78,32 @@ async def get_latest_analysis(
             detail=f"No analysis found for channel {channel_id}",
         )
     doc.pop("_id", None)
-    return doc
+
+    already_analysed = set(doc.get("analysis_done_video_ids", []))
+    three_days_ago = datetime.utcnow() - timedelta(days=3)
+
+    unanalysed = await db.videos.find(
+        {
+            "channel_id": channel_id,
+            "status": "published",
+            "video_id": {"$nin": list(already_analysed)},
+        },
+        {"created_at": 1},
+    ).to_list(length=None)
+
+    ready_for_analysis = sum(
+        1 for v in unanalysed
+        if v.get("created_at", datetime.min) <= three_days_ago
+    )
+    not_ready_yet = len(unanalysed) - ready_for_analysis
+
+    return {
+        **doc,
+        "analysis_status": {
+            "ready_for_analysis": ready_for_analysis,
+            "not_ready_yet": not_ready_yet,
+        },
+    }
 
 
 # ------------------------------------------------------------------

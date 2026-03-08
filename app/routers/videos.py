@@ -130,6 +130,17 @@ async def _get_sync_status(channel_id: str, db) -> dict:
         {"channel_id": channel_id, "youtube_video_id": {"$ne": None}}
     )
 
+    # Videos still marked "scheduled" whose scheduled_at has passed.
+    now_utc = datetime.utcnow()
+    pending_reconciliation = await db.videos.count_documents(
+        {
+            "channel_id": channel_id,
+            "status": "scheduled",
+            "youtube_video_id": {"$ne": None},
+            "scheduled_at": {"$lte": now_utc},
+        }
+    )
+
     not_in_db = max(yt_video_count - db_published_count, 0)
     needs_metadata_refresh = db_published_count
 
@@ -138,6 +149,7 @@ async def _get_sync_status(channel_id: str, db) -> dict:
         "youtube_total": yt_video_count,
         "in_database": db_published_count,
         "new_videos_to_import": not_in_db,
+        "pending_reconciliation": pending_reconciliation,
         "metadata_to_refresh": needs_metadata_refresh,
     }
 
@@ -707,48 +719,54 @@ async def sync_videos(
                 logger.success(f"Created new category: '{cat}'")
 
     # ------------------------------------------------------------------
-    # Reconcile scheduled queue: mark scheduled videos that are now live
-    # on YouTube as published and set their published_at.
+    # Reconcile: find videos still marked "scheduled" in the DB whose
+    # scheduled_at has passed — they're now live on YouTube.
     # ------------------------------------------------------------------
-    yt_id_set = {v["youtube_video_id"] for v in all_yt_videos}
-    schedule_entries = await db.schedule_queue.find(
-        {"channel_id": channel_id}
+    now_utc = datetime.utcnow()
+    scheduled_videos = await db.videos.find(
+        {
+            "channel_id": channel_id,
+            "status": "scheduled",
+            "youtube_video_id": {"$ne": None},
+        }
     ).to_list(length=None)
 
+    yt_stats_by_id = {v["youtube_video_id"]: v for v in all_yt_videos}
     reconciled = 0
-    for entry in schedule_entries:
-        vid = await db.videos.find_one(
-            {"channel_id": channel_id, "video_id": entry["video_id"]}
-        )
-        if not vid or not vid.get("youtube_video_id"):
-            continue
-        if vid["youtube_video_id"] in yt_id_set:
-            yt_published = None
-            for yv in all_yt_videos:
-                if yv["youtube_video_id"] == vid["youtube_video_id"]:
-                    if yv.get("published_at"):
-                        try:
-                            yt_published = isoparse(yv["published_at"]).replace(tzinfo=None)
-                        except (ValueError, TypeError):
-                            pass
-                    break
 
-            await db.videos.update_one(
-                {"_id": vid["_id"]},
-                {
-                    "$set": {
-                        "status": "published",
-                        "published_at": yt_published or datetime.utcnow(),
-                        "updated_at": datetime.utcnow(),
-                    }
-                },
-            )
-            await db.schedule_queue.delete_one({"_id": entry["_id"]})
-            reconciled += 1
-            logger.info(
-                "Reconciled scheduled video '%s' — now published.",
-                vid.get("title", entry["video_id"]),
-            )
+    for vid in scheduled_videos:
+        scheduled_at = vid.get("scheduled_at")
+        # If scheduled_at is in the past, YouTube has auto-published it.
+        if scheduled_at and scheduled_at > now_utc:
+            continue
+
+        yt_data = yt_stats_by_id.get(vid["youtube_video_id"])
+        yt_published = None
+        if yt_data and yt_data.get("published_at"):
+            try:
+                yt_published = isoparse(yt_data["published_at"]).replace(tzinfo=None)
+            except (ValueError, TypeError):
+                pass
+
+        await db.videos.update_one(
+            {"_id": vid["_id"]},
+            {
+                "$set": {
+                    "status": "published",
+                    "published_at": yt_published or scheduled_at or now_utc,
+                    "updated_at": now_utc,
+                }
+            },
+        )
+        # Clean up the scheduled queue entry if it exists.
+        await db.schedule_queue.delete_one(
+            {"channel_id": channel_id, "video_id": vid["video_id"]}
+        )
+        reconciled += 1
+        logger.info(
+            "Reconciled scheduled video '%s' — now published.",
+            vid.get("title", vid["video_id"]),
+        )
 
     if reconciled:
         logger.success(f"Reconciled {reconciled} scheduled video(s) as published.")
