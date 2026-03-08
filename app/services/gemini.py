@@ -81,26 +81,29 @@ class GeminiService:
         self,
         video_data: list[dict[str, Any]],
         previous_analysis: dict[str, Any] | None = None,
+        content_schema: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Send video metadata + stats to Gemini and get an updated analysis.
 
         Parameters
         ----------
         video_data:
-            List of dicts, each containing title, category, tags, and
-            YouTube performance metrics for a single video.
+            List of dicts, each containing title, content_params, category,
+            and YouTube performance metrics for a single video.
         previous_analysis:
             The existing analysis document (if any) so Gemini can refine
             its recommendations incrementally.
+        content_schema:
+            The channel's content parameter definitions for dimension-level analysis.
 
         Returns
         -------
         dict
             Updated analysis JSON matching the ``Analysis`` schema
-            (best_posting_times, category_analysis).
+            (best_posting_times, category_analysis, content_param_analysis, best_combinations).
         """
         logger.info("Starting Gemini analysis for %d videos", len(video_data))
-        prompt = self._build_analysis_prompt(video_data, previous_analysis)
+        prompt = self._build_analysis_prompt(video_data, previous_analysis, content_schema)
         text = await self._generate(prompt)
 
         try:
@@ -116,27 +119,35 @@ class GeminiService:
         category_analysis: dict[str, Any],
         count: int = 1,
         existing_titles: list[str] | None = None,
+        content_schema: list[dict[str, Any]] | None = None,
+        content_param_analysis: list[dict[str, Any]] | None = None,
+        best_combinations: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Generate multiple titles, descriptions, and tags for new to-do videos.
+        """Generate titles, descriptions, tags, and content_params for new to-do videos.
 
         Parameters
         ----------
         channel_id:
-            The channel slug (e.g., 'officialgeoranking').
+            The channel slug.
         category:
             The content category name.
         category_analysis:
-            The Gemini-generated insights for this category (patterns,
-            templates, best tags, score).
+            The Gemini-generated insights for this category.
         count:
             The number of distinct videos to generate.
         existing_titles:
             List of titles that have already been generated for this category.
+        content_schema:
+            The channel's content parameter definitions.
+        content_param_analysis:
+            Performance insights for each content parameter dimension.
+        best_combinations:
+            Top-performing parameter combinations.
 
         Returns
         -------
         list[dict]
-            ``[{"title": ..., "description": ..., "tags": [...]}, ...]``
+            ``[{"title": ..., "description": ..., "tags": [...], "content_params": {...}}, ...]``
         """
         logger.info(
             "Generating %d Gemini video ideas for category '%s' (Channel: %s)",
@@ -145,7 +156,8 @@ class GeminiService:
             channel_id,
         )
         prompt = self._build_content_prompt(
-            channel_id, category, category_analysis, count, existing_titles
+            channel_id, category, category_analysis, count, existing_titles,
+            content_schema, content_param_analysis, best_combinations,
         )
         text = await self._generate(prompt)
 
@@ -169,6 +181,7 @@ class GeminiService:
     def _build_analysis_prompt(
         video_data: list[dict[str, Any]],
         previous_analysis: dict[str, Any] | None,
+        content_schema: list[dict[str, Any]] | None = None,
     ) -> str:
         previous_section = ""
         if previous_analysis:
@@ -178,16 +191,30 @@ class GeminiService:
                 f"```json\n{json.dumps(previous_analysis, indent=2)}\n```"
             )
 
+        schema_section = ""
+        if content_schema:
+            schema_section = (
+                "\n\n## Content Parameter Schema\n"
+                "These are the custom dimensions defined for this channel. "
+                "Use them to perform content_param_analysis.\n"
+                f"```json\n{json.dumps(content_schema, indent=2)}\n```"
+            )
+
         return f"""You are a YouTube channel analytics expert. Analyze the following video
 performance data and produce a comprehensive channel analysis.
 
-## Video Data (Batch)
-This is one batch of videos from a larger dataset. Incorporate these new
-data points into the analysis, refining your conclusions incrementally.
+Each video has:
+- **title**: Use this to identify titling patterns that drive performance.
+- **content_params**: Custom content dimensions that define what the video is about. Analyze which parameter values and combinations correlate with the best performance.
+- **stats**: YouTube performance metrics.
 
+Do NOT rely on description or tags for content analysis — use only title and content_params.
+
+## Video Data (Batch)
 ```json
 {json.dumps(video_data, indent=2)}
 ```
+{schema_section}
 {previous_section}
 
 ## Required Output Format
@@ -205,39 +232,48 @@ Return a JSON object with exactly these keys:
     {{
       "category": "category_name",
       "best_title_patterns": ["pattern1", "pattern2"],
-      "best_description_template": "template text",
-      "best_tags": ["tag1", "tag2"],
       "score": 85.5
+    }}
+  ],
+  "content_param_analysis": [
+    {{
+      "param_name": "simulation_type",
+      "best_values": ["battle", "survival"],
+      "worst_values": ["puzzle"],
+      "insight": "Battle simulations get 3x more engagement than puzzle types"
+    }}
+  ],
+  "best_combinations": [
+    {{
+      "params": {{"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "Epic Orchestral"}},
+      "reasoning": "This combination yields the highest avg_percentage_viewed at 72%"
     }}
   ]
 }}
 
 Guidelines:
-- **best_posting_times**: Recommend the optimal posting schedule.
-  - `video_count` = the number of videos to post on that day.
-  - `times` = an array of exactly `video_count` optimal posting times (HH:MM, 24-hour format).
-  - Example: if `video_count` is 1, `times` has 1 entry. If `video_count` is 3, `times` has 3 entries.
-  - Include an entry for each day of the week (monday through sunday).
-- **category_analysis**: For each content category found in the videos:
-  - Identify the most effective title patterns and description templates.
-  - List the best-performing tags.
-  - Score each category from 0-100 based on overall engagement and performance.
-- **Engagement metrics** (available per video in the `stats` object):
+- **best_posting_times**: Optimal posting schedule for each day (monday–sunday).
+  - `video_count` = how many videos to post on that day.
+  - `times` = exactly `video_count` optimal posting times (HH:MM, 24-hour format).
+- **category_analysis**: For each content category:
+  - Identify the most effective **title patterns** only (no description/tags analysis).
+  - Score each category from 0-100 based on engagement and retention.
+- **content_param_analysis**: For each content parameter dimension:
+  - `best_values`: which parameter values correlate with highest performance.
+  - `worst_values`: which values underperform.
+  - `insight`: a concise explanation of the trend.
+- **best_combinations**: The top 3-5 combinations of content_params values that yield the best results. Include music recommendations.
+- **Engagement metrics** (in `stats`):
   - `views`, `likes`, `comments` — raw counts.
   - `engagement_rate` — (likes + comments) / views × 100.
-  - `like_rate` — likes / views × 100.
-  - `comment_rate` — comments / views × 100.
-  - `duration_seconds` — video length in seconds.
-  - `avg_percentage_viewed` — average % of the video watched by viewers (from YouTube Analytics).
-  - `avg_view_duration_seconds` — average watch time per view in seconds.
-  - `estimated_minutes_watched` — total accumulated watch time in minutes.
-  Use ALL of these to judge which categories, title patterns, tags, and video
-  lengths drive the best audience retention and engagement — not just raw views.
-  High `avg_percentage_viewed` is the strongest signal of content quality.
-  A video with fewer views but high engagement_rate and avg_percentage_viewed
-  is more valuable than one with many views but low retention.
-- If previous analysis exists, **refine it incrementally** — do not discard
-  prior insights without good reason. Merge new observations with existing ones."""
+  - `like_rate`, `comment_rate` — individual rates.
+  - `duration_seconds` — video length.
+  - `avg_percentage_viewed` — strongest signal of content quality.
+  - `avg_view_duration_seconds`, `estimated_minutes_watched`.
+  High `avg_percentage_viewed` is the strongest signal. A video with fewer views
+  but high engagement_rate and avg_percentage_viewed is more valuable than one
+  with many views but low retention.
+- If previous analysis exists, **refine incrementally**."""
 
     @staticmethod
     def _build_content_prompt(
@@ -246,6 +282,9 @@ Guidelines:
         category_analysis: dict[str, Any],
         count: int,
         existing_titles: list[str] | None,
+        content_schema: list[dict[str, Any]] | None = None,
+        content_param_analysis: list[dict[str, Any]] | None = None,
+        best_combinations: list[dict[str, Any]] | None = None,
     ) -> str:
         existing_section = ""
         if existing_titles:
@@ -256,6 +295,25 @@ Guidelines:
                 + "\n".join(f"- {title}" for title in existing_titles)
             )
 
+        params_section = ""
+        if content_schema:
+            params_section += (
+                "\n\n## Content Parameter Schema\n"
+                "Each video must include `content_params` with values for these dimensions:\n"
+                f"```json\n{json.dumps(content_schema, indent=2)}\n```"
+            )
+        if content_param_analysis:
+            params_section += (
+                "\n\n## Content Parameter Performance Insights\n"
+                f"```json\n{json.dumps(content_param_analysis, indent=2)}\n```"
+            )
+        if best_combinations:
+            params_section += (
+                "\n\n## Best-Performing Combinations\n"
+                "Favor these parameter combinations when generating new videos:\n"
+                f"```json\n{json.dumps(best_combinations, indent=2)}\n```"
+            )
+
         return f"""You are a YouTube content strategist. Generate metadata for {count} completely distinct new videos
 in the "{category}" category.
 
@@ -263,6 +321,7 @@ in the "{category}" category.
 ```json
 {json.dumps(category_analysis, indent=2)}
 ```
+{params_section}
 {existing_section}
 
 ## Required Output Format
@@ -273,6 +332,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
     "title": "Engaging video title following the best patterns",
     "description": "Full description using the best template",
     "tags": ["tag1", "tag2", "tag3"],
+    "content_params": {{"simulation_type": "battle", "music": "Epic Orchestral - Two Steps From Hell"}},
     "basis_factor": "Reasoning or comparison basis"
   }}
 ]
@@ -282,5 +342,6 @@ Guidelines:
 - The titles should follow the best-performing patterns identified.
 - The descriptions should use the best templates but feel natural and unique.
 - Include 5-15 relevant tags per video.
-- **basis_factor**: If the channel is `officialgeoranking`, this MUST describe the exact data source, logic, or criteria used for the ranking (e.g., "Ranked by GDP using World Bank data", "Ranked by data from UNESCO World Heritage sites"). It should not just restate the title. For other channels, provide a short, generic reason for the suggestion.
+- **content_params**: MUST include values for every parameter in the content schema. ALWAYS include a "music" key with a specific music/audio track recommendation that fits the video's theme and mood.
+- **basis_factor**: If the channel is `officialgeoranking`, this MUST describe the exact data source, logic, or criteria used for the ranking. For other channels, provide a short reason for the suggestion.
 - Strictly return a JSON array of objects (`[]`), even if count is 1."""

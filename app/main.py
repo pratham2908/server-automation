@@ -190,6 +190,19 @@ async def api_schema():
             },
             {
                 "group": "Channels",
+                "method": "PUT",
+                "path": "/api/v1/channels/{channel_id}/content-schema",
+                "description": "Define or replace the channel's content parameter schema",
+                "request": {
+                    "content_schema": [
+                        {"name": "simulation_type", "description": "Type of simulation", "values": ["battle", "survival"]},
+                        {"name": "music", "description": "Background music style", "values": []},
+                    ]
+                },
+                "response": {"ok": True, "channel_id": "ch1", "params_defined": 2},
+            },
+            {
+                "group": "Channels",
                 "method": "DELETE",
                 "path": "/api/v1/channels/{channel_id}",
                 "description": "Delete channel and all associated data",
@@ -255,6 +268,7 @@ async def api_schema():
                 "description": "List videos with sync status",
                 "query_params": {
                     "status_filter": {"type": "string", "enum": ["todo", "ready", "scheduled", "published"], "optional": True},
+                    "content_params_status": {"type": "string", "enum": ["unverified", "verified", "missing"], "optional": True},
                     "suggest_n": {"type": "integer", "optional": True, "description": "Mark top N todo videos as suggested"},
                 },
                 "request": None,
@@ -299,6 +313,40 @@ async def api_schema():
                         "pending_reconciliation": 2,
                         "metadata_to_refresh": 55,
                     },
+                },
+            },
+            {
+                "group": "Videos – Content Params",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/videos/{video_id}/extract-params",
+                "description": "Extract content params via Gemini from video metadata. Saves as unverified.",
+                "request": None,
+                "response": {
+                    "ok": True,
+                    "video_id": "uuid-1234",
+                    "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+                    "content_params_status": "unverified",
+                },
+            },
+            {
+                "group": "Videos – Content Params",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/videos/extract-params/all",
+                "description": "Bulk extract content params for all videos missing them",
+                "request": None,
+                "response": {"ok": True, "extracted": 42, "total": 45},
+            },
+            {
+                "group": "Videos – Content Params",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/videos/{video_id}/verify-params",
+                "description": "Mark content params as verified. Optionally pass corrected values.",
+                "request": {"content_params": {"simulation_type": "survival", "music": "Dramatic Piano"}},
+                "response": {
+                    "ok": True,
+                    "video_id": "uuid-1234",
+                    "content_params": {"simulation_type": "survival", "music": "Dramatic Piano"},
+                    "content_params_status": "verified",
                 },
             },
             {

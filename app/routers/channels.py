@@ -65,7 +65,7 @@ class ChannelUpdate(BaseModel):
 # ------------------------------------------------------------------
 
 
-from app.models.channel import Channel
+from app.models.channel import Channel, ContentParam
 
 @router.get("/", response_model=list[Channel])
 async def list_channels(
@@ -272,6 +272,45 @@ async def refresh_channel(
         {"$set": update},
     )
     return {"ok": True, "channel_id": channel_id, "updated": update}
+
+
+# ------------------------------------------------------------------
+# PUT /{channel_id}/content-schema  –  define content parameter schema
+# ------------------------------------------------------------------
+
+
+class ContentSchemaUpdate(BaseModel):
+    """Payload for setting a channel's content parameter schema."""
+
+    content_schema: list[ContentParam]
+
+
+@router.put("/{channel_id}/content-schema")
+async def update_content_schema(
+    channel_id: str,
+    body: ContentSchemaUpdate,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Replace the channel's content parameter schema.
+
+    This defines the custom dimensions (e.g. simulation_type, music)
+    that videos in this channel are tagged with.
+    """
+    result = await db.channels.update_one(
+        {"channel_id": channel_id},
+        {
+            "$set": {
+                "content_schema": [p.model_dump() for p in body.content_schema],
+                "updated_at": now_ist(),
+            }
+        },
+    )
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+    return {"ok": True, "channel_id": channel_id, "params_defined": len(body.content_schema)}
 
 
 # ------------------------------------------------------------------

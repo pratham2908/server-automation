@@ -125,6 +125,25 @@ X-API-Key: <your-api-key>
 - **Description**: Re-fetches name and stats from YouTube.
 - **Response**: Updated Channel object.
 
+### Set Content Schema
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/content-schema`
+- **Method**: `PUT`
+- **Description**: Defines or replaces the channel's content parameter schema (custom dimensions for classifying videos).
+- **Request Body**:
+
+```json
+{
+  "content_schema": [
+    {"name": "simulation_type", "description": "Type of simulation", "values": ["battle", "survival", "puzzle"]},
+    {"name": "challenge_mechanic", "description": "Core challenge format", "values": ["1v1", "tournament"]},
+    {"name": "music", "description": "Background music style", "values": []}
+  ]
+}
+```
+
+- **Response**: `{"ok": true, "channel_id": "...", "params_defined": 3}`
+
 ### Delete Channel
 
 - **Endpoint**: `/api/v1/channels/{channel_id}`
@@ -220,6 +239,7 @@ X-API-Key: <your-api-key>
 - **Method**: `GET`
 - **Query Params**:
   - `status_filter=todo|ready|scheduled|published` (optional)
+  - `content_params_status=unverified|verified|missing` (optional, filter by param verification status)
   - `suggest_n=3` (optional, brings top N suggestions first)
 - **Response**: Object with `videos` array and `sync_status` summary.
 
@@ -287,6 +307,44 @@ X-API-Key: <your-api-key>
 }
 ```
 
+### Extract Content Params
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/extract-params`
+- **Method**: `POST`
+- **Description**: Uses Gemini to extract content parameter values from a video's title, description, and tags based on the channel's `content_schema`. Saves with `content_params_status: "unverified"`.
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "video_id": "uuid-1234",
+  "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+  "content_params_status": "unverified"
+}
+```
+
+### Bulk Extract Content Params
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/videos/extract-params/all`
+- **Method**: `POST`
+- **Description**: Extracts content parameters for every video that doesn't have them yet.
+- **Response**: `{"ok": true, "extracted": 42, "total": 45}`
+
+### Verify Content Params
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/verify-params`
+- **Method**: `POST`
+- **Description**: Marks a video's content_params as verified. Optionally pass corrected values.
+- **Request Body** (optional):
+
+```json
+{
+  "content_params": {"simulation_type": "survival", "music": "Dramatic Piano"}
+}
+```
+
+- **Response**: `{"ok": true, "video_id": "...", "content_params": {...}, "content_params_status": "verified"}`
+
 ### Upload Video File
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/upload`
@@ -343,7 +401,7 @@ X-API-Key: <your-api-key>
   - Fetches all videos from the YouTube channel
   - **Refreshes metadata** (views, likes, comments, engagement rates, analytics) for every existing video in the DB
   - Reconciles scheduled videos that are actually live (public) on YouTube (marks them as `published`, sets `published_at` from YouTube's publish time)
-  - Imports any new videos not yet in the DB, categorizes them via Gemini
+  - Imports new videos: **extracts content_params (including music) AND derives category** from those params via a single Gemini call. Content params saved as `"unverified"`
 
 - **Response**:
 

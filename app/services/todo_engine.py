@@ -205,6 +205,10 @@ async def generate_todo_videos(
         {"channel_id": channel_id, "status": "active"}
     ).to_list(length=None)
 
+    # Fetch channel's content_schema for param-aware generation
+    channel_doc = await db.channels.find_one({"channel_id": channel_id})
+    content_schema = (channel_doc or {}).get("content_schema", [])
+
     # We need the latest analysis document to get category insights
     # so we can pass them to Gemini.
     latest_analysis = await db.analysis.find_one(
@@ -214,6 +218,8 @@ async def generate_todo_videos(
     analysis_by_cat: dict[str, dict[str, Any]] = {
         ca["category"]: ca for ca in latest_analysis.get("category_analysis", [])
     }
+    content_param_analysis = latest_analysis.get("content_param_analysis", [])
+    best_combinations = latest_analysis.get("best_combinations", [])
 
     eligible = [
         c for c in active_categories if c["name"] in analysis_by_cat
@@ -274,6 +280,9 @@ async def generate_todo_videos(
                 category_analysis=cat_insights,
                 count=count,
                 existing_titles=existing_titles,
+                content_schema=content_schema or None,
+                content_param_analysis=content_param_analysis or None,
+                best_combinations=best_combinations or None,
             )
         except Exception:
             logger.exception("Failed to generate content for category '%s'", cat_name)
@@ -287,6 +296,8 @@ async def generate_todo_videos(
             )
 
             logger.success(f"💡 Generated [{global_idx}/{total_slots}] - \"{content.get('title', 'Untitled')}\" (Category: {cat_name})")
+
+            gen_params = content.get("content_params") or {}
 
             video_doc = {
                 "channel_id": channel_id,
@@ -306,6 +317,8 @@ async def generate_todo_videos(
                     "engagement": None,
                     "avg_percentage_viewed": None,
                 },
+                "content_params": gen_params,
+                "content_params_status": "verified",
                 "created_at": now_ist(),
                 "updated_at": now_ist(),
             }

@@ -50,6 +50,7 @@ from app.models.video import Video
 async def list_videos(
     channel_id: str,
     status_filter: Optional[str] = None,
+    content_params_status: Optional[str] = None,
     suggest_n: Optional[int] = None,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -58,11 +59,17 @@ async def list_videos(
     Query params
     ------------
     status : ``todo`` | ``ready`` | ``scheduled`` | ``published`` | ``all`` (default ``all``)
+    content_params_status : ``unverified`` | ``verified`` | ``missing`` — filter by param status
     suggest_n : if provided, mark the top *n* to-do videos as suggested.
     """
     query: dict = {"channel_id": channel_id}
     if status_filter and status_filter != "all":
         query["status"] = status_filter
+    if content_params_status:
+        if content_params_status == "missing":
+            query["content_params_status"] = None
+        else:
+            query["content_params_status"] = content_params_status
 
     # If suggest_n is requested, pick top-N to-do videos (ordered by
     # category score) and flag them.
@@ -278,6 +285,233 @@ async def update_video_status(
             )
 
     return {"ok": True, "video_id": video_id, "status": body.status.value}
+
+
+# ------------------------------------------------------------------
+# POST /{video_id}/extract-params  –  extract content params via Gemini
+# ------------------------------------------------------------------
+
+
+@router.post("/{video_id}/extract-params")
+async def extract_content_params(
+    channel_id: str,
+    video_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Use Gemini to extract content parameters from a video's metadata.
+
+    Reads the channel's ``content_schema`` and asks Gemini to identify
+    values from the video's title, description, and tags.  Results are
+    saved on the video document with ``content_params_status = 'unverified'``.
+    """
+    import json
+
+    _, gemini_service = _get_services(channel_id)
+    if gemini_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini service not initialised",
+        )
+
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel or not channel.get("content_schema"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Channel has no content_schema defined — set one via PUT /channels/{channel_id}/content-schema",
+        )
+
+    schema_defs = channel["content_schema"]
+
+    prompt = f"""You are a YouTube content analyst. Extract content parameter values for this video.
+
+## Content Parameter Schema
+Each parameter below defines a dimension to classify the video by.
+If the parameter has `values`, pick ONE of them. If `values` is empty, infer a concise free-form value.
+ALWAYS include a "music" parameter — identify the background music, song, or audio track used.
+
+```json
+{json.dumps(schema_defs, indent=2)}
+```
+
+## Video Information
+- **Title**: {video.get("title", "")}
+- **Description**: {video.get("description", "")[:1000]}
+- **Tags**: {json.dumps(video.get("tags", [])[:20])}
+
+## Required Output
+Return a single JSON object mapping parameter names to their extracted values.
+Include a "music" key with the identified music/audio track (or "unknown" if not identifiable).
+
+Example: {{"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "Epic Orchestral - Two Steps From Hell"}}
+"""
+
+    text = await gemini_service._generate(prompt)
+
+    try:
+        params = json.loads(text)
+        if not isinstance(params, dict):
+            raise ValueError("Expected a JSON object")
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gemini returned unparseable response for param extraction",
+        )
+
+    await db.videos.update_one(
+        {"_id": video["_id"]},
+        {
+            "$set": {
+                "content_params": params,
+                "content_params_status": "unverified",
+                "updated_at": now_ist(),
+            }
+        },
+    )
+
+    return {
+        "ok": True,
+        "video_id": video_id,
+        "content_params": params,
+        "content_params_status": "unverified",
+    }
+
+
+# ------------------------------------------------------------------
+# POST /extract-params/all  –  bulk extract params for all videos missing them
+# ------------------------------------------------------------------
+
+
+@router.post("/extract-params/all")
+async def extract_all_content_params(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Bulk-extract content parameters for every video that doesn't have them yet."""
+    import json
+
+    _, gemini_service = _get_services(channel_id)
+    if gemini_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini service not initialised",
+        )
+
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel or not channel.get("content_schema"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Channel has no content_schema defined",
+        )
+
+    videos = await db.videos.find(
+        {"channel_id": channel_id, "content_params_status": None}
+    ).to_list(length=None)
+
+    if not videos:
+        return {"ok": True, "extracted": 0, "message": "All videos already have content_params"}
+
+    schema_defs = channel["content_schema"]
+    extracted = 0
+
+    for video in videos:
+        prompt = f"""You are a YouTube content analyst. Extract content parameter values for this video.
+
+## Content Parameter Schema
+{json.dumps(schema_defs, indent=2)}
+
+ALWAYS include a "music" parameter — identify the background music, song, or audio track used.
+
+## Video
+- **Title**: {video.get("title", "")}
+- **Description**: {video.get("description", "")[:1000]}
+- **Tags**: {json.dumps(video.get("tags", [])[:20])}
+
+Return a single JSON object mapping parameter names to values.
+Include a "music" key."""
+
+        try:
+            text = await gemini_service._generate(prompt)
+            params = json.loads(text)
+            if not isinstance(params, dict):
+                continue
+
+            await db.videos.update_one(
+                {"_id": video["_id"]},
+                {
+                    "$set": {
+                        "content_params": params,
+                        "content_params_status": "unverified",
+                        "updated_at": now_ist(),
+                    }
+                },
+            )
+            extracted += 1
+        except Exception as exc:
+            logger.warning("Failed to extract params for video '%s': %s", video.get("title", video["video_id"]), exc)
+
+    return {"ok": True, "extracted": extracted, "total": len(videos)}
+
+
+# ------------------------------------------------------------------
+# POST /{video_id}/verify-params  –  mark content params as verified
+# ------------------------------------------------------------------
+
+
+class VerifyParamsRequest(BaseModel):
+    """Optional overrides when verifying content params."""
+    content_params: Optional[dict[str, str]] = Field(
+        None, description="Override params before marking verified"
+    )
+
+
+@router.post("/{video_id}/verify-params")
+async def verify_content_params(
+    channel_id: str,
+    video_id: str,
+    body: Optional[VerifyParamsRequest] = None,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Mark a video's content_params as verified.
+
+    Optionally pass corrected ``content_params`` in the body to override
+    the Gemini-extracted values before marking verified.
+    """
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+
+    if not video.get("content_params") and (not body or not body.content_params):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Video has no content_params to verify — run extract-params first, or provide params in the body",
+        )
+
+    update: dict = {
+        "content_params_status": "verified",
+        "updated_at": now_ist(),
+    }
+    if body and body.content_params:
+        update["content_params"] = body.content_params
+
+    await db.videos.update_one({"_id": video["_id"]}, {"$set": update})
+
+    final_params = body.content_params if (body and body.content_params) else video.get("content_params")
+    return {
+        "ok": True,
+        "video_id": video_id,
+        "content_params": final_params,
+        "content_params_status": "verified",
+    }
 
 
 # ------------------------------------------------------------------
@@ -585,8 +819,14 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
     return videos
 
 
-async def _categorize_batch(gemini_service, channel_description, existing_categories, batch, category_instructions=""):
-    """Ask Gemini to assign category + topic per video."""
+async def _extract_params_and_categorize_batch(
+    gemini_service, content_schema, existing_categories, batch, category_instructions=""
+):
+    """Extract content params AND derive category for a batch of videos in one Gemini call.
+
+    Returns a list of dicts:
+    [{"youtube_video_id": "...", "content_params": {...}, "category": "...", "topic": "..."}]
+    """
     import json
 
     video_summaries = [
@@ -599,18 +839,30 @@ async def _categorize_batch(gemini_service, channel_description, existing_catego
         for v in batch
     ]
 
+    schema_section = ""
+    if content_schema:
+        schema_section = (
+            f"\n\n## Content Parameter Schema\n"
+            f"Extract values for each of these dimensions. If `values` is non-empty, pick one. "
+            f"If empty, infer a concise free-form value.\n"
+            f"ALWAYS include a 'music' key — identify the background music, song, or audio track.\n"
+            f"```json\n{json.dumps(content_schema, indent=2)}\n```"
+        )
+
     cats_section = ""
     if existing_categories:
         cats_section = (
             f"\n\n## Existing Categories\n"
+            f"Derive the category from the extracted content_params. "
             f"Reuse these when a video fits: {json.dumps(existing_categories)}\n"
             f"Only create a new category if NONE of the above fit."
         )
 
-    prompt = f"""You are a YouTube channel analyst. Categorize these videos.
+    prompt = f"""You are a YouTube channel analyst. For each video below:
+1. Extract content parameter values based on the schema.
+2. Derive a category from those extracted parameters (NOT from title/description/tags directly).
 
-## Channel Description
-{channel_description}
+{schema_section}
 {cats_section}
 
 ## Videos
@@ -618,9 +870,10 @@ async def _categorize_batch(gemini_service, channel_description, existing_catego
 {json.dumps(video_summaries, indent=2)}
 ```
 
-{f"## Additional Instructions for Categorization" + chr(10) + category_instructions if category_instructions else ""}
-For each video, return a JSON array:
-[{{"youtube_video_id": "...", "category": "...", "topic": "..."}}]
+{f"## Additional Instructions" + chr(10) + category_instructions if category_instructions else ""}
+
+Return a JSON array:
+[{{"youtube_video_id": "...", "content_params": {{"param1": "value1", "music": "..."}}, "category": "...", "topic": "..."}}]
 
 Reuse existing categories. Only create new ones if truly needed."""
 
@@ -806,7 +1059,10 @@ async def sync_videos(
         )
     ]
 
-    # Categorize in batches of 5.
+    # Fetch channel's content_schema for param extraction during sync.
+    content_schema = channel.get("content_schema", [])
+
+    # Extract content params AND derive category in batches of 5.
     BATCH_SIZE = 5
     categorizations = {}
 
@@ -814,14 +1070,14 @@ async def sync_videos(
         batch = new_videos[i : i + BATCH_SIZE]
         
         logger.info(
-            "Asking Gemini to categorize batch (%d/%d)...",
+            "Asking Gemini to extract params & categorize batch (%d/%d)...",
             (i // BATCH_SIZE) + 1,
             (len(new_videos) + BATCH_SIZE - 1) // BATCH_SIZE,
             extra={"color": "MAGENTA"},
         )
         
-        results = await _categorize_batch(
-            gemini_service, channel_description, existing_cats, batch,
+        results = await _extract_params_and_categorize_batch(
+            gemini_service, content_schema, existing_cats, batch,
             category_instructions=body.new_category_description if body else "",
         )
 
@@ -829,9 +1085,13 @@ async def sync_videos(
             yt_id = r.get("youtube_video_id", "")
             cat = r.get("category", "Uncategorized")
             topic = r.get("topic", "")
-            categorizations[yt_id] = {"category": cat, "topic": topic}
+            params = r.get("content_params", {})
+            categorizations[yt_id] = {
+                "category": cat,
+                "topic": topic,
+                "content_params": params,
+            }
 
-            # Auto-create new category.
             if cat not in existing_cats:
                 existing_cats.append(cat)
                 now = now_ist()
@@ -857,10 +1117,9 @@ async def sync_videos(
     docs = []
     for v in new_videos:
         yt_id = v["youtube_video_id"]
-        cat_info = categorizations.get(yt_id, {"category": "Uncategorized", "topic": ""})
+        cat_info = categorizations.get(yt_id, {"category": "Uncategorized", "topic": "", "content_params": {}})
         now = now_ist()
 
-        # Use YouTube publish date as both created_at and published_at.
         yt_published_at = now
         if v.get("published_at"):
             try:
@@ -868,6 +1127,8 @@ async def sync_videos(
                 yt_published_at = isoparse(v["published_at"]).astimezone(IST)
             except (ValueError, TypeError):
                 pass
+
+        extracted_params = cat_info.get("content_params", {})
 
         docs.append(
             {
@@ -895,6 +1156,8 @@ async def sync_videos(
                     "avg_view_duration_seconds": v.get("avg_view_duration_seconds"),
                     "estimated_minutes_watched": v.get("estimated_minutes_watched"),
                 },
+                "content_params": extracted_params if extracted_params else None,
+                "content_params_status": "unverified" if extracted_params else None,
                 "published_at": yt_published_at,
                 "created_at": yt_published_at,
                 "updated_at": now,

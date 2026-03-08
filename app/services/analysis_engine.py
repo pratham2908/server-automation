@@ -118,14 +118,17 @@ async def run_analysis(
         )
         yt_stats = youtube_service.get_video_stats(yt_ids)
 
-    # Enrich video data with stats
+    # Fetch channel's content_schema for param-level analysis
+    channel_doc = await db.channels.find_one({"channel_id": channel_id})
+    content_schema = (channel_doc or {}).get("content_schema", [])
+
+    # Enrich video data with stats — only title, category, content_params, stats
     video_data: list[dict[str, Any]] = []
     for v in new_videos:
         entry: dict[str, Any] = {
             "title": v.get("title", ""),
             "category": v.get("category", ""),
-            "topic": v.get("topic", ""),
-            "tags": v.get("tags", []),
+            "content_params": v.get("content_params") or {},
         }
         yt_id = v.get("youtube_video_id")
         if yt_id and yt_id in yt_stats:
@@ -150,12 +153,10 @@ async def run_analysis(
     BATCH_SIZE = 5
     running_analysis = (
         {
-            "best_posting_times": existing_analysis.get(
-                "best_posting_times", []
-            ),
-            "category_analysis": existing_analysis.get(
-                "category_analysis", []
-            ),
+            "best_posting_times": existing_analysis.get("best_posting_times", []),
+            "category_analysis": existing_analysis.get("category_analysis", []),
+            "content_param_analysis": existing_analysis.get("content_param_analysis", []),
+            "best_combinations": existing_analysis.get("best_combinations", []),
         }
         if existing_analysis
         else None
@@ -172,7 +173,7 @@ async def run_analysis(
         )
 
         running_analysis = await gemini_service.analyze_videos(
-            batch, running_analysis
+            batch, running_analysis, content_schema=content_schema or None,
         )
 
     updated = running_analysis or {}
@@ -185,6 +186,8 @@ async def run_analysis(
         "channel_id": channel_id,
         "best_posting_times": updated.get("best_posting_times", []),
         "category_analysis": updated.get("category_analysis", []),
+        "content_param_analysis": updated.get("content_param_analysis", []),
+        "best_combinations": updated.get("best_combinations", []),
         "analysis_done_video_ids": all_analysed,
         "version": version,
         "updated_at": now_ist(),
@@ -210,6 +213,8 @@ async def run_analysis(
         "result": {
             "best_posting_times": updated.get("best_posting_times", []),
             "category_analysis": updated.get("category_analysis", []),
+            "content_param_analysis": updated.get("content_param_analysis", []),
+            "best_combinations": updated.get("best_combinations", []),
         },
         "total_analysed_count": len(all_analysed),
         "batch_count": (len(video_data) + BATCH_SIZE - 1) // BATCH_SIZE,

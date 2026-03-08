@@ -51,6 +51,14 @@ class Video(BaseModel):
     youtube_video_id: Optional[str] = None
     r2_object_key: Optional[str] = None
     metadata: VideoMetadata = Field(default_factory=VideoMetadata)
+    content_params: Optional[dict[str, str]] = Field(
+        None,
+        description="Channel-specific content dimensions (e.g. simulation_type, challenge_mechanic, music)",
+    )
+    content_params_status: Optional[str] = Field(
+        None,
+        description="'unverified' when Gemini-extracted, 'verified' when user-confirmed or system-defined",
+    )
     scheduled_at: Optional[datetime] = Field(
         None,
         description="When the video is scheduled to go live on YouTube. Set when scheduled.",

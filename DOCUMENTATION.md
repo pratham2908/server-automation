@@ -180,6 +180,42 @@ Returns all registered channels.
 
 ---
 
+#### `PUT /{channel_id}/content-schema` — Define content parameter schema
+
+Sets or replaces the channel's content parameter schema. This defines the custom dimensions (e.g. `simulation_type`, `challenge_mechanic`, `music`) that videos in this channel are tagged with.
+
+**Request body:**
+
+```json
+{
+  "content_schema": [
+    {
+      "name": "simulation_type",
+      "description": "The type of simulation in the video",
+      "values": ["battle", "survival", "puzzle", "race"]
+    },
+    {
+      "name": "challenge_mechanic",
+      "description": "The core challenge format",
+      "values": ["1v1", "tournament", "survival", "time-trial"]
+    },
+    {
+      "name": "music",
+      "description": "Background music style",
+      "values": []
+    }
+  ]
+}
+```
+
+- `name` — parameter key used in `content_params` on videos
+- `description` — what this parameter represents
+- `values` — allowed values; empty list means free-form (Gemini infers)
+
+**Response (200):** `{"ok": true, "channel_id": "...", "params_defined": 3}`
+
+---
+
 #### `POST /{channel_id}/refresh` — Re-fetch data from YouTube
 
 Pulls the latest stats (subscriber count, video count, etc.) from YouTube and updates the DB.
@@ -244,10 +280,11 @@ Returns all videos for a channel, with optional filtering and suggestion marking
 
 **Query params:**
 
-| Param           | Type   | Default | Description                                                                                           |
-| --------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------- |
-| `status_filter` | string | `all`   | Filter by status: `todo`, `ready`, `scheduled`, `published`, or `all`                                 |
-| `suggest_n`     | int    | —       | If provided, marks the top N to-do videos as `suggested=true` (ordered by category score, best first) |
+| Param                   | Type   | Default | Description                                                                                           |
+| ----------------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------- |
+| `status_filter`         | string | `all`   | Filter by status: `todo`, `ready`, `scheduled`, `published`, or `all`                                 |
+| `content_params_status` | string | —       | Filter by param status: `unverified`, `verified`, or `missing`                                        |
+| `suggest_n`             | int    | —       | If provided, marks the top N to-do videos as `suggested=true` (ordered by category score, best first) |
 
 **How `suggest_n` works:**
 
@@ -335,9 +372,9 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 3. **Refreshes metadata** for all existing published videos in the DB — updates views, likes, comments, engagement rates, analytics, etc. with the latest data from YouTube
 4. **Reconciles scheduled videos** — finds all videos in the DB with status `scheduled` and checks YouTube to see if they are actually live (privacy status is `public`). If live, marks them as `published`, sets `published_at` from YouTube's publish time, and cleans up their `schedule_queue` entry
 5. Skips any already in the `videos` collection (by `youtube_video_id`)
-6. Categorizes new videos in batches of 5 via Gemini (reuses existing categories, creates new ones only if needed)
+6. **Extracts content params AND derives category** for new videos in batches of 5 via a single Gemini call — extracts `content_params` (including music) based on the channel's `content_schema`, then derives `category` from those extracted parameters (not from title/description/tags directly). Content params are saved as `"unverified"`
 7. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
-8. Inserts videos as `published` with `category` and `topic` assigned; `created_at` and `published_at` are set to the **YouTube publish date**; `metadata` is fully populated with views, likes, comments, duration, rates, and analytics
+8. Inserts videos as `published` with `category`, `topic`, `content_params`, and `content_params_status` assigned; `created_at` and `published_at` are set to the **YouTube publish date**; `metadata` is fully populated
 
 **Response (200):**
 
@@ -388,6 +425,74 @@ Changes a video's status.
 
 ```json
 { "ok": true, "video_id": "550e8400-...", "status": "done" }
+```
+
+---
+
+#### `POST /{video_id}/extract-params` — Extract content params via Gemini
+
+Uses Gemini to extract content parameter values from a video's title, description, and tags, based on the channel's `content_schema`. Results are saved with `content_params_status: "unverified"`.
+
+**Preconditions:** Channel must have a `content_schema` defined.
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "video_id": "550e8400-...",
+  "content_params": {
+    "simulation_type": "battle",
+    "challenge_mechanic": "1v1",
+    "music": "Epic Orchestral - Two Steps From Hell"
+  },
+  "content_params_status": "unverified"
+}
+```
+
+---
+
+#### `POST /extract-params/all` — Bulk extract params for all videos
+
+Extracts content parameters for every video in the channel that doesn't have them yet. Runs Gemini extraction one video at a time.
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "extracted": 42,
+  "total": 45
+}
+```
+
+---
+
+#### `POST /{video_id}/verify-params` — Verify content params
+
+Marks a video's content_params as `"verified"`. Optionally pass corrected values in the body.
+
+**Request body (optional):**
+
+```json
+{
+  "content_params": {
+    "simulation_type": "survival",
+    "challenge_mechanic": "tournament",
+    "music": "Dramatic Piano - Ludovico Einaudi"
+  }
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "video_id": "550e8400-...",
+  "content_params": { "..." },
+  "content_params_status": "verified"
+}
 ```
 
 ---
@@ -649,7 +754,7 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 3. **Exclude recent videos** — skip any with `created_at` less than 3 days ago (hard limit, no exceptions)
 4. **Early exit** if no new videos to analyse
 5. **Fetch YouTube stats** (views, likes, comments, duration, engagement rates) + **YouTube Analytics** (avg % viewed, avg view duration, est. minutes watched) for new videos
-6. **Send to Gemini in batches of 5** — each batch receives the running analysis from prior batches, so insights accumulate incrementally. Gemini is instructed to weigh engagement metrics (`engagement_rate`, `avg_percentage_viewed`, etc.) heavily when scoring categories
+6. **Send to Gemini in batches of 5** — each batch receives the running analysis from prior batches, so insights accumulate incrementally. Gemini analyzes only `title` + `content_params` + `stats` (not description/tags). Output now includes `content_param_analysis` (per-dimension insights) and `best_combinations` (top param combos)
 7. **Save updated analysis** to DB (increments version number)
 8. **Save audit snapshot** to `analysis_history` collection
 9. **Run to-do engine:**
@@ -675,9 +780,21 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
     {
       "category": "Tutorials",
       "best_title_patterns": ["How to...", "10 Things..."],
-      "best_description_template": "In this video, I'll show you...",
-      "best_tags": ["tutorial", "howto", "tips"],
       "score": 85.5
+    }
+  ],
+  "content_param_analysis": [
+    {
+      "param_name": "simulation_type",
+      "best_values": ["battle", "survival"],
+      "worst_values": ["puzzle"],
+      "insight": "Battle simulations get 3x more engagement"
+    }
+  ],
+  "best_combinations": [
+    {
+      "params": {"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "Epic Orchestral"},
+      "reasoning": "Highest avg_percentage_viewed at 72%"
     }
   ],
   "analysis_done_video_ids": ["vid1", "vid2", "vid3"],
@@ -767,6 +884,10 @@ Stores registered YouTube channels with their metadata (auto-fetched from YouTub
   "subscriber_count": 125000, // from YouTube
   "video_count": 342, // from YouTube
   "view_count": 15000000, // from YouTube
+  "content_schema": [  // custom content parameter definitions
+    {"name": "simulation_type", "description": "...", "values": ["battle", "survival"]},
+    {"name": "music", "description": "...", "values": []}
+  ],
   "created_at": "datetime",
   "updated_at": "datetime"
 }
@@ -810,6 +931,12 @@ Stores all video records — both manually uploaded and AI-generated to-do items
     "avg_view_duration_seconds": null, // from YouTube Analytics API
     "estimated_minutes_watched": null // from YouTube Analytics API
   },
+  "content_params": {  // channel-specific content dimensions
+    "simulation_type": "battle",
+    "challenge_mechanic": "1v1",
+    "music": "Epic Orchestral - Two Steps From Hell"
+  },
+  "content_params_status": "unverified", // "unverified" (Gemini-extracted) or "verified" (user-confirmed or system-defined)
   "scheduled_at": "datetime | null", // when the video is scheduled to go live on YouTube; null until scheduled
   "published_at": "datetime | null", // when the video was published on YouTube; null until published
   "created_at": "datetime",
@@ -950,9 +1077,21 @@ Stores the AI-generated channel analysis. **One document per channel.**
     {
       "category": "Tutorials",
       "best_title_patterns": ["How to...", "10 Things..."],
-      "best_description_template": "In this video...",
-      "best_tags": ["tutorial", "howto"],
       "score": 85.5
+    }
+  ],
+  "content_param_analysis": [  // per-dimension performance insights
+    {
+      "param_name": "simulation_type",
+      "best_values": ["battle", "survival"],
+      "worst_values": ["puzzle"],
+      "insight": "Battle simulations get 3x more engagement"
+    }
+  ],
+  "best_combinations": [  // top parameter value combos
+    {
+      "params": {"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "Epic Orchestral"},
+      "reasoning": "Highest avg_percentage_viewed at 72%"
     }
   ],
   "analysis_done_video_ids": ["vid1", "vid2"], // prevents re-analysing
@@ -979,12 +1118,14 @@ Audit trail — one document per analysis run. Stores the inputs and outputs of 
   "channel_id": "tech-tips",
   "version": 3,
   "input_videos": [                // videos sent to Gemini
-    {"title": "...", "category": "...", "topic": "...", "tags": [...], "stats": {...}}
+    {"title": "...", "category": "...", "content_params": {...}, "stats": {...}}
   ],
   "new_video_ids": ["vid5", "vid6"],   // video_ids that were new in this run
   "result": {
     "best_posting_times": [...],       // Gemini's output
-    "category_analysis": [...]
+    "category_analysis": [...],
+    "content_param_analysis": [...],
+    "best_combinations": [...]
   },
   "total_analysed_count": 20,          // total videos analysed so far
   "batch_count": 2,                    // how many Gemini batches were used
@@ -1035,8 +1176,8 @@ Audit trail — one document per analysis run. Stores the inputs and outputs of 
 
 ### Gemini Service (`app/services/gemini.py`)
 
-- **Analyze videos**: Sends video performance data + previous analysis → returns updated analysis JSON
-- **Generate content**: Given a category + its analysis insights → generates title, description, tags for a new video
+- **Analyze videos**: Sends video data (title + content_params + stats) + previous analysis + content_schema → returns updated analysis JSON including `content_param_analysis` and `best_combinations`
+- **Generate content**: Given a category + its analysis insights + content_schema + content_param_analysis + best_combinations → generates title, description, tags, and `content_params` (with music) for new videos
 - **Model fallback chain**: Tries models in order — if one fails (rate limit, error), automatically falls back to the next:
   1. `gemini-3.1-pro-preview`
   2. `gemini-3-pro-preview`
@@ -1056,7 +1197,7 @@ Post-analysis step:
 3. Computes and saves **category metadata** — aggregated performance metrics (avg views, likes, comments, engagement rates, avg % viewed, total views, total watch time) from all published videos in each category
 4. Archives underperforming categories (score < 30, ≥ 5 videos)
 
-To-do video generation is triggered separately via the `/updateToDoList` endpoint, which distributes N slots across active categories weighted by score
+To-do video generation is triggered separately via the `/updateToDoList` endpoint, which distributes N slots across active categories weighted by score. Generated videos include `content_params` (with music recommendations) set to `content_params_status: "verified"`
 
 ---
 

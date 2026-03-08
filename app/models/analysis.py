@@ -23,9 +23,23 @@ class CategoryAnalysis(BaseModel):
 
     category: str
     best_title_patterns: list[str] = Field(default_factory=list)
-    best_description_template: str = ""
-    best_tags: list[str] = Field(default_factory=list)
     score: float = 0.0
+
+
+class ContentParamAnalysis(BaseModel):
+    """Performance analysis for a single content parameter dimension."""
+
+    param_name: str
+    best_values: list[str] = Field(default_factory=list)
+    worst_values: list[str] = Field(default_factory=list)
+    insight: str = ""
+
+
+class BestCombination(BaseModel):
+    """A top-performing combination of content parameter values."""
+
+    params: dict[str, str] = Field(default_factory=dict)
+    reasoning: str = ""
 
 
 class Analysis(BaseModel):
@@ -34,6 +48,8 @@ class Analysis(BaseModel):
     channel_id: str
     best_posting_times: list[BestTimeSlot] = Field(default_factory=list)
     category_analysis: list[CategoryAnalysis] = Field(default_factory=list)
+    content_param_analysis: list[ContentParamAnalysis] = Field(default_factory=list)
+    best_combinations: list[BestCombination] = Field(default_factory=list)
     analysis_done_video_ids: list[str] = Field(default_factory=list)
     version: int = Field(1, ge=1, description="Auto-incremented on each update")
     created_at: datetime = Field(default_factory=now_ist)
