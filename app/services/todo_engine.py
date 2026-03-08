@@ -11,6 +11,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from app.timezone import now_ist
+
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
@@ -93,7 +95,7 @@ async def update_categories_from_analysis(
                 {
                     "$set": {
                         "score": score,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": now_ist(),
                     }
                 },
             )
@@ -122,7 +124,7 @@ async def update_categories_from_analysis(
         meta = await _compute_category_metadata(channel_id, cat_name, db)
         await db.categories.update_one(
             {"_id": cat_doc["_id"]},
-            {"$set": {"metadata": meta, "updated_at": datetime.utcnow()}},
+            {"$set": {"metadata": meta, "updated_at": now_ist()}},
         )
     logger.success("📊 Computed and saved metadata for %d categories", len(all_categories))
 
@@ -143,7 +145,7 @@ async def update_categories_from_analysis(
                 {
                     "$set": {
                         "status": "archived",
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": now_ist(),
                     }
                 },
             )
@@ -304,8 +306,8 @@ async def generate_todo_videos(
                     "engagement": None,
                     "avg_percentage_viewed": None,
                 },
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": now_ist(),
+                "updated_at": now_ist(),
             }
             new_videos.append(video_doc)
 

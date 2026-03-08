@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from app.timezone import now_ist
+
 from dateutil.parser import isoparse
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
@@ -68,7 +70,7 @@ async def list_videos(
         # Reset previous suggestions for this channel.
         await db.videos.update_many(
             {"channel_id": channel_id, "suggested": True},
-            {"$set": {"suggested": False, "updated_at": datetime.utcnow()}},
+            {"$set": {"suggested": False, "updated_at": now_ist()}},
         )
 
         # Fetch active categories sorted by score to determine priority.
@@ -91,7 +93,7 @@ async def list_videos(
         for v in todo_videos[:suggest_n]:
             await db.videos.update_one(
                 {"_id": v["_id"]},
-                {"$set": {"suggested": True, "updated_at": datetime.utcnow()}},
+                {"$set": {"suggested": True, "updated_at": now_ist()}},
             )
 
     videos = await db.videos.find(query).to_list(length=None)
@@ -109,8 +111,32 @@ async def list_videos(
     }
 
 
+def _fetch_youtube_video_ids(yt, youtube_channel_id: str) -> list[str]:
+    """Fetch only the video IDs from a channel's uploads playlist (no metadata)."""
+    uploads_playlist_id = "UU" + youtube_channel_id[2:]
+
+    video_ids: list[str] = []
+    next_page = None
+
+    while True:
+        request = yt._youtube.playlistItems().list(
+            part="contentDetails",
+            playlistId=uploads_playlist_id,
+            maxResults=50,
+            pageToken=next_page,
+        )
+        response = request.execute()
+        for item in response.get("items", []):
+            video_ids.append(item["contentDetails"]["videoId"])
+        next_page = response.get("nextPageToken")
+        if not next_page:
+            break
+
+    return video_ids
+
+
 async def _get_sync_status(channel_id: str, db) -> dict:
-    """Lightweight check: how many videos on YouTube vs in our DB."""
+    """Compare YouTube video IDs against our DB to get accurate sync numbers."""
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel or not channel.get("youtube_channel_id"):
         return {"available": False, "reason": "No YouTube channel linked"}
@@ -120,37 +146,40 @@ async def _get_sync_status(channel_id: str, db) -> dict:
         return {"available": False, "reason": "No YouTube token for this channel"}
 
     try:
-        info = youtube_service.get_channel_info(channel["youtube_channel_id"])
-        yt_video_count = info.get("video_count", 0)
+        yt_video_ids = set(
+            _fetch_youtube_video_ids(youtube_service, channel["youtube_channel_id"])
+        )
     except Exception as exc:
-        logger.warning("Could not fetch YouTube channel info for sync status: %s", exc)
+        logger.warning("Could not fetch YouTube video IDs for sync status: %s", exc)
         return {"available": False, "reason": "Failed to reach YouTube API"}
 
-    db_published_count = await db.videos.count_documents(
-        {"channel_id": channel_id, "youtube_video_id": {"$ne": None}}
-    )
+    db_yt_ids: set[str] = set()
+    async for doc in db.videos.find(
+        {"channel_id": channel_id, "youtube_video_id": {"$ne": None}},
+        {"youtube_video_id": 1},
+    ):
+        db_yt_ids.add(doc["youtube_video_id"])
 
-    # Videos still marked "scheduled" whose scheduled_at has passed.
-    now_utc = datetime.utcnow()
+    new_videos_to_import = yt_video_ids - db_yt_ids
+    metadata_to_refresh = yt_video_ids & db_yt_ids
+
+    now = now_ist()
     pending_reconciliation = await db.videos.count_documents(
         {
             "channel_id": channel_id,
             "status": "scheduled",
             "youtube_video_id": {"$ne": None},
-            "scheduled_at": {"$lte": now_utc},
+            "scheduled_at": {"$lte": now},
         }
     )
 
-    not_in_db = max(yt_video_count - db_published_count, 0)
-    needs_metadata_refresh = db_published_count
-
     return {
         "available": True,
-        "youtube_total": yt_video_count,
-        "in_database": db_published_count,
-        "new_videos_to_import": not_in_db,
+        "youtube_total": len(yt_video_ids),
+        "in_database": len(db_yt_ids),
+        "new_videos_to_import": len(new_videos_to_import),
         "pending_reconciliation": pending_reconciliation,
-        "metadata_to_refresh": needs_metadata_refresh,
+        "metadata_to_refresh": len(metadata_to_refresh),
     }
 
 
@@ -169,10 +198,10 @@ async def update_video_status(
     """Toggle video status between ``done`` and ``todo``."""
     update_fields = {
         "status": body.status.value,
-        "updated_at": datetime.utcnow(),
+        "updated_at": now_ist(),
     }
     if body.status == VideoStatus.PUBLISHED:
-        update_fields["published_at"] = datetime.utcnow()
+        update_fields["published_at"] = now_ist()
 
     result = await db.videos.update_one(
         {"channel_id": channel_id, "video_id": video_id},
@@ -233,7 +262,7 @@ async def upload_video(
     # Stream file to R2.
     r2.upload_video(file.file, r2_key)
 
-    now = datetime.utcnow()
+    now = now_ist()
 
     # Update video document.
     await db.videos.update_one(
@@ -635,7 +664,7 @@ async def sync_videos(
                     "metadata.avg_percentage_viewed": fresh.get("avg_percentage_viewed"),
                     "metadata.avg_view_duration_seconds": fresh.get("avg_view_duration_seconds"),
                     "metadata.estimated_minutes_watched": fresh.get("estimated_minutes_watched"),
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": now_ist(),
                 }
             },
         )
@@ -701,7 +730,7 @@ async def sync_videos(
             # Auto-create new category.
             if cat not in existing_cats:
                 existing_cats.append(cat)
-                now = datetime.utcnow()
+                now = now_ist()
                 await db.categories.insert_one(
                     {
                         "channel_id": channel_id,
@@ -722,7 +751,7 @@ async def sync_videos(
     # Reconcile: find videos still marked "scheduled" in the DB whose
     # scheduled_at has passed — they're now live on YouTube.
     # ------------------------------------------------------------------
-    now_utc = datetime.utcnow()
+    now = now_ist()
     scheduled_videos = await db.videos.find(
         {
             "channel_id": channel_id,
@@ -737,14 +766,15 @@ async def sync_videos(
     for vid in scheduled_videos:
         scheduled_at = vid.get("scheduled_at")
         # If scheduled_at is in the past, YouTube has auto-published it.
-        if scheduled_at and scheduled_at > now_utc:
+        if scheduled_at and scheduled_at > now:
             continue
 
         yt_data = yt_stats_by_id.get(vid["youtube_video_id"])
         yt_published = None
         if yt_data and yt_data.get("published_at"):
             try:
-                yt_published = isoparse(yt_data["published_at"]).replace(tzinfo=None)
+                from app.timezone import IST
+                yt_published = isoparse(yt_data["published_at"]).astimezone(IST)
             except (ValueError, TypeError):
                 pass
 
@@ -753,8 +783,8 @@ async def sync_videos(
             {
                 "$set": {
                     "status": "published",
-                    "published_at": yt_published or scheduled_at or now_utc,
-                    "updated_at": now_utc,
+                    "published_at": yt_published or scheduled_at or now,
+                    "updated_at": now,
                 }
             },
         )
@@ -778,13 +808,14 @@ async def sync_videos(
     for v in new_videos:
         yt_id = v["youtube_video_id"]
         cat_info = categorizations.get(yt_id, {"category": "Uncategorized", "topic": ""})
-        now = datetime.utcnow()
+        now = now_ist()
 
         # Use YouTube publish date as both created_at and published_at.
         yt_published_at = now
         if v.get("published_at"):
             try:
-                yt_published_at = isoparse(v["published_at"]).replace(tzinfo=None)
+                from app.timezone import IST
+                yt_published_at = isoparse(v["published_at"]).astimezone(IST)
             except (ValueError, TypeError):
                 pass
 

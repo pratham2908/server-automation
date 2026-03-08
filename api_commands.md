@@ -9,6 +9,8 @@ _(Or `http://68.233.115.135:8000` in production)_
 X-API-Key: <your-api-key>
 ```
 
+**Timezone**: All timestamps in requests and responses are in **IST (GMT+5:30)**.
+
 ---
 
 ## Health Check

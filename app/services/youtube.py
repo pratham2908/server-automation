@@ -9,6 +9,8 @@ consent flow; refreshed automatically thereafter).
 from datetime import datetime
 from typing import Any
 
+from app.timezone import now_ist
+
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -174,7 +176,7 @@ class YouTubeService:
             return {}
 
         analytics: dict[str, dict[str, Any]] = {}
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = now_ist().strftime("%Y-%m-%d")
 
         # Batch by 40 IDs to stay within filter-string limits.
         for i in range(0, len(youtube_video_ids), 40):

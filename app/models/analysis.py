@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.timezone import now_ist
+
 
 class BestTimeSlot(BaseModel):
     """A recommended posting window for a specific day."""
@@ -34,5 +36,5 @@ class Analysis(BaseModel):
     category_analysis: list[CategoryAnalysis] = Field(default_factory=list)
     analysis_done_video_ids: list[str] = Field(default_factory=list)
     version: int = Field(1, ge=1, description="Auto-incremented on each update")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_ist)
+    updated_at: datetime = Field(default_factory=now_ist)

@@ -6,6 +6,8 @@ On registration, channel metadata is automatically fetched from YouTube.
 from datetime import datetime
 from typing import Optional
 
+from app.timezone import now_ist
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
@@ -169,7 +171,7 @@ async def create_channel(
             detail=f"Channel '{channel_id}' already exists",
         )
 
-    now = datetime.utcnow()
+    now = now_ist()
     doc = {
         "channel_id": channel_id,
         "youtube_channel_id": body.youtube_channel_id,
@@ -207,7 +209,7 @@ async def update_channel(
             detail="No fields to update",
         )
 
-    update_data["updated_at"] = datetime.utcnow()
+    update_data["updated_at"] = now_ist()
 
     result = await db.channels.update_one(
         {"channel_id": channel_id},
@@ -262,7 +264,7 @@ async def refresh_channel(
         "subscriber_count": yt_data.get("subscriber_count", 0),
         "video_count": yt_data.get("video_count", 0),
         "view_count": yt_data.get("view_count", 0),
-        "updated_at": datetime.utcnow(),
+        "updated_at": now_ist(),
     }
 
     await db.channels.update_one(

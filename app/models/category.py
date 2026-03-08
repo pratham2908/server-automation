@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.timezone import now_ist
+
 
 class CategoryStatus(str, Enum):
     """Lifecycle states for a category."""
@@ -42,8 +44,8 @@ class Category(BaseModel):
     status: CategoryStatus = CategoryStatus.ACTIVE
     video_count: int = 0
     metadata: CategoryMetadata = Field(default_factory=CategoryMetadata)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_ist)
+    updated_at: datetime = Field(default_factory=now_ist)
 
 
 class CategoryCreate(BaseModel):

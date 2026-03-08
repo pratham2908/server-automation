@@ -10,6 +10,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.timezone import now_ist
+
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
@@ -71,7 +73,7 @@ async def run_analysis(
     )
 
     # 2b  Exclude videos posted less than 3 days ago (not enough data yet).
-    three_days_ago = datetime.utcnow() - timedelta(days=3)
+    three_days_ago = now_ist() - timedelta(days=3)
     new_videos = [
         v for v in new_videos
         if v.get("created_at", datetime.min) <= three_days_ago
@@ -171,7 +173,7 @@ async def run_analysis(
         "category_analysis": updated.get("category_analysis", []),
         "analysis_done_video_ids": all_analysed,
         "version": version,
-        "updated_at": datetime.utcnow(),
+        "updated_at": now_ist(),
     }
 
     if existing_analysis:
@@ -180,7 +182,7 @@ async def run_analysis(
             {"$set": analysis_doc},
         )
     else:
-        analysis_doc["created_at"] = datetime.utcnow()
+        analysis_doc["created_at"] = now_ist()
         await db.analysis.insert_one(analysis_doc)
         
     logger.success(f"💾 Updated main analysis document v{version} in database")
@@ -197,7 +199,7 @@ async def run_analysis(
         },
         "total_analysed_count": len(all_analysed),
         "batch_count": (len(video_data) + BATCH_SIZE - 1) // BATCH_SIZE,
-        "created_at": datetime.utcnow(),
+        "created_at": now_ist(),
     }
     await db.analysis_history.insert_one(history_doc)
     

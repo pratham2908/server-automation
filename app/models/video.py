@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.timezone import now_ist
+
 
 class VideoStatus(str, Enum):
     """Allowed lifecycle states for a video."""
@@ -57,8 +59,8 @@ class Video(BaseModel):
         None,
         description="When the video was published on YouTube. Null until published.",
     )
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_ist)
+    updated_at: datetime = Field(default_factory=now_ist)
 
 
 class VideoCreate(BaseModel):
@@ -88,7 +90,7 @@ class PostingQueue(BaseModel):
     channel_id: str
     video_id: str = Field(..., description="References videos.video_id")
     position: int = Field(..., ge=1, description="1-based queue ordering")
-    added_at: datetime = Field(default_factory=datetime.utcnow)
+    added_at: datetime = Field(default_factory=now_ist)
 
 
 class ScheduleQueue(BaseModel):
@@ -106,4 +108,4 @@ class ScheduleQueue(BaseModel):
         None,
         description="The exact datetime (timezone-aware) when this video should be published on YouTube",
     )
-    added_at: datetime = Field(default_factory=datetime.utcnow)
+    added_at: datetime = Field(default_factory=now_ist)

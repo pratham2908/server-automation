@@ -34,6 +34,17 @@ X-API-Key: your-secret-key
 
 ---
 
+## Timezone Convention
+
+**All timestamps** throughout the system use **IST (GMT+5:30)** — both in the code and in the database.
+
+- A central helper `now_ist()` (in `app/timezone.py`) returns the current timezone-aware IST datetime.
+- All model `default_factory` values, all `created_at` / `updated_at` / `published_at` / `scheduled_at` / `added_at` fields use IST.
+- YouTube API publish dates are converted to IST before storage.
+- The scheduling engine uses `Asia/Kolkata` (equivalent to GMT+5:30) for computing publish slots.
+
+---
+
 ## API Endpoints
 
 Base URL: `http://localhost:8000`
@@ -735,7 +746,7 @@ Returns the history of analysis runs for the channel.
 
 Database: **MongoDB Atlas** (database name from `MONGODB_DB_NAME` env var, default: `youtube_automation`)
 
-All collections are shared across channels, with `channel_id` as a discriminator field.
+All collections are shared across channels, with `channel_id` as a discriminator field. All datetime fields are stored in **IST (GMT+5:30)**.
 
 ---
 
@@ -1006,6 +1017,12 @@ Audit trail — one document per analysis run. Stores the inputs and outputs of 
 - **Get video stats**: Fetches views, likes, comments, duration (from Data API `statistics` + `contentDetails`), plus computed engagement/like/comment rates. Also merges YouTube Analytics data (avg % viewed, avg view duration, estimated minutes watched) when available
 - **Get video analytics**: Queries the YouTube Analytics API for `averageViewPercentage`, `averageViewDuration`, and `estimatedMinutesWatched` per video. Batches by 40 IDs. Returns empty data for videos less than ~48 hours old (YouTube Analytics processing delay)
 - **Upload video**: Resumable upload in 10MB chunks, defaults to private. Accepts an optional `publish_at` ISO 8601 UTC datetime — when provided, the video is uploaded as private with YouTube's `publishAt` field so it auto-publishes at the scheduled time
+
+### Timezone Helper (`app/timezone.py`)
+
+- **`IST`** — a `timezone(timedelta(hours=5, minutes=30))` constant
+- **`now_ist()`** — returns the current datetime in IST, timezone-aware
+- Used by all models, routers, and services as the single source of truth for timestamps
 
 ### Scheduler Service (`app/services/scheduler.py`)
 

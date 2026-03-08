@@ -70,6 +70,7 @@ async def get_latest_analysis(
     """Return the latest analysis document for *channel_id*,
     plus counts of videos ready / not yet ready for analysis."""
     from datetime import datetime, timedelta
+    from app.timezone import now_ist
 
     doc = await db.analysis.find_one({"channel_id": channel_id})
     if not doc:
@@ -80,7 +81,7 @@ async def get_latest_analysis(
     doc.pop("_id", None)
 
     already_analysed = set(doc.get("analysis_done_video_ids", []))
-    three_days_ago = datetime.utcnow() - timedelta(days=3)
+    three_days_ago = now_ist() - timedelta(days=3)
 
     unanalysed = await db.videos.find(
         {

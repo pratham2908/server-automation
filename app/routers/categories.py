@@ -3,6 +3,8 @@
 from datetime import datetime
 from typing import List, Optional, Union
 
+from app.timezone import now_ist
+
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -62,7 +64,7 @@ async def add_categories(
     """
     items = body if isinstance(body, list) else [body]
 
-    now = datetime.utcnow()
+    now = now_ist()
     docs = [
         {
             "channel_id": channel_id,
@@ -107,7 +109,7 @@ async def update_category(
             detail="No fields to update",
         )
 
-    update_data["updated_at"] = datetime.utcnow()
+    update_data["updated_at"] = now_ist()
 
     try:
         oid = ObjectId(category_id)

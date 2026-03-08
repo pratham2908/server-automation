@@ -11,6 +11,7 @@ from typing import Any
 import pytz
 
 from app.logger import get_logger
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
@@ -61,7 +62,7 @@ async def schedule_single_video(
             publish_at=publish_at_str,
         )
 
-        now = datetime.utcnow()
+        now = now_ist()
 
         # Update video record.
         await db.videos.update_one(
