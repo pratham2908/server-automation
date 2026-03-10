@@ -221,6 +221,52 @@ class YouTubeService:
 
         return analytics
 
+    def get_subscribers_gained(
+        self, youtube_video_ids: list[str]
+    ) -> dict[str, int]:
+        """Fetch subscribers gained per video from the YouTube Analytics API.
+
+        Returns a dict keyed by ``youtube_video_id`` with the number of
+        subscribers gained by each video. Returns an empty dict if the
+        analytics client is unavailable.
+        """
+        if not self._youtube_analytics:
+            return {}
+
+        result: dict[str, int] = {}
+        today = now_ist().strftime("%Y-%m-%d")
+
+        for i in range(0, len(youtube_video_ids), 40):
+            batch = youtube_video_ids[i : i + 40]
+            try:
+                response = (
+                    self._youtube_analytics.reports()
+                    .query(
+                        ids="channel==MINE",
+                        startDate="2005-01-01",
+                        endDate=today,
+                        dimensions="video",
+                        metrics="subscribersGained",
+                        filters=f"video=={','.join(batch)}",
+                        maxResults=200,
+                    )
+                    .execute()
+                )
+            except Exception as exc:
+                logger.warning(
+                    "YouTube Analytics subscribersGained query failed: %s", exc
+                )
+                continue
+
+            headers = [h["name"] for h in response.get("columnHeaders", [])]
+            for row in response.get("rows", []):
+                row_dict = dict(zip(headers, row))
+                vid = row_dict.get("video")
+                if vid:
+                    result[vid] = int(row_dict.get("subscribersGained", 0))
+
+        return result
+
     def get_video_stats(
         self, youtube_video_ids: list[str]
     ) -> dict[str, dict[str, Any]]:

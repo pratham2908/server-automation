@@ -112,6 +112,32 @@ class GeminiService:
             logger.error("🚨 Failed to parse JSON from Gemini analysis response: %s", text)
             raise ValueError("Failed to parse Gemini analysis response")
 
+    async def analyze_single_video(
+        self,
+        video_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Analyze a single video's performance and produce AI insights.
+
+        Parameters
+        ----------
+        video_data:
+            Dict with title, category, content_params, and stats
+            (including subscribers_gained, views_per_subscriber).
+
+        Returns
+        -------
+        dict
+            ``{"performance_rating": 0-100, "what_worked": "...", "what_didnt": "...", "key_learnings": [...]}``
+        """
+        prompt = self._build_single_video_prompt(video_data)
+        text = await self._generate(prompt)
+
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            logger.error("Failed to parse Gemini per-video analysis response: %s", text)
+            raise ValueError("Failed to parse Gemini per-video analysis response")
+
     async def generate_video_content(
         self,
         channel_id: str,
@@ -206,14 +232,15 @@ class GeminiService:
             )
 
         return f"""You are a YouTube channel analytics expert. Analyze the following video
-performance data and produce a comprehensive channel analysis.
+performance data and produce a comprehensive channel summary.
 
-Each video has:
+Each video includes:
 - **title**: Use this to identify titling patterns that drive performance.
-- **content_params**: Custom content dimensions that define what the video is about. Analyze which parameter values and combinations correlate with the best performance.
-- **stats**: YouTube performance metrics.
+- **content_params**: Custom content dimensions that define what the video is about.
+- **stats**: YouTube performance metrics including `subscribers_gained` (how many new subs this video brought) and `views_per_subscriber` (reach beyond existing audience).
+- **ai_insight**: A per-video AI analysis with `performance_rating`, `what_worked`, `what_didnt`, and `key_learnings`. Use these to identify channel-wide patterns.
 
-Do NOT rely on description or tags for content analysis — use only title and content_params.
+Do NOT rely on description or tags — use only title, content_params, stats, and ai_insight.
 
 ## Video Data (Batch)
 ```json
@@ -262,23 +289,63 @@ Guidelines:
   - `times` = exactly `video_count` optimal posting times (HH:MM, 24-hour format).
 - **category_analysis**: For each content category:
   - Identify the most effective **title patterns** only (no description/tags analysis).
-  - Score each category from 0-100 based on engagement and retention.
+  - Score each category from 0-100 based on engagement, retention, AND subscriber growth impact.
 - **content_param_analysis**: For each content parameter dimension:
   - `best_values`: which parameter values correlate with highest performance.
   - `worst_values`: which values underperform.
   - `insight`: a concise explanation of the trend.
 - **best_combinations**: The top 3-5 combinations of content_params values that yield the best results. Include music recommendations.
+- **Subscriber-aware analysis**:
+  - `subscribers_gained` shows how many new subscribers each video brought. Videos with high subscribers_gained are especially valuable even if view counts are moderate.
+  - `views_per_subscriber` above 1.0 means the video reached beyond the existing audience — a strong viral signal.
+  - Factor these into category scores and combination rankings.
 - **Engagement metrics** (in `stats`):
   - `views`, `likes`, `comments` — raw counts.
-  - `engagement_rate` — (likes + comments) / views × 100.
-  - `like_rate`, `comment_rate` — individual rates.
-  - `duration_seconds` — video length.
+  - `engagement_rate` — (likes + comments) / views x 100.
   - `avg_percentage_viewed` — strongest signal of content quality.
   - `avg_view_duration_seconds`, `estimated_minutes_watched`.
-  High `avg_percentage_viewed` is the strongest signal. A video with fewer views
-  but high engagement_rate and avg_percentage_viewed is more valuable than one
-  with many views but low retention.
+- **Per-video AI insights**: Use the `ai_insight` field to identify recurring patterns in what works and what doesn't across videos. Aggregate `key_learnings` into your recommendations.
 - If previous analysis exists, **refine incrementally**."""
+
+    @staticmethod
+    def _build_single_video_prompt(video_data: dict[str, Any]) -> str:
+        return f"""You are a YouTube performance analyst. Analyze this single video's performance data and provide actionable insights.
+
+## Video Data
+```json
+{json.dumps(video_data, indent=2)}
+```
+
+## What Each Metric Means
+- **views**: Total view count.
+- **likes**, **comments**: Raw engagement counts.
+- **engagement_rate**: (likes + comments) / views x 100 — overall interaction rate.
+- **avg_percentage_viewed**: Average % of the video watched — the strongest signal of content quality.
+- **avg_view_duration_seconds**: Average watch time per view.
+- **estimated_minutes_watched**: Total accumulated watch time.
+- **subscribers_gained**: How many new subscribers this specific video brought in.
+- **views_per_subscriber**: views / channel subscriber count — measures reach beyond existing audience. Above 1.0 means the video reached far beyond subscribers.
+- **subscriber_count_at_analysis**: The channel's total subscriber count when this analysis was run (for context).
+
+## Required Output Format
+Return a JSON object with exactly these keys:
+
+{{
+  "performance_rating": 75,
+  "what_worked": "Clear explanation of why this video performed well or poorly",
+  "what_didnt": "What held this video back or could be improved",
+  "key_learnings": [
+    "Specific takeaway 1",
+    "Specific takeaway 2",
+    "Specific takeaway 3"
+  ]
+}}
+
+Guidelines:
+- **performance_rating**: Score from 0-100. Consider ALL metrics holistically. A video with modest views but high avg_percentage_viewed and strong subscribers_gained is better than one with many views but low retention.
+- **what_worked**: Be specific — mention the title style, content_params choices, engagement patterns. Reference actual numbers.
+- **what_didnt**: Be honest and constructive. If the video underperformed on a metric, explain why that matters and what could change.
+- **key_learnings**: 2-4 concise, actionable takeaways. These will be aggregated across all videos to identify channel-wide patterns."""
 
     @staticmethod
     def _build_content_prompt(

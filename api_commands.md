@@ -443,24 +443,33 @@ X-API-Key: <your-api-key>
 
 ## Analysis
 
-### Get Latest Analysis
+### Get Latest Channel Summary
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/analysis/latest`
 - **Method**: `GET`
-- **Response**: Analysis object plus `analysis_status`.
+- **Response**: Channel summary with `subscriber_count` and `analysis_status`.
 
 ```json
 {
   "channel_id": "ch1",
+  "subscriber_count": 5000,
   "version": 2,
   "category_analysis": [
     {
       "category": "Tutorials",
       "score": 85.5,
-      "reasoning": "High engagement on these videos."
+      "best_title_patterns": ["How to...", "10 Things..."]
     }
   ],
-  "best_times_to_post": ["14:00", "18:00"],
+  "best_posting_times": [
+    {"day_of_week": "monday", "video_count": 2, "times": ["14:00", "18:00"]}
+  ],
+  "content_param_analysis": [
+    {"param_name": "simulation_type", "best_values": ["battle"], "worst_values": ["puzzle"], "insight": "..."}
+  ],
+  "best_combinations": [
+    {"params": {"simulation_type": "battle", "music": "Epic"}, "reasoning": "..."}
+  ],
   "analysis_status": {
     "ready_for_analysis": 5,
     "not_ready_yet": 2
@@ -468,36 +477,85 @@ X-API-Key: <your-api-key>
 }
 ```
 
-- `ready_for_analysis`: published videos not yet analysed, older than 3 days
-- `not_ready_yet`: published videos not yet analysed, less than 3 days old (too recent)
+- `ready_for_analysis`: published videos not yet in `analysis_history`, older than 3 days
+- `not_ready_yet`: published videos not yet in `analysis_history`, less than 3 days old
 
 ### Trigger Analysis Update
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/analysis/update`
 - **Method**: `POST`
-- **Description**: Recalculates category scores and analysis using YouTube stats and Gemini.
-- **Response**: Returns the new Analysis object.
+- **Description**: Two-step pipeline: (1) per-video analysis with stats snapshot + AI insight stored in `analysis_history`, (2) channel summary aggregation. Includes subscriber count and subscribers gained per video.
+- **Response**: Returns the updated channel summary.
 
-### Get Analysis History
+### Get Per-Video Analyses (History)
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/analysis/history`
 - **Method**: `GET`
-- **Query Params**: `?limit=10` (optional)
-- **Response**: Array of analysis history objects.
+- **Query Params**:
+  - `from` (optional, datetime): Filter `analyzed_at >= from`
+  - `to` (optional, datetime): Filter `analyzed_at <= to`
+  - `limit` (optional, int, default 50): Max results
+- **Response**: Array of per-video analysis objects.
 
 ```json
 [
   {
     "channel_id": "ch1",
-    "version": 2,
-    "input_videos": [...],
-    "new_video_ids": [...],
-    "result": {...},
-    "total_analysed_count": 50,
-    "batch_count": 2,
-    "created_at": "2024-01-20T14:00:00Z"
+    "video_id": "uuid-1234",
+    "youtube_video_id": "dQw4w...",
+    "title": "Epic Battle Simulation",
+    "category": "Simulations",
+    "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+    "stats_snapshot": {
+      "views": 15000, "likes": 800, "comments": 45,
+      "engagement_rate": 5.63, "avg_percentage_viewed": 72.5,
+      "subscribers_gained": 120, "views_per_subscriber": 3.0,
+      "subscriber_count_at_analysis": 5000
+    },
+    "ai_insight": {
+      "performance_rating": 85,
+      "what_worked": "Strong title hook + battle format",
+      "what_didnt": "Could improve description SEO",
+      "key_learnings": ["Battle sims drive 3x engagement"]
+    },
+    "analyzed_at": "2026-03-07T12:00:00+05:30"
   }
 ]
+```
+
+### Get Single Video Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/analysis/history/{video_id}`
+- **Method**: `GET`
+- **Response**: Single per-video analysis object (same format as above).
+- **Errors**: `404` if no analysis exists for the video.
+
+### Compare Time Periods
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/analysis/compare`
+- **Method**: `GET`
+- **Query Params** (all required):
+  - `from1`, `to1`: Start and end of period 1
+  - `from2`, `to2`: Start and end of period 2
+- **Description**: Aggregates per-video analyses for each period and returns side-by-side averages.
+- **Response**:
+
+```json
+{
+  "channel_id": "ch1",
+  "period_1": {
+    "from": "2026-02-01T00:00:00", "to": "2026-02-15T00:00:00",
+    "video_count": 10, "avg_views": 12000,
+    "avg_engagement_rate": 4.5, "total_subscribers_gained": 500,
+    "avg_performance_rating": 72.3
+  },
+  "period_2": {
+    "from": "2026-02-16T00:00:00", "to": "2026-03-01T00:00:00",
+    "video_count": 12, "avg_views": 18000,
+    "avg_engagement_rate": 5.8, "total_subscribers_gained": 850,
+    "avg_performance_rating": 81.5
+  }
+}
 ```
 
 

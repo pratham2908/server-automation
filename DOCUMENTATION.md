@@ -13,11 +13,21 @@
 - [Database Schema](#database-schema)
   - [channels](#collection-channels)
   - [videos](#collection-videos)
-  - [video_queue](#collection-video_queue)
+  - [posting_queue (Ready Queue)](#collection-posting_queue-ready-queue)
+  - [schedule_queue (Scheduled Queue)](#collection-schedule_queue-scheduled-queue)
   - [categories](#collection-categories)
   - [analysis](#collection-analysis)
+  - [analysis_history](#collection-analysis_history)
 - [Services Architecture](#services-architecture)
 - [Data Flow Diagrams](#data-flow-diagrams)
+  - [Video Status Lifecycle](#video-status-lifecycle)
+  - [System Architecture](#system-architecture)
+  - [Video Upload and Schedule Flow](#video-upload-and-schedule-flow)
+  - [Sync Flow](#sync-flow)
+  - [Analysis Flow](#analysis-flow)
+  - [To-do Video Generation Flow](#to-do-video-generation-flow)
+  - [Content Params Extraction Flow](#content-params-extraction-flow)
+  - [Scheduling Slot Computation](#scheduling-slot-computation)
 
 ---
 
@@ -741,30 +751,35 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 
 #### `POST /update` — Run full analysis update
 
-**⚠️ Heavy endpoint** — calls YouTube API + Gemini AI. May take 30+ seconds.
+**Two-step pipeline** — calls YouTube API + Gemini AI. May take 30+ seconds.
 
-**What happens (step by step):**
+**Step 1 — Per-video analysis:**
 
-1. **Fetch done videos** from DB for this channel
-2. **Compute delta** — compare with already-analysed video IDs to find new ones
-3. **Exclude recent videos** — skip any with `created_at` less than 3 days ago (hard limit, no exceptions)
-4. **Early exit** if no new videos to analyse
-5. **Fetch YouTube stats** (views, likes, comments, duration, engagement rates) + **YouTube Analytics** (avg % viewed, avg view duration, est. minutes watched) for new videos
-6. **Send to Gemini in batches of 5** — each batch receives the running analysis from prior batches, so insights accumulate incrementally. Gemini analyzes only `title` + `content_params` + `stats` (not description/tags). Output now includes `content_param_analysis` (per-dimension insights) and `best_combinations` (top param combos)
-7. **Save updated analysis** to DB (increments version number)
-8. **Save audit snapshot** to `analysis_history` collection
-9. **Run to-do engine:**
-   - Updates **all category scores** from Gemini's analysis output
-   - Increments **category video_count** for each newly analysed video
-   - **Computes and saves category metadata** — aggregates avg views, likes, comments, engagement rates, avg % viewed, total watch time, etc. from all published videos in each category
-   - Archives categories with score < 30 AND ≥ 5 videos
-   - Note: It no longer auto-generates video ideas. Use the `/updateToDoList` endpoint to generate videos explicitly.
+1. **Fetch subscriber count** from YouTube via `get_channel_info()`
+2. **Fetch done videos** from DB for this channel
+3. **Compute delta** — compare with `analysis_history` collection to find videos not yet individually analysed
+4. **Exclude recent videos** — skip any with `created_at` less than 3 days ago (hard limit, no exceptions)
+5. **Fetch YouTube stats** (views, likes, comments, duration, engagement rates) + **YouTube Analytics** (avg % viewed, avg view duration, est. minutes watched, **subscribers gained**) for new videos
+6. **For each new video**: build a stats snapshot (including `views_per_subscriber`, `subscribers_gained`, `subscriber_count_at_analysis`), send to **Gemini for individual analysis** → get `performance_rating` (0-100), `what_worked`, `what_didnt`, `key_learnings`
+7. **Store each result** in `analysis_history` collection (one doc per video, never re-analysed)
+
+**Step 2 — Channel summary:**
+
+8. **Fetch ALL per-video analyses** from `analysis_history` for this channel
+9. **Send to Gemini in batches of 5** — each batch includes per-video AI insights alongside stats and content_params. Gemini produces collective channel insights: `best_posting_times`, `category_analysis`, `content_param_analysis`, `best_combinations`
+10. **Save channel summary** to `analysis` collection with `subscriber_count` (increments version)
+11. **Run to-do engine:**
+    - Updates **all category scores** from Gemini's analysis output
+    - Increments **category video_count** for each newly analysed video
+    - **Computes and saves category metadata** — aggregates avg views, likes, comments, engagement rates, avg % viewed, total watch time, etc. from all published videos in each category
+    - Archives categories with score < 30 AND ≥ 5 videos
 
 **Response (200):**
 
 ```json
 {
   "channel_id": "tech-tips",
+  "subscriber_count": 5000,
   "best_posting_times": [
     {
       "day_of_week": "monday",
@@ -802,15 +817,16 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 
 ---
 
-#### `GET /latest` — Get latest analysis
+#### `GET /latest` — Get latest channel summary
 
-Returns the most recent analysis document for the channel, plus an `analysis_status` summary showing how many published videos are ready for analysis and how many are too recent (< 3 days old).
+Returns the most recent channel summary for the channel, including `subscriber_count` and an `analysis_status` summary.
 
 **Response (200):** Same format as the POST response above, with an additional `analysis_status` field:
 
 ```json
 {
   "...all analysis fields...",
+  "subscriber_count": 5000,
   "analysis_status": {
     "ready_for_analysis": 5,
     "not_ready_yet": 2
@@ -818,22 +834,24 @@ Returns the most recent analysis document for the channel, plus an `analysis_sta
 }
 ```
 
-- `ready_for_analysis` — published videos not yet analysed and older than 3 days (will be included in the next analysis run)
-- `not_ready_yet` — published videos not yet analysed but less than 3 days old (too recent, not enough YouTube data)
+- `ready_for_analysis` — published videos not yet in `analysis_history` and older than 3 days
+- `not_ready_yet` — published videos not yet in `analysis_history` but less than 3 days old
 
 **Errors:** `404` — No analysis exists yet for this channel.
 
 ---
 
-#### `GET /history` — Get analysis history
+#### `GET /history` — Get per-video analyses
 
-Returns the history of analysis runs for the channel.
+Returns per-video analyses from the `analysis_history` collection. Each document represents a single video's stats snapshot + AI insight.
 
 **Query params:**
 
-| Param   | Type | Default | Description                   |
-| ------- | ---- | ------- | ----------------------------- |
-| `limit` | int  | 10      | Max number of history records |
+| Param   | Type     | Default | Description                           |
+| ------- | -------- | ------- | ------------------------------------- |
+| `from`  | datetime | —       | Filter `analyzed_at >= from`          |
+| `to`    | datetime | —       | Filter `analyzed_at <= to`            |
+| `limit` | int      | 50      | Max number of results                 |
 
 **Response (200):**
 
@@ -841,15 +859,89 @@ Returns the history of analysis runs for the channel.
 [
   {
     "channel_id": "tech-tips",
-    "version": 3,
-    "input_videos": [ ... ],
-    "new_video_ids": ["vid1", "vid2"],
-    "result": { ... },
-    "total_analysed_count": 50,
-    "batch_count": 2,
-    "created_at": "2024-01-20T14:00:00Z"
+    "video_id": "uuid-1234",
+    "youtube_video_id": "dQw4w...",
+    "title": "Epic Battle Simulation",
+    "category": "Simulations",
+    "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+    "stats_snapshot": {
+      "views": 15000,
+      "likes": 800,
+      "comments": 45,
+      "engagement_rate": 5.63,
+      "avg_percentage_viewed": 72.5,
+      "subscribers_gained": 120,
+      "views_per_subscriber": 3.0,
+      "subscriber_count_at_analysis": 5000
+    },
+    "ai_insight": {
+      "performance_rating": 85,
+      "what_worked": "Strong title hook + battle format",
+      "what_didnt": "Could improve description SEO",
+      "key_learnings": ["Battle sims drive 3x engagement"]
+    },
+    "analyzed_at": "2026-03-07T12:00:00+05:30"
   }
 ]
+```
+
+---
+
+#### `GET /history/{video_id}` — Get single video analysis
+
+Returns the per-video analysis for a specific video.
+
+**Response (200):** Single per-video analysis document (same format as above).
+
+**Errors:** `404` — No analysis found for this video.
+
+---
+
+#### `GET /compare` — Compare time periods
+
+Aggregates per-video analyses across two time periods for side-by-side comparison.
+
+**Query params (all required):**
+
+| Param   | Type     | Description           |
+| ------- | -------- | --------------------- |
+| `from1` | datetime | Start of period 1     |
+| `to1`   | datetime | End of period 1       |
+| `from2` | datetime | Start of period 2     |
+| `to2`   | datetime | End of period 2       |
+
+**Response (200):**
+
+```json
+{
+  "channel_id": "tech-tips",
+  "period_1": {
+    "from": "2026-02-01T00:00:00",
+    "to": "2026-02-15T00:00:00",
+    "video_count": 10,
+    "avg_views": 12000,
+    "avg_likes": 650,
+    "avg_comments": 35,
+    "avg_engagement_rate": 4.5,
+    "avg_percentage_viewed": 68.2,
+    "avg_views_per_subscriber": 2.4,
+    "total_subscribers_gained": 500,
+    "avg_performance_rating": 72.3
+  },
+  "period_2": {
+    "from": "2026-02-16T00:00:00",
+    "to": "2026-03-01T00:00:00",
+    "video_count": 12,
+    "avg_views": 18000,
+    "avg_likes": 950,
+    "avg_comments": 52,
+    "avg_engagement_rate": 5.8,
+    "avg_percentage_viewed": 74.1,
+    "avg_views_per_subscriber": 3.6,
+    "total_subscribers_gained": 850,
+    "avg_performance_rating": 81.5
+  }
+}
 ```
 
 ---
@@ -1054,17 +1146,18 @@ Stores content categories with their performance scores.
 
 ### Collection: `analysis`
 
-Stores the AI-generated channel analysis. **One document per channel.**
+Stores the AI-generated channel summary. **One document per channel.**
 
 ```json
 {
   "_id": "ObjectId",
   "channel_id": "tech-tips",
+  "subscriber_count": 5000, // channel's subscriber count at last analysis
   "best_posting_times": [
     {
       "day_of_week": "monday",
-      "video_count": 2, // post 2 videos on Monday
-      "times": ["10:00", "14:00"] // exactly video_count entries
+      "video_count": 2,
+      "times": ["10:00", "14:00"]
     }
   ],
   "category_analysis": [
@@ -1074,7 +1167,7 @@ Stores the AI-generated channel analysis. **One document per channel.**
       "score": 85.5
     }
   ],
-  "content_param_analysis": [  // per-dimension performance insights
+  "content_param_analysis": [
     {
       "param_name": "simulation_type",
       "best_values": ["battle", "survival"],
@@ -1082,13 +1175,13 @@ Stores the AI-generated channel analysis. **One document per channel.**
       "insight": "Battle simulations get 3x more engagement"
     }
   ],
-  "best_combinations": [  // top parameter value combos
+  "best_combinations": [
     {
       "params": {"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "Epic Orchestral"},
       "reasoning": "Highest avg_percentage_viewed at 72%"
     }
   ],
-  "analysis_done_video_ids": ["vid1", "vid2"], // prevents re-analysing
+  "analysis_done_video_ids": ["vid1", "vid2"], // tracks which videos have been analysed
   "version": 3, // auto-incremented
   "created_at": "datetime",
   "updated_at": "datetime"
@@ -1104,33 +1197,54 @@ Stores the AI-generated channel analysis. **One document per channel.**
 
 ### Collection: `analysis_history`
 
-Audit trail — one document per analysis run. Stores the inputs and outputs of each run for later review.
+Per-video analysis storage — **one document per video**, created once and never re-analysed. Each document contains the video's stats snapshot at analysis time plus AI-generated insights.
 
 ```json
 {
   "_id": "ObjectId",
   "channel_id": "tech-tips",
-  "version": 3,
-  "input_videos": [                // videos sent to Gemini
-    {"title": "...", "category": "...", "content_params": {...}, "stats": {...}}
-  ],
-  "new_video_ids": ["vid5", "vid6"],   // video_ids that were new in this run
-  "result": {
-    "best_posting_times": [...],       // Gemini's output
-    "category_analysis": [...],
-    "content_param_analysis": [...],
-    "best_combinations": [...]
+  "video_id": "uuid-1234",
+  "youtube_video_id": "dQw4w...",
+  "title": "Epic Battle Simulation",
+  "category": "Simulations",
+  "content_params": {
+    "simulation_type": "battle",
+    "challenge_mechanic": "1v1",
+    "music": "Epic Orchestral - Two Steps From Hell"
   },
-  "total_analysed_count": 20,          // total videos analysed so far
-  "batch_count": 2,                    // how many Gemini batches were used
-  "created_at": "datetime"
+  "stats_snapshot": {
+    "views": 15000,
+    "likes": 800,
+    "comments": 45,
+    "duration_seconds": 35,
+    "engagement_rate": 5.63,
+    "like_rate": 5.33,
+    "comment_rate": 0.3,
+    "avg_percentage_viewed": 72.5,
+    "avg_view_duration_seconds": 25,
+    "estimated_minutes_watched": 6250.0,
+    "subscribers_gained": 120, // from YouTube Analytics API
+    "views_per_subscriber": 3.0, // views / channel subscriber count
+    "subscriber_count_at_analysis": 5000 // channel subs when analysed
+  },
+  "ai_insight": {
+    "performance_rating": 85, // 0-100 score
+    "what_worked": "Strong title hook + battle format drove high CTR",
+    "what_didnt": "Could improve description SEO for discoverability",
+    "key_learnings": [
+      "Battle sims drive 3x engagement vs other types",
+      "Epic music correlates with higher avg_percentage_viewed"
+    ]
+  },
+  "analyzed_at": "datetime"
 }
 ```
 
 **Indexes:**
 | Fields | Type | Purpose |
 |---|---|---|
-| `(channel_id, created_at)` | Compound (desc) | Fast reverse-chronological audit queries |
+| `(channel_id, video_id)` | Compound (unique) | One analysis per video per channel |
+| `(channel_id, analyzed_at)` | Compound (desc) | Fast reverse-chronological queries and date filtering |
 
 ---
 
@@ -1168,9 +1282,14 @@ Audit trail — one document per analysis run. Stores the inputs and outputs of 
 - Returns timezone-aware datetimes (timezone from `TIMEZONE` env var, default `Asia/Kolkata`)
 - Safety cap of 52 weeks forward
 
+### YouTube Service (`app/services/youtube.py`) — Additional Methods
+
+- **Get subscribers gained**: `get_subscribers_gained(youtube_video_ids)` — queries YouTube Analytics API for `subscribersGained` per video. Returns `dict[youtube_video_id, int]`. Batches by 40 IDs.
+
 ### Gemini Service (`app/services/gemini.py`)
 
-- **Analyze videos**: Sends video data (title + content_params + stats) + previous analysis + content_schema → returns updated analysis JSON including `content_param_analysis` and `best_combinations`
+- **Analyze single video**: `analyze_single_video(video_data)` — sends a single video's title, content_params, and stats (including `subscribers_gained`, `views_per_subscriber`) to Gemini → returns `performance_rating` (0-100), `what_worked`, `what_didnt`, `key_learnings`
+- **Analyze videos (channel summary)**: Sends aggregated per-video data (now including `ai_insight` per video) + previous analysis + content_schema → returns updated channel summary JSON
 - **Generate content**: Given a category + its analysis insights + content_schema + content_param_analysis + best_combinations → generates title, description, tags, and `content_params` (with music) for new videos
 - **Model fallback chain**: Tries models in order — if one fails (rate limit, error), automatically falls back to the next:
   1. `gemini-3.1-pro-preview`
@@ -1180,7 +1299,10 @@ Audit trail — one document per analysis run. Stores the inputs and outputs of 
 
 ### Analysis Engine (`app/services/analysis_engine.py`)
 
-Orchestrates the full analysis pipeline: delta computation → 3-day filter → YouTube stats → **Gemini analysis in batches of 5** (each batch receives the running analysis, so insights accumulate) → DB save → audit snapshot → to-do engine.
+Two-step pipeline:
+
+1. **Step 1 — Per-video analysis**: For each published video not yet in `analysis_history`: fetch subscriber count + subscribers gained → build stats snapshot with `views_per_subscriber` → send to Gemini individually → store in `analysis_history`
+2. **Step 2 — Channel summary**: Aggregate all per-video analyses → send to Gemini in batches of 5 (with AI insights) → save channel summary to `analysis` with `subscriber_count` → run to-do engine
 
 ### To-do Engine (`app/services/todo_engine.py`)
 
@@ -1197,63 +1319,273 @@ To-do video generation is triggered separately via the `/updateToDoList` endpoin
 
 ## Data Flow Diagrams
 
-### Video Upload & Schedule Flow
+### Video Status Lifecycle
 
+```mermaid
+stateDiagram-v2
+    [*] --> todo: Gemini generates idea\n(updateToDoList)
+    todo --> ready: Client uploads file\n(POST /upload)
+    ready --> scheduled: Server uploads to YouTube\nwith publishAt\n(POST /schedule)
+    scheduled --> published: YouTube auto-publishes\nat scheduled time\n(reconciled by /sync)
+
+    note right of todo: Idea only.\nNo file exists yet.
+    note right of ready: File in R2.\nSitting in ready queue.
+    note right of scheduled: Private on YouTube\nwith publishAt set.\nSitting in scheduled queue.
+    note right of published: Live on YouTube.\nQueue entries removed.
 ```
-Client                    Server                   R2                YouTube
-  |                         |                      |                    |
-  |-- POST /videos/upload ->|                      |                    |
-  |   (file)                 |                      |                    |
-  |                         |-- upload_fileobj --->|                    |
-  |                         |   (streaming)        |                    |
-  |                         |                      |                    |
-  |                         |-- insert video doc (MongoDB, status=ready)|
-  |                         |-- insert into ready queue (MongoDB)       |
-  |<-- 201 {video, pos} ----|                      |                    |
-  |                         |                      |                    |
-  |-- POST /schedule/all -->|                      |                    |
-  |                         |-- compute publish slot (best_posting_times)|
-  |                         |-- download_fileobj --|                    |
-  |                         |   (to temp file)     |                    |
-  |                         |                      |                    |
-  |                         |-- resumable upload (private+publishAt) -->|
-  |                         |   (10MB chunks)      |                    |
-  |                         |                      |                    |
-  |                         |  ON SUCCESS:         |                    |
-  |                         |-- set youtube_video_id, scheduled_at, status=scheduled|
-  |                         |-- remove from ready queue (MongoDB)       |
-  |                         |-- insert into scheduled queue (MongoDB)   |
-  |                         |-- delete temp file   |                    |
-  |<-- {scheduled, failed} -|                      |                    |
-  |                         |                      |                    |
-  |  ... YouTube auto-publishes at publishAt ...   |                    |
-  |                         |                      |                    |
-  |-- POST /videos/sync --->|                      |                    |
-  |                         |-- reconcile: status=published, published_at|
-  |                         |-- remove from scheduled queue (MongoDB)   |
+
+### System Architecture
+
+```mermaid
+flowchart TB
+    subgraph client [Client]
+        VideoCreator["Video Creator\n(makes the actual videos)"]
+    end
+
+    subgraph server [Automation Server]
+        API["FastAPI API"]
+        AnalysisEngine["Analysis Engine"]
+        TodoEngine["To-do Engine"]
+        Scheduler["Scheduler Service"]
+        GeminiSvc["Gemini Service"]
+        YTSvc["YouTube Service"]
+        R2Svc["R2 Service"]
+    end
+
+    subgraph external [External Services]
+        MongoDB[(MongoDB Atlas)]
+        R2[(Cloudflare R2)]
+        YouTube["YouTube API"]
+        Gemini["Google Gemini AI"]
+    end
+
+    VideoCreator -->|"GET /videos\n(fetch todo list)"| API
+    VideoCreator -->|"POST /upload\n(send video file)"| API
+
+    API --> AnalysisEngine
+    API --> TodoEngine
+    API --> Scheduler
+
+    AnalysisEngine --> GeminiSvc
+    AnalysisEngine --> YTSvc
+    TodoEngine --> GeminiSvc
+
+    Scheduler -->|"compute slots from\nbest_posting_times"| API
+
+    GeminiSvc --> Gemini
+    YTSvc --> YouTube
+    R2Svc --> R2
+    API --> MongoDB
+```
+
+### Video Upload and Schedule Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    participant R2 as Cloudflare R2
+    participant YT as YouTube
+
+    Note over C,YT: Phase 1: Upload video file
+
+    C->>S: POST /videos/{id}/upload (file)
+    S->>R2: Stream file upload
+    R2-->>S: OK
+    S->>S: Update video: status=ready, r2_object_key
+    S->>S: Insert into ready queue
+    S-->>C: 201 {video, queue_position}
+
+    Note over C,YT: Phase 2: Schedule (upload to YouTube)
+
+    C->>S: POST /videos/{id}/schedule (or "all")
+    S->>S: Load best_posting_times from analysis
+    S->>S: Find occupied slots in scheduled queue
+    S->>S: Compute next available publish slot(s)
+
+    loop For each video
+        S->>R2: Download video to temp file
+        R2-->>S: File stream
+        S->>YT: Resumable upload (private + publishAt)
+        YT-->>S: youtube_video_id
+        S->>S: Set youtube_video_id, scheduled_at, status=scheduled
+        S->>S: Remove from ready queue
+        S->>S: Insert into scheduled queue
+        S->>S: Delete temp file
+    end
+
+    S-->>C: {scheduled: N, failed: M, videos: [...]}
+
+    Note over C,YT: Phase 3: Auto-publish and reconcile
+
+    Note over YT: YouTube auto-publishes at publishAt time
+    C->>S: POST /videos/sync
+    S->>YT: Check video status
+    YT-->>S: Video is public
+    S->>S: Set status=published, published_at
+    S->>S: Remove from scheduled queue
+```
+
+### Sync Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    participant YT as YouTube Data API
+    participant YTA as YouTube Analytics API
+    participant G as Gemini AI
+    participant DB as MongoDB
+
+    C->>S: POST /videos/sync
+
+    S->>YT: Fetch all video IDs (uploads playlist)
+    YT-->>S: Video IDs (paginated)
+    S->>YT: Fetch snippet + stats + contentDetails (batches of 50)
+    YT-->>S: Title, views, likes, duration, etc.
+    S->>YTA: Fetch analytics (avg % viewed, watch time)
+    YTA-->>S: Analytics data
+
+    Note over S,DB: Step 1: Refresh existing videos
+    S->>DB: Update metadata for all existing published videos
+
+    Note over S,DB: Step 2: Reconcile scheduled videos
+    S->>DB: Find scheduled videos that are now live on YouTube
+    S->>DB: Mark as published, remove from scheduled queue
+
+    Note over S,G: Step 3: Categorize new videos
+    loop Batches of 5 new videos
+        S->>G: Extract content_params + derive category
+        G-->>S: {content_params, category} per video
+        S->>DB: Auto-create new categories if needed
+    end
+
+    Note over S,DB: Step 4: Insert new videos
+    S->>DB: Insert all new videos (status=published)
+
+    S-->>C: {synced, reconciled, metadata_refreshed, videos}
 ```
 
 ### Analysis Flow
 
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    participant YT as YouTube API
+    participant YTA as YouTube Analytics API
+    participant G as Gemini AI
+    participant DB as MongoDB
+
+    C->>S: POST /analysis/update
+
+    S->>YT: Fetch subscriber count
+    YT-->>S: subscriber_count
+
+    S->>DB: Fetch published videos
+    S->>DB: Check analysis_history for already-analysed video_ids
+    S->>S: Compute delta + exclude videos < 3 days old
+
+    S->>YT: Fetch stats for new videos
+    YT-->>S: views, likes, comments, duration
+    S->>YTA: Fetch subscribers gained per video
+    YTA-->>S: subscribers_gained mapping
+
+    Note over S,G: Step 1: Per-video analysis
+    loop For each new video
+        S->>S: Build stats snapshot (+ views_per_subscriber, subscribers_gained)
+        S->>G: Analyze single video
+        G-->>S: {performance_rating, what_worked, what_didnt, key_learnings}
+        S->>DB: Insert into analysis_history (one doc per video)
+    end
+
+    Note over S,G: Step 2: Channel summary
+    S->>DB: Fetch ALL per-video analyses for channel
+    loop Batches of 5 per-video analyses
+        S->>G: Send batch (stats + ai_insight) + running analysis + content_schema
+        G-->>S: Updated channel summary
+    end
+
+    S->>DB: Save channel summary to analysis (version++, subscriber_count)
+
+    Note over S,DB: Post-analysis: To-do engine
+    S->>DB: Update category scores from Gemini output
+    S->>DB: Increment category video_count
+    S->>DB: Compute and save category metadata
+    S->>DB: Archive categories (score < 30 and >= 5 videos)
+
+    S-->>C: Updated analysis document
 ```
-Client                    Server              YouTube API         Gemini AI
-  |                         |                      |                   |
-  |-- POST /analysis/update |                      |                   |
-  |                         |-- fetch done videos (MongoDB)            |
-  |                         |-- compute delta (new vs analysed)        |
-  |                         |                      |                   |
-  |                         |-- get_video_stats -->|                   |
-  |                         |<-- views/likes/dur --|                   |
-  |                         |-- get_video_analytics|                   |
-  |                         |<-- avg%/watchtime ---|                   |
-  |                         |                      |                   |
-  |                         |-- analyze_videos ---------------------->|
-  |                         |   (video data + stats + prev analysis)  |
-  |                         |<-- updated analysis --------------------|
-  |                         |                      |                   |
-  |                         |-- save analysis (MongoDB)                |
-  |                         |-- compute category metadata (MongoDB)    |
-  |                         |-- archive bad categories (MongoDB)       |
-  |                         |                      |                   |
-  |<-- updated analysis ----|                      |                   |
+
+### To-do Video Generation Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    participant G as Gemini AI
+    participant DB as MongoDB
+
+    C->>S: POST /updateToDoList {n: 5}
+
+    S->>DB: Fetch active categories (with analysis insights)
+    S->>DB: Fetch channel's content_schema
+    S->>DB: Fetch latest analysis (category_analysis, content_param_analysis, best_combinations)
+
+    S->>S: Distribute N slots across categories weighted by score
+
+    loop For each category with slots
+        S->>DB: Fetch existing titles + content_params (to avoid duplicates)
+        S->>G: Generate ideas (category insights + content_schema + existing titles)
+        G-->>S: [{title, description, tags, content_params}, ...]
+        S->>DB: Insert new videos (status=todo, content_params_status=verified)
+    end
+
+    S-->>C: {ok: true, message: "Generated N videos"}
+```
+
+### Content Params Extraction Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    participant G as Gemini AI
+    participant DB as MongoDB
+
+    C->>S: POST /extract-params/{video_id} (or /extract-params/all)
+
+    S->>DB: Fetch channel's content_schema
+    S->>DB: Fetch video(s) needing extraction
+
+    loop For each video
+        S->>G: Extract params from title + description + tags using content_schema
+        G-->>S: {param1: value1, param2: value2, music: "..."}
+        S->>DB: Save content_params, set content_params_status=unverified
+    end
+
+    S-->>C: {ok, extracted, content_params}
+
+    Note over C,S: Later: client reviews and verifies
+    C->>S: POST /verify-params/{video_id} (optional corrections)
+    S->>DB: Set content_params_status=verified
+```
+
+### Scheduling Slot Computation
+
+```mermaid
+flowchart TD
+    A["Load best_posting_times\nfrom analysis"] --> B["Build weekly slot calendar\n(day + time pairs)"]
+    B --> C["Load occupied slots\nfrom scheduled queue"]
+    C --> D["Start from current time\nin IST (GMT+5:30)"]
+    D --> E{"Slot in the past?"}
+    E -->|Yes| F["Skip"]
+    E -->|No| G{"Slot already\noccupied?"}
+    G -->|Yes| F
+    G -->|No| H["Assign to next video"]
+    H --> I{"All videos\nassigned?"}
+    I -->|No| J["Move to next slot\n(same week or next week)"]
+    J --> E
+    I -->|Yes| K["Return list of\ntimezone-aware datetimes"]
+    F --> J
 ```

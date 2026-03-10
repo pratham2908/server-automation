@@ -1,6 +1,7 @@
 """Analysis Pydantic models."""
 
 from datetime import datetime
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -42,10 +43,25 @@ class BestCombination(BaseModel):
     reasoning: str = ""
 
 
-class Analysis(BaseModel):
-    """Top-level analysis document (one per channel)."""
+class VideoAnalysis(BaseModel):
+    """Per-video analysis stored in analysis_history — created once, never re-analyzed."""
 
     channel_id: str
+    video_id: str
+    youtube_video_id: Optional[str] = None
+    title: str = ""
+    category: str = ""
+    content_params: Optional[dict[str, str]] = None
+    stats_snapshot: dict[str, Any] = Field(default_factory=dict)
+    ai_insight: dict[str, Any] = Field(default_factory=dict)
+    analyzed_at: datetime = Field(default_factory=now_ist)
+
+
+class Analysis(BaseModel):
+    """Top-level channel summary document (one per channel)."""
+
+    channel_id: str
+    subscriber_count: Optional[int] = None
     best_posting_times: list[BestTimeSlot] = Field(default_factory=list)
     category_analysis: list[CategoryAnalysis] = Field(default_factory=list)
     content_param_analysis: list[ContentParamAnalysis] = Field(default_factory=list)

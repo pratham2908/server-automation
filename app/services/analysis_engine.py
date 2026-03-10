@@ -2,8 +2,12 @@ from __future__ import annotations
 
 """Analysis engine – orchestrates the full analysis update flow.
 
-Coordinates between the database, YouTube API, and Gemini AI to produce
-an incremental channel analysis.
+Two-step pipeline:
+  Step 1: Per-video analysis — each new video gets an individual Gemini
+          analysis with stats snapshot, stored in ``analysis_history``.
+  Step 2: Channel summary  — aggregates all per-video analyses into
+          collective insights (best times, category scores, content param
+          analysis, best combinations), stored in ``analysis``.
 """
 
 import logging
@@ -30,112 +34,114 @@ async def run_analysis(
 ) -> dict[str, Any]:
     """Execute the full analysis pipeline for *channel_id*.
 
-    Flow
-    ----
-    1. Fetch all "published" videos from DB.
-    2. Compute delta against already-analysed video IDs.
-    3. If no new videos, return early.
-    4. Fetch YouTube stats for new videos.
-    5. Send data + previous analysis to Gemini.
-    6. Save updated analysis to DB.
-    7. Run the to-do list engine.
-    8. Return the updated analysis document.
+    Step 1 — Per-video analysis
+    ---------------------------
+    For each published video not yet in ``analysis_history``:
+      a. Build a stats snapshot (YouTube metrics + subscriber data).
+      b. Send to Gemini for individual AI analysis.
+      c. Store the result in ``analysis_history`` (one doc per video).
+
+    Step 2 — Channel summary
+    ------------------------
+    Aggregate all per-video analyses and send to Gemini to produce
+    collective insights. Store in ``analysis`` (one doc per channel).
+    Run the todo engine afterwards.
     """
-    # 1  Fetch done videos
-    done_videos = await db.videos.find(
-        {"channel_id": channel_id, "status": "published"}
-    ).to_list(length=None)
-    
     logger.info(
         "📥 Request received to analyze channel '%s'",
         channel_id,
         extra={"color": "CYAN"},
     )
 
-    # 2  Compute delta
-    existing_analysis = await db.analysis.find_one({"channel_id": channel_id})
-    already_analysed: set[str] = set()
-    if existing_analysis:
-        already_analysed = set(
-            existing_analysis.get("analysis_done_video_ids", [])
-        )
+    # ------------------------------------------------------------------
+    # Fetch channel info (subscriber count) from YouTube
+    # ------------------------------------------------------------------
+    channel_doc = await db.channels.find_one({"channel_id": channel_id})
+    if not channel_doc:
+        return {}
+
+    youtube_channel_id = channel_doc.get("youtube_channel_id", "")
+    content_schema = channel_doc.get("content_schema", [])
+
+    subscriber_count = 0
+    try:
+        channel_info = youtube_service.get_channel_info(youtube_channel_id)
+        subscriber_count = channel_info.get("subscriber_count", 0)
+    except Exception as exc:
+        logger.warning("Could not fetch subscriber count: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Step 1: Per-video analysis
+    # ------------------------------------------------------------------
+    done_videos = await db.videos.find(
+        {"channel_id": channel_id, "status": "published"}
+    ).to_list(length=None)
+
+    already_analysed_ids: set[str] = set()
+    async for doc in db.analysis_history.find(
+        {"channel_id": channel_id}, {"video_id": 1}
+    ):
+        already_analysed_ids.add(doc["video_id"])
 
     new_videos = [
-        v for v in done_videos if v["video_id"] not in already_analysed
+        v for v in done_videos if v["video_id"] not in already_analysed_ids
     ]
-    
+
     logger.info(
-        "📊 Computing delta: Found %d 'done' videos total, %d already analysed, %d remaining.",
+        "📊 Found %d published videos, %d already analysed, %d new to analyse.",
         len(done_videos),
-        len(already_analysed),
+        len(already_analysed_ids),
         len(new_videos),
         extra={"color": "BLUE"},
     )
 
-    # 2b  Exclude videos posted less than 3 days ago (not enough data yet).
+    # Exclude videos less than 3 days old.
     from app.timezone import IST
     three_days_ago = now_ist() - timedelta(days=3)
-    
+
     filtered_videos = []
     for v in new_videos:
         v_created_at = v.get("created_at")
         if not v_created_at:
-            # If no date, assume it's old enough
             filtered_videos.append(v)
             continue
-        
-        # Ensure aware comparison
         if v_created_at.tzinfo is None:
             v_created_at = v_created_at.replace(tzinfo=IST)
-            
         if v_created_at <= three_days_ago:
             filtered_videos.append(v)
-            
+
     new_videos = filtered_videos
-    
-    skipped = len(done_videos) - len(already_analysed) - len(new_videos)
+
+    skipped = len(done_videos) - len(already_analysed_ids) - len(new_videos)
     if skipped > 0:
         logger.warning("⏳ 3-Day Filter: Skipped %d recent videos.", skipped)
 
-    # 3  Early exit
-    if not new_videos:
-        if existing_analysis:
-            existing_analysis.pop("_id", None)
-        return existing_analysis or {}
-
-    # 4  Fetch YouTube stats for videos that have a youtube_video_id
-    yt_ids = [
-        v["youtube_video_id"]
-        for v in new_videos
-        if v.get("youtube_video_id")
-    ]
+    # Fetch YouTube stats + subscribers gained for new videos
+    yt_ids = [v["youtube_video_id"] for v in new_videos if v.get("youtube_video_id")]
     yt_stats: dict[str, Any] = {}
+    subs_gained: dict[str, int] = {}
+
     if yt_ids:
         logger.info(
-            "📡 Fetching updated YouTube stats for %d videos...",
+            "📡 Fetching YouTube stats + subscribers gained for %d videos...",
             len(yt_ids),
             extra={"color": "CYAN"},
         )
         yt_stats = youtube_service.get_video_stats(yt_ids)
+        subs_gained = youtube_service.get_subscribers_gained(yt_ids)
 
-    # Fetch channel's content_schema for param-level analysis
-    channel_doc = await db.channels.find_one({"channel_id": channel_id})
-    content_schema = (channel_doc or {}).get("content_schema", [])
-
-    # Enrich video data with stats — only title, category, content_params, stats
-    video_data: list[dict[str, Any]] = []
+    # Analyze each new video individually
+    per_video_count = 0
     for v in new_videos:
-        entry: dict[str, Any] = {
-            "title": v.get("title", ""),
-            "category": v.get("category", ""),
-            "content_params": v.get("content_params") or {},
-        }
         yt_id = v.get("youtube_video_id")
+
+        # Build stats snapshot
+        stats: dict[str, Any] = {}
         if yt_id and yt_id in yt_stats:
-            entry["stats"] = yt_stats[yt_id]
+            stats = dict(yt_stats[yt_id])
         else:
             meta = v.get("metadata") or {}
-            stored_stats = {
+            stats = {
                 k: meta[k]
                 for k in (
                     "views", "likes", "comments", "duration_seconds",
@@ -145,11 +151,92 @@ async def run_analysis(
                 )
                 if meta.get(k) is not None
             }
-            if stored_stats:
-                entry["stats"] = stored_stats
-        video_data.append(entry)
 
-    # 5  Send to Gemini in batches of 5
+        stats["subscribers_gained"] = subs_gained.get(yt_id, 0) if yt_id else 0
+        stats["subscriber_count_at_analysis"] = subscriber_count
+        views = stats.get("views", 0) or 0
+        stats["views_per_subscriber"] = (
+            round(views / subscriber_count, 4) if subscriber_count > 0 else 0
+        )
+
+        video_data_for_gemini = {
+            "title": v.get("title", ""),
+            "category": v.get("category", ""),
+            "content_params": v.get("content_params") or {},
+            "stats": stats,
+        }
+
+        # Call Gemini for per-video analysis
+        try:
+            ai_insight = await gemini_service.analyze_single_video(video_data_for_gemini)
+        except Exception as exc:
+            logger.warning("Gemini per-video analysis failed for '%s': %s", v.get("title", v["video_id"]), exc)
+            ai_insight = {
+                "performance_rating": 0,
+                "what_worked": "Analysis failed",
+                "what_didnt": str(exc),
+                "key_learnings": [],
+            }
+
+        per_video_count += 1
+        logger.info(
+            "🔍 Analyzed [%d/%d] — \"%s\" (rating: %s)",
+            per_video_count,
+            len(new_videos),
+            v.get("title", "Untitled")[:50],
+            ai_insight.get("performance_rating", "?"),
+            extra={"color": "MAGENTA"},
+        )
+
+        # Insert into analysis_history (one doc per video)
+        await db.analysis_history.insert_one({
+            "channel_id": channel_id,
+            "video_id": v["video_id"],
+            "youtube_video_id": yt_id,
+            "title": v.get("title", ""),
+            "category": v.get("category", ""),
+            "content_params": v.get("content_params"),
+            "stats_snapshot": stats,
+            "ai_insight": ai_insight,
+            "analyzed_at": now_ist(),
+        })
+
+    if per_video_count:
+        logger.success(f"✅ Completed per-video analysis for {per_video_count} videos.")
+
+    # ------------------------------------------------------------------
+    # Step 2: Channel summary
+    # ------------------------------------------------------------------
+    all_per_video = await db.analysis_history.find(
+        {"channel_id": channel_id}
+    ).to_list(length=None)
+
+    if not all_per_video:
+        return {}
+
+    # Build aggregated data for the channel summary prompt
+    video_summaries: list[dict[str, Any]] = []
+    all_analysed_ids: list[str] = []
+
+    for pv in all_per_video:
+        all_analysed_ids.append(pv["video_id"])
+        video_summaries.append({
+            "title": pv.get("title", ""),
+            "category": pv.get("category", ""),
+            "content_params": pv.get("content_params") or {},
+            "stats": pv.get("stats_snapshot", {}),
+            "ai_insight": pv.get("ai_insight", {}),
+        })
+
+    logger.info(
+        "🧠 Running channel summary across %d per-video analyses...",
+        len(video_summaries),
+        extra={"color": "MAGENTA"},
+    )
+
+    # Fetch existing analysis for incremental refinement
+    existing_analysis = await db.analysis.find_one({"channel_id": channel_id})
+
     BATCH_SIZE = 5
     running_analysis = (
         {
@@ -162,13 +249,13 @@ async def run_analysis(
         else None
     )
 
-    for i in range(0, len(video_data), BATCH_SIZE):
-        batch = video_data[i : i + BATCH_SIZE]
-        
+    for i in range(0, len(video_summaries), BATCH_SIZE):
+        batch = video_summaries[i : i + BATCH_SIZE]
+
         logger.info(
-            "🧠 Gemini Analysis Batch (%d/%d) in progress...",
+            "🧠 Channel Summary Batch (%d/%d)...",
             (i // BATCH_SIZE) + 1,
-            (len(video_data) + BATCH_SIZE - 1) // BATCH_SIZE,
+            (len(video_summaries) + BATCH_SIZE - 1) // BATCH_SIZE,
             extra={"color": "MAGENTA"},
         )
 
@@ -177,18 +264,16 @@ async def run_analysis(
         )
 
     updated = running_analysis or {}
-
-    # 6  Save to DB
-    all_analysed = list(already_analysed | {v["video_id"] for v in new_videos})
     version = (existing_analysis.get("version", 0) + 1) if existing_analysis else 1
 
     analysis_doc = {
         "channel_id": channel_id,
+        "subscriber_count": subscriber_count,
         "best_posting_times": updated.get("best_posting_times", []),
         "category_analysis": updated.get("category_analysis", []),
         "content_param_analysis": updated.get("content_param_analysis", []),
         "best_combinations": updated.get("best_combinations", []),
-        "analysis_done_video_ids": all_analysed,
+        "analysis_done_video_ids": all_analysed_ids,
         "version": version,
         "updated_at": now_ist(),
     }
@@ -201,42 +286,22 @@ async def run_analysis(
     else:
         analysis_doc["created_at"] = now_ist()
         await db.analysis.insert_one(analysis_doc)
-        
-    logger.success(f"💾 Updated main analysis document v{version} in database")
 
-    # 6b  Store audit snapshot in analysis_history
-    history_doc = {
-        "channel_id": channel_id,
-        "version": version,
-        "input_videos": video_data,
-        "new_video_ids": [v["video_id"] for v in new_videos],
-        "result": {
-            "best_posting_times": updated.get("best_posting_times", []),
-            "category_analysis": updated.get("category_analysis", []),
-            "content_param_analysis": updated.get("content_param_analysis", []),
-            "best_combinations": updated.get("best_combinations", []),
-        },
-        "total_analysed_count": len(all_analysed),
-        "batch_count": (len(video_data) + BATCH_SIZE - 1) // BATCH_SIZE,
-        "created_at": now_ist(),
-    }
-    await db.analysis_history.insert_one(history_doc)
-    
-    logger.success("🗃️ Saved audit trail snapshot to analysis_history")
+    logger.success(f"💾 Updated channel summary v{version} (subscriber_count={subscriber_count})")
 
-    # 7  Run category updates and archive underperformers
+    # Run category updates and archive underperformers
     await update_categories_from_analysis(
-        channel_id=channel_id, 
-        analysis=analysis_doc, 
-        db=db, 
+        channel_id=channel_id,
+        analysis=analysis_doc,
+        db=db,
         analysed_videos=new_videos,
     )
 
-    # 8  Return
+    # Return
     saved = await db.analysis.find_one({"channel_id": channel_id})
     if saved:
         saved.pop("_id", None)
         return saved
-    
+
     analysis_doc.pop("_id", None)
     return analysis_doc
