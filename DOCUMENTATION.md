@@ -851,7 +851,7 @@ Returns per-video analyses from the `analysis_history` collection. Each document
 | ------- | -------- | ------- | ------------------------------------- |
 | `from`  | string | —       | Filter `published_at >= from` (IST). e.g. `2026-02-08` or `2026-02-08T20:00:00` |
 | `to`    | string | —       | Filter `published_at <= to` (IST). e.g. `2026-02-08` or `2026-02-08T23:59:59`   |
-| `limit` | int    | 50      | Max number of results                 |
+| `limit` | int    | —       | Max number of results; if omitted, returns entire history                       |
 
 **Response (200):**
 

@@ -494,7 +494,7 @@ X-API-Key: <your-api-key>
 - **Query Params**:
   - `from` (optional, string): Filter `published_at >= from` (IST). e.g. `2026-02-08` or `2026-02-08T20:00:00`
   - `to` (optional, string): Filter `published_at <= to` (IST). e.g. `2026-02-08` or `2026-02-08T23:59:59`
-  - `limit` (optional, int, default 50): Max results
+  - `limit` (optional, int): Max results; if omitted, returns entire history
 - **Response**: Array of per-video analysis objects.
 
 ```json

@@ -455,7 +455,7 @@ async def api_schema():
                 "query_params": {
                     "from": {"type": "datetime", "optional": True, "description": "Filter analyzed_at >= from"},
                     "to": {"type": "datetime", "optional": True, "description": "Filter analyzed_at <= to"},
-                    "limit": {"type": "integer", "default": 50, "optional": True},
+                    "limit": {"type": "integer", "optional": True, "description": "Max results; if omitted, returns entire history"},
                 },
                 "request": None,
                 "response": [

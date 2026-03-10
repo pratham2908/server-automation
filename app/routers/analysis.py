@@ -155,14 +155,13 @@ async def get_analysis_history(
     channel_id: str,
     from_date: Optional[str] = Query(None, alias="from", description="Filter published_at >= this (IST). e.g. 2026-02-08 or 2026-02-08T20:00:00"),
     to_date: Optional[str] = Query(None, alias="to", description="Filter published_at <= this (IST). e.g. 2026-02-08 or 2026-02-08T23:59:59"),
-    limit: int = 50,
+    limit: Optional[int] = Query(None, description="Max results; if omitted, returns entire history"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Return per-video analyses for *channel_id*.
 
-    Optional ``from`` and ``to`` query params filter by ``published_at`` (when the
-    video was published on YouTube). Both are interpreted in IST. Use ISO 8601–style
-    strings: date only (2026-02-08) or datetime (2026-02-08T20 or 2026-02-08T20:00:00).
+    Optional ``from`` and ``to`` filter by ``published_at`` (IST). Optional ``limit``
+    caps the number of results; if not given, entire history is returned.
     """
     query: dict[str, Any] = {"channel_id": channel_id}
 
@@ -187,12 +186,10 @@ async def get_analysis_history(
             date_filter["$lte"] = to_dt
         query["published_at"] = date_filter
 
-    cursor = (
-        db.analysis_history.find(query)
-        .sort("published_at", -1)
-        .limit(limit)
-    )
-    results = await cursor.to_list(length=limit)
+    cursor = db.analysis_history.find(query).sort("published_at", -1)
+    if limit is not None:
+        cursor = cursor.limit(limit)
+    results = await cursor.to_list(length=limit if limit is not None else None)
     for doc in results:
         doc.pop("_id", None)
     return results
