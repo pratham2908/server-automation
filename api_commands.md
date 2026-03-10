@@ -492,8 +492,8 @@ X-API-Key: <your-api-key>
 - **Endpoint**: `/api/v1/channels/{channel_id}/analysis/history`
 - **Method**: `GET`
 - **Query Params**:
-  - `from` (optional, datetime): Filter `analyzed_at >= from`
-  - `to` (optional, datetime): Filter `analyzed_at <= to`
+  - `from` (optional, string): Filter `published_at >= from` (IST). e.g. `2026-02-08` or `2026-02-08T20:00:00`
+  - `to` (optional, string): Filter `published_at <= to` (IST). e.g. `2026-02-08` or `2026-02-08T23:59:59`
   - `limit` (optional, int, default 50): Max results
 - **Response**: Array of per-video analysis objects.
 
@@ -506,6 +506,7 @@ X-API-Key: <your-api-key>
     "title": "Epic Battle Simulation",
     "category": "Simulations",
     "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+    "published_at": "2026-03-01T10:00:00+05:30",
     "stats_snapshot": {
       "views": 15000, "likes": 800, "comments": 45,
       "engagement_rate": 5.63, "avg_percentage_viewed": 72.5,

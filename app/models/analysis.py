@@ -52,6 +52,7 @@ class VideoAnalysis(BaseModel):
     title: str = ""
     category: str = ""
     content_params: Optional[dict[str, str]] = None
+    published_at: Optional[datetime] = None  # when the video was published on YouTube
     stats_snapshot: dict[str, Any] = Field(default_factory=dict)
     ai_insight: dict[str, Any] = Field(default_factory=dict)
     analyzed_at: datetime = Field(default_factory=now_ist)

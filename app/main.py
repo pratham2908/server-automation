@@ -466,6 +466,7 @@ async def api_schema():
                         "title": "Epic Battle Simulation",
                         "category": "Simulations",
                         "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+                        "published_at": "2026-03-01T10:00:00+05:30",
                         "stats_snapshot": {
                             "views": 15000, "likes": 800, "comments": 45,
                             "engagement_rate": 5.63, "avg_percentage_viewed": 72.5,
@@ -491,6 +492,7 @@ async def api_schema():
                 "response": {
                     "channel_id": "ch1",
                     "video_id": "uuid-1234",
+                    "published_at": "2026-03-01T10:00:00+05:30",
                     "stats_snapshot": {"views": 15000, "subscribers_gained": 120},
                     "ai_insight": {"performance_rating": 85, "what_worked": "..."},
                     "analyzed_at": "2026-03-07T12:00:00+05:30",

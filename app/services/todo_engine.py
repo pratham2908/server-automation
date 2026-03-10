@@ -31,7 +31,11 @@ async def _compute_category_metadata(
     category_name: str,
     db: AsyncIOMotorDatabase,
 ) -> dict[str, Any]:
-    """Aggregate performance metrics for all published videos in a category."""
+    """Aggregate performance metrics for all published videos in a category.
+
+    avg_subscribers is the average subscribers gained per video, from
+    analysis_history.stats_snapshot.subscribers_gained.
+    """
     videos = await db.videos.find(
         {"channel_id": channel_id, "category": category_name, "status": "published"}
     ).to_list(length=None)
@@ -58,6 +62,18 @@ async def _compute_category_metadata(
         if v.get("metadata") and v["metadata"].get("estimated_minutes_watched") is not None
     ]
 
+    # Average subscribers gained: from analysis_history per-video analyses
+    video_ids = [v["video_id"] for v in videos]
+    subs_vals: list[float] = []
+    async for hist in db.analysis_history.find(
+        {"channel_id": channel_id, "video_id": {"$in": video_ids}},
+        {"stats_snapshot.subscribers_gained": 1},
+    ):
+        val = (hist.get("stats_snapshot") or {}).get("subscribers_gained")
+        if val is not None:
+            subs_vals.append(float(val))
+    avg_subscribers = round(sum(subs_vals) / len(subs_vals), 2) if subs_vals else None
+
     return {
         "total_videos": len(videos),
         "avg_views": _avg("views"),
@@ -73,6 +89,7 @@ async def _compute_category_metadata(
         "total_estimated_minutes_watched": (
             round(sum(total_emw_vals), 1) if total_emw_vals else None
         ),
+        "avg_subscribers": avg_subscribers,
     }
 
 

@@ -196,6 +196,7 @@ async def run_analysis(
             "title": v.get("title", ""),
             "category": v.get("category", ""),
             "content_params": v.get("content_params"),
+            "published_at": v.get("published_at"),
             "stats_snapshot": stats,
             "ai_insight": ai_insight,
             "analyzed_at": now_ist(),

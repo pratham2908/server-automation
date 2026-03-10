@@ -31,6 +31,7 @@ class CategoryMetadata(BaseModel):
     avg_view_duration_seconds: Optional[float] = None
     total_views: Optional[int] = None
     total_estimated_minutes_watched: Optional[float] = None
+    avg_subscribers: Optional[float] = None  # average subscribers gained per video in this category
 
 
 class Category(BaseModel):

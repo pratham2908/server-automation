@@ -849,9 +849,9 @@ Returns per-video analyses from the `analysis_history` collection. Each document
 
 | Param   | Type     | Default | Description                           |
 | ------- | -------- | ------- | ------------------------------------- |
-| `from`  | datetime | —       | Filter `analyzed_at >= from`          |
-| `to`    | datetime | —       | Filter `analyzed_at <= to`            |
-| `limit` | int      | 50      | Max number of results                 |
+| `from`  | string | —       | Filter `published_at >= from` (IST). e.g. `2026-02-08` or `2026-02-08T20:00:00` |
+| `to`    | string | —       | Filter `published_at <= to` (IST). e.g. `2026-02-08` or `2026-02-08T23:59:59`   |
+| `limit` | int    | 50      | Max number of results                 |
 
 **Response (200):**
 
@@ -864,6 +864,7 @@ Returns per-video analyses from the `analysis_history` collection. Each document
     "title": "Epic Battle Simulation",
     "category": "Simulations",
     "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+    "published_at": "2026-03-01T10:00:00+05:30",
     "stats_snapshot": {
       "views": 15000,
       "likes": 800,
@@ -1212,6 +1213,7 @@ Per-video analysis storage — **one document per video**, created once and neve
     "challenge_mechanic": "1v1",
     "music": "Epic Orchestral - Two Steps From Hell"
   },
+  "published_at": "datetime", // when the video was published on YouTube (IST)
   "stats_snapshot": {
     "views": 15000,
     "likes": 800,

@@ -7,6 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
 from app.dependencies import verify_api_key
+from app.timezone import IST
 
 router = APIRouter(
     prefix="/api/v1/channels/{channel_id}/analysis",
@@ -118,6 +119,33 @@ async def get_latest_analysis(
     }
 
 
+def _parse_datetime_ist(value: str) -> datetime:
+    """Parse an ISO 8601–style string and return timezone-aware datetime in IST.
+
+    Accepts: YYYY-MM-DD, YYYY-MM-DDTHH, YYYY-MM-DDTHH:MM, YYYY-MM-DDTHH:MM:SS,
+    with optional timezone suffix. Naive results are interpreted as IST.
+    """
+    value = value.strip()
+    if not value:
+        raise ValueError("Empty date string")
+    # Normalise truncated time so fromisoformat accepts it (e.g. 2026-02-08T20 → 2026-02-08T20:00:00)
+    if value.count(":") == 0 and "T" in value:
+        value = value + ":00:00"
+    elif value.count(":") == 1 and "T" in value:
+        value = value + ":00"
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(
+            f"Invalid date format: {value!r}. Use ISO 8601 e.g. 2026-02-08 or 2026-02-08T20:00:00"
+        )
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=IST)
+    else:
+        dt = dt.astimezone(IST)
+    return dt
+
+
 # ------------------------------------------------------------------
 # GET /history  –  per-video analyses
 # ------------------------------------------------------------------
@@ -125,28 +153,43 @@ async def get_latest_analysis(
 @router.get("/history")
 async def get_analysis_history(
     channel_id: str,
-    from_date: Optional[datetime] = Query(None, alias="from"),
-    to_date: Optional[datetime] = Query(None, alias="to"),
+    from_date: Optional[str] = Query(None, alias="from", description="Filter published_at >= this (IST). e.g. 2026-02-08 or 2026-02-08T20:00:00"),
+    to_date: Optional[str] = Query(None, alias="to", description="Filter published_at <= this (IST). e.g. 2026-02-08 or 2026-02-08T23:59:59"),
     limit: int = 50,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Return per-video analyses for *channel_id*.
 
-    Optional ``from`` and ``to`` query params filter by ``analyzed_at``.
+    Optional ``from`` and ``to`` query params filter by ``published_at`` (when the
+    video was published on YouTube). Both are interpreted in IST. Use ISO 8601–style
+    strings: date only (2026-02-08) or datetime (2026-02-08T20 or 2026-02-08T20:00:00).
     """
     query: dict[str, Any] = {"channel_id": channel_id}
 
-    if from_date or to_date:
+    from_dt: Optional[datetime] = None
+    to_dt: Optional[datetime] = None
+    if from_date:
+        try:
+            from_dt = _parse_datetime_ist(from_date)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    if to_date:
+        try:
+            to_dt = _parse_datetime_ist(to_date)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+    if from_dt or to_dt:
         date_filter: dict[str, Any] = {}
-        if from_date:
-            date_filter["$gte"] = from_date
-        if to_date:
-            date_filter["$lte"] = to_date
-        query["analyzed_at"] = date_filter
+        if from_dt:
+            date_filter["$gte"] = from_dt
+        if to_dt:
+            date_filter["$lte"] = to_dt
+        query["published_at"] = date_filter
 
     cursor = (
         db.analysis_history.find(query)
-        .sort("analyzed_at", -1)
+        .sort("published_at", -1)
         .limit(limit)
     )
     results = await cursor.to_list(length=limit)

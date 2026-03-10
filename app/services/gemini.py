@@ -320,12 +320,25 @@ Guidelines:
 - **views**: Total view count.
 - **likes**, **comments**: Raw engagement counts.
 - **engagement_rate**: (likes + comments) / views x 100 — overall interaction rate.
-- **avg_percentage_viewed**: Average % of the video watched — the strongest signal of content quality.
+- **avg_percentage_viewed**: Average % of the video watched — strong signal of content quality.
 - **avg_view_duration_seconds**: Average watch time per view.
 - **estimated_minutes_watched**: Total accumulated watch time.
 - **subscribers_gained**: How many new subscribers this specific video brought in.
-- **views_per_subscriber**: views / channel subscriber count — measures reach beyond existing audience. Above 1.0 means the video reached far beyond subscribers.
+- **views_per_subscriber**: views / channel subscriber count — reach beyond existing audience. Above 1.0 means the video reached far beyond subscribers.
 - **subscriber_count_at_analysis**: The channel's total subscriber count when this analysis was run (for context).
+
+## Scoring Weightage (use exactly these weights for performance_rating)
+When computing performance_rating 0-100, weight each factor as follows (total 100%):
+- **subscribers_gained**: 25%
+- **avg_percentage_viewed**: 25%
+- **views**: 20%
+- **engagement_rate**: 10%
+- **comments**: 8%
+- **likes**: 5%
+- **views_per_subscriber**: 5%
+- **estimated_minutes_watched**: 2%
+
+For each metric, score that dimension 0-100 based on how strong the value is (relative to typical expectations for this channel/content). Then compute: performance_rating = weighted sum of those dimension scores. Use 0 for any missing metric. This ensures consistent, comparable ratings across videos.
 
 ## Required Output Format
 Return a JSON object with exactly these keys:
@@ -342,7 +355,7 @@ Return a JSON object with exactly these keys:
 }}
 
 Guidelines:
-- **performance_rating**: Score from 0-100. Consider ALL metrics holistically. A video with modest views but high avg_percentage_viewed and strong subscribers_gained is better than one with many views but low retention.
+- **performance_rating**: Score 0-100 using the exact weightage above. Compute a 0-100 score per dimension, then take the weighted sum. Be consistent so ratings are comparable across videos.
 - **what_worked**: Be specific — mention the title style, content_params choices, engagement patterns. Reference actual numbers.
 - **what_didnt**: Be honest and constructive. If the video underperformed on a metric, explain why that matters and what could change.
 - **key_learnings**: 2-4 concise, actionable takeaways. These will be aggregated across all videos to identify channel-wide patterns."""
