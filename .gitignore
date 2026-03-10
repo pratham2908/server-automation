@@ -4,3 +4,6 @@ ssh-key-2.pub
 .venv
 youtube_token.json
 youtube_tokens/
+__pycache__/
+*.py[cod]
+*$py.class
