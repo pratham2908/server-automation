@@ -8,10 +8,10 @@ Called at the end of every analysis update to keep the to-do pipeline fresh.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from app.timezone import now_ist
+from app.timezone import IST, now_ist
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -31,14 +31,27 @@ async def _compute_category_metadata(
     category_name: str,
     db: AsyncIOMotorDatabase,
 ) -> dict[str, Any]:
-    """Aggregate performance metrics for all published videos in a category.
+    """Aggregate performance metrics for published videos in a category that are
+    eligible for analysis (published and at least 3 days old, same rule as per-video analysis).
 
     avg_subscribers is the average subscribers gained per video, from
     analysis_history.stats_snapshot.subscribers_gained.
     """
-    videos = await db.videos.find(
+    all_published = await db.videos.find(
         {"channel_id": channel_id, "category": category_name, "status": "published"}
     ).to_list(length=None)
+
+    three_days_ago = now_ist() - timedelta(days=3)
+    videos = []
+    for v in all_published:
+        created = v.get("created_at")
+        if created is None:
+            videos.append(v)
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=IST)
+        if created <= three_days_ago:
+            videos.append(v)
 
     if not videos:
         return {"total_videos": 0}
@@ -99,8 +112,8 @@ async def update_categories_from_analysis(
     db: AsyncIOMotorDatabase,
     analysed_videos: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Update category scores, video counts, metadata, and archive underperformers."""
-    logger.info("🔄 Updating category scores & video counts from new analysis...", extra={"color": "BLUE"})
+    """Update category scores, metadata (and video_count from it), and archive underperformers."""
+    logger.info("🔄 Updating category scores, metadata & video_count from new analysis...", extra={"color": "BLUE"})
 
     # 1. Update scores
     for cat_analysis in analysis.get("category_analysis", []):
@@ -117,21 +130,8 @@ async def update_categories_from_analysis(
                 },
             )
 
-    # 2. Update video counts
-    if analysed_videos:
-        cat_counts: dict[str, int] = {}
-        for v in analysed_videos:
-            cat = v.get("category", "")
-            if cat:
-                cat_counts[cat] = cat_counts.get(cat, 0) + 1
-
-        for cat_name, count in cat_counts.items():
-            await db.categories.update_one(
-                {"channel_id": channel_id, "name": cat_name},
-                {"$inc": {"video_count": count}},
-            )
-
-    # 3. Compute and persist aggregated metadata per category
+    # 2. Compute and persist aggregated metadata per category (eligible-for-analysis videos only),
+    #    and set video_count from that same count
     all_categories = await db.categories.find(
         {"channel_id": channel_id}
     ).to_list(length=None)
@@ -141,11 +141,17 @@ async def update_categories_from_analysis(
         meta = await _compute_category_metadata(channel_id, cat_name, db)
         await db.categories.update_one(
             {"_id": cat_doc["_id"]},
-            {"$set": {"metadata": meta, "updated_at": now_ist()}},
+            {
+                "$set": {
+                    "metadata": meta,
+                    "video_count": meta.get("total_videos", 0),
+                    "updated_at": now_ist(),
+                }
+            },
         )
     logger.success("📊 Computed and saved metadata for %d categories", len(all_categories))
 
-    # 4. Archive underperformers
+    # 3. Archive underperformers
     for cat_analysis in analysis.get("category_analysis", []):
         cat_name = cat_analysis.get("category", "")
         score = cat_analysis.get("score", 100)
