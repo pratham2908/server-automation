@@ -11,7 +11,7 @@ from typing import Any
 import pytz
 
 from app.logger import get_logger
-from app.timezone import now_ist, to_ist_iso
+from app.timezone import IST, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
@@ -47,7 +47,8 @@ async def schedule_single_video(
     if scheduled_at.tzinfo is not None:
         utc_dt = scheduled_at.astimezone(pytz.utc)
     else:
-        utc_dt = scheduled_at
+        # If naive (no offset provided), assume IST (GMT+5:30)
+        utc_dt = scheduled_at.replace(tzinfo=IST).astimezone(pytz.utc)
     publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tmp_path = None
