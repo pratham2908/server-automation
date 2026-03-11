@@ -52,9 +52,15 @@ X-API-Key: <your-api-key>
       "method": "GET",
       "path": "/api/v1/channels/{channel_id}/videos/",
       "description": "List videos with sync status",
-      "query_params": { "status_filter": { "type": "string", "enum": ["todo","ready","scheduled","published"], "optional": true } },
+      "query_params": {
+        "status_filter": {
+          "type": "string",
+          "enum": ["todo", "ready", "scheduled", "published"],
+          "optional": true
+        }
+      },
       "request": null,
-      "response": { "videos": ["..."], "sync_status": {"...": "..."} }
+      "response": { "videos": ["..."], "sync_status": { "...": "..." } }
     }
   ]
 }
@@ -135,9 +141,17 @@ X-API-Key: <your-api-key>
 ```json
 {
   "content_schema": [
-    {"name": "simulation_type", "description": "Type of simulation", "values": ["battle", "survival", "puzzle"]},
-    {"name": "challenge_mechanic", "description": "Core challenge format", "values": ["1v1", "tournament"]},
-    {"name": "music", "description": "Background music style", "values": []}
+    {
+      "name": "simulation_type",
+      "description": "Type of simulation",
+      "values": ["battle", "survival", "puzzle"]
+    },
+    {
+      "name": "challenge_mechanic",
+      "description": "Core challenge format",
+      "values": ["1v1", "tournament"]
+    },
+    { "name": "music", "description": "Background music style", "values": [] }
   ]
 }
 ```
@@ -316,7 +330,7 @@ X-API-Key: <your-api-key>
 {
   "ok": true,
   "video_id": "uuid-1234",
-  "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+  "content_params": { "simulation_type": "battle", "music": "Epic Orchestral" },
   "content_params_status": "unverified"
 }
 ```
@@ -337,7 +351,7 @@ X-API-Key: <your-api-key>
 
 ```json
 {
-  "content_params": {"simulation_type": "survival", "music": "Dramatic Piano"}
+  "content_params": { "simulation_type": "survival", "music": "Dramatic Piano" }
 }
 ```
 
@@ -357,8 +371,17 @@ X-API-Key: <your-api-key>
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/schedule`
 - **Method**: `POST`
-- **Path Params**: `video_id` — a specific video UUID **OR** `"all"` to schedule every video in the ready queue.
-- **Description**: Schedules video(s) on YouTube. Computes `scheduled_at` publish times from the channel's `best_posting_times` analysis, downloads from R2, uploads to YouTube as private with `publishAt`. **Only on success**: removes from the ready queue, adds to the scheduled queue, status → `scheduled`. Requires an analysis with `best_posting_times` and a YouTube token.
+- **Path params:** `video_id` — the UUID of a single video **OR** `"all"` to schedule every video in the ready queue.
+
+**Request Body (Optional, for single video_id only):**
+
+```json
+{
+  "scheduled_at": "2026-03-10T14:30:00+05:30"
+}
+```
+
+- **Description**: Schedules video(s) on YouTube. Computes `scheduled_at` publish times from the channel's `best_posting_times` analysis (unless manually provided in the request body), downloads from R2, uploads to YouTube as private with `publishAt`. **Only on success**: removes from the ready queue, adds to the scheduled queue, status → `scheduled`. Requires an analysis with `best_posting_times` and a YouTube token.
 - **Response**:
 
 ```json
@@ -410,9 +433,7 @@ X-API-Key: <your-api-key>
   "reconciled": 2,
   "metadata_refreshed": 45,
   "categories_created": ["Tutorials"],
-  "videos": [
-    { "title": "New Video Title", "category": "Tutorials" }
-  ]
+  "videos": [{ "title": "New Video Title", "category": "Tutorials" }]
 }
 ```
 
@@ -462,13 +483,21 @@ X-API-Key: <your-api-key>
     }
   ],
   "best_posting_times": [
-    {"day_of_week": "monday", "video_count": 2, "times": ["14:00", "18:00"]}
+    { "day_of_week": "monday", "video_count": 2, "times": ["14:00", "18:00"] }
   ],
   "content_param_analysis": [
-    {"param_name": "simulation_type", "best_values": ["battle"], "worst_values": ["puzzle"], "insight": "..."}
+    {
+      "param_name": "simulation_type",
+      "best_values": ["battle"],
+      "worst_values": ["puzzle"],
+      "insight": "..."
+    }
   ],
   "best_combinations": [
-    {"params": {"simulation_type": "battle", "music": "Epic"}, "reasoning": "..."}
+    {
+      "params": { "simulation_type": "battle", "music": "Epic" },
+      "reasoning": "..."
+    }
   ],
   "analysis_status": {
     "ready_for_analysis": 5,
@@ -505,12 +534,19 @@ X-API-Key: <your-api-key>
     "youtube_video_id": "dQw4w...",
     "title": "Epic Battle Simulation",
     "category": "Simulations",
-    "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+    "content_params": {
+      "simulation_type": "battle",
+      "music": "Epic Orchestral"
+    },
     "published_at": "2026-03-01T10:00:00+05:30",
     "stats_snapshot": {
-      "views": 15000, "likes": 800, "comments": 45,
-      "engagement_rate": 5.63, "avg_percentage_viewed": 72.5,
-      "subscribers_gained": 120, "views_per_subscriber": 3.0,
+      "views": 15000,
+      "likes": 800,
+      "comments": 45,
+      "engagement_rate": 5.63,
+      "avg_percentage_viewed": 72.5,
+      "subscribers_gained": 120,
+      "views_per_subscriber": 3.0,
       "subscriber_count_at_analysis": 5000
     },
     "ai_insight": {
@@ -545,20 +581,24 @@ X-API-Key: <your-api-key>
 {
   "channel_id": "ch1",
   "period_1": {
-    "from": "2026-02-01T00:00:00", "to": "2026-02-15T00:00:00",
-    "video_count": 10, "avg_views": 12000,
-    "avg_engagement_rate": 4.5, "total_subscribers_gained": 500,
+    "from": "2026-02-01T00:00:00",
+    "to": "2026-02-15T00:00:00",
+    "video_count": 10,
+    "avg_views": 12000,
+    "avg_engagement_rate": 4.5,
+    "total_subscribers_gained": 500,
     "avg_performance_rating": 72.3
   },
   "period_2": {
-    "from": "2026-02-16T00:00:00", "to": "2026-03-01T00:00:00",
-    "video_count": 12, "avg_views": 18000,
-    "avg_engagement_rate": 5.8, "total_subscribers_gained": 850,
+    "from": "2026-02-16T00:00:00",
+    "to": "2026-03-01T00:00:00",
+    "video_count": 12,
+    "avg_views": 18000,
+    "avg_engagement_rate": 5.8,
+    "total_subscribers_gained": 850,
     "avg_performance_rating": 81.5
   }
 }
 ```
 
-
 > **Note:** To view scheduled videos, use `GET /api/v1/channels/{channel_id}/videos?status_filter=scheduled`. The `scheduled_at` field on each video shows the YouTube publish time. To schedule all ready videos at once, use `POST /api/v1/channels/{channel_id}/videos/all/schedule`.
-

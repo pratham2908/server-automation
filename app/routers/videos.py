@@ -595,19 +595,28 @@ async def upload_video(
 # ------------------------------------------------------------------
 
 
+class ScheduleRequest(BaseModel):
+    """Optional manual scheduling parameters."""
+    scheduled_at: Optional[datetime] = Field(
+        None, description="Manually specify a publish time (ISO string). Only valid when scheduling a single video_id."
+    )
+
+
 @router.post("/{video_id}/schedule")
 async def schedule_video(
     channel_id: str,
     video_id: str,
+    body: Optional[ScheduleRequest] = None,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Schedule video(s) from the **ready queue** on YouTube.
 
     - Pass a specific ``video_id`` to schedule one video.
     - Pass ``"all"`` as ``video_id`` to schedule every video in the ready queue.
+    - Optionally pass ``scheduled_at`` in the body to manually pick the time (only for single videos).
 
     For each video the operation:
-    1. Computes a publish slot from the channel's ``best_posting_times``.
+    1. Computes a publish slot from the channel's ``best_posting_times`` (if not manually provided).
     2. Downloads the file from R2.
     3. Uploads to YouTube as private with ``publishAt``.
     4. **Only on success**: removes from the ready queue, inserts into
@@ -682,13 +691,21 @@ async def schedule_video(
     ).to_list(length=None)
     occupied_datetimes = [e.get("scheduled_at") for e in existing_scheduled]
 
-    # ---- Compute publish slots ----
-    slots = compute_schedule_slots(
-        best_posting_times=analysis["best_posting_times"],
-        occupied_datetimes=occupied_datetimes,
-        num_videos=len(videos_to_schedule),
-        timezone_str=settings.TIMEZONE,
-    )
+    # ---- Compute or use manual publish slots ----
+    is_all = video_id.lower() == "all"
+    manual_dt = body.scheduled_at if (body and not is_all) else None
+
+    if manual_dt:
+        # Use the provided manual time.
+        slots = [manual_dt]
+    else:
+        # Compute slots using the scheduler logic.
+        slots = compute_schedule_slots(
+            best_posting_times=analysis["best_posting_times"],
+            occupied_datetimes=occupied_datetimes,
+            num_videos=len(videos_to_schedule),
+            timezone_str=settings.TIMEZONE,
+        )
 
     if len(slots) < len(videos_to_schedule):
         raise HTTPException(

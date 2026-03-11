@@ -96,9 +96,15 @@ Returns the full API schema with method, path, description, request body, query 
       "method": "GET",
       "path": "/api/v1/channels/{channel_id}/videos/",
       "description": "List videos with sync status",
-      "query_params": { "status_filter": { "type": "string", "enum": ["todo","ready","scheduled","published"], "optional": true } },
+      "query_params": {
+        "status_filter": {
+          "type": "string",
+          "enum": ["todo", "ready", "scheduled", "published"],
+          "optional": true
+        }
+      },
       "request": null,
-      "response": { "videos": ["..."], "sync_status": {"...": "..."} }
+      "response": { "videos": ["..."], "sync_status": { "...": "..." } }
     }
   ]
 }
@@ -552,6 +558,14 @@ Schedules video(s) on YouTube. Computes a publish time, uploads the video file t
 
 **Path params:** `video_id` — the UUID of a single video **OR** `"all"` to schedule every video in the ready queue.
 
+**Request Body (Optional, for single video_id only):**
+
+```json
+{
+  "scheduled_at": "2026-03-10T14:30:00+05:30"
+}
+```
+
 **Preconditions:**
 
 - The video(s) must be in `ready` status (uploaded to R2). Returns `400` otherwise.
@@ -563,7 +577,7 @@ Schedules video(s) on YouTube. Computes a publish time, uploads the video file t
 1. If `video_id` is `"all"`, fetches all entries from the ready queue; otherwise fetches the single video
 2. Loads `best_posting_times` from the latest analysis document
 3. Gathers `scheduled_at` values from existing scheduled queue entries (occupied slots)
-4. Computes the next available publish slot(s) from the weekly calendar, skipping past and occupied slots (timezone from `TIMEZONE` env var, default `Asia/Kolkata`)
+4. Computes the next available publish slot(s) from the weekly calendar, skipping past and occupied slots (unless `scheduled_at` was manually provided in the request body). Timezone from `TIMEZONE` env var, default `Asia/Kolkata`.
 5. For each video: downloads from R2, uploads to YouTube as private with `publishAt`. **Only on YouTube upload success**: removes from the ready queue, inserts into the scheduled queue with `scheduled_at`, sets `youtube_video_id`, updates status to `scheduled`
 
 The video remains in `scheduled` status until YouTube auto-publishes it at the `publishAt` time. The sync endpoint then reconciles it to `published`.
@@ -804,7 +818,11 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
   ],
   "best_combinations": [
     {
-      "params": {"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "Epic Orchestral"},
+      "params": {
+        "simulation_type": "battle",
+        "challenge_mechanic": "1v1",
+        "music": "Epic Orchestral"
+      },
       "reasoning": "Highest avg_percentage_viewed at 72%"
     }
   ],
@@ -847,8 +865,8 @@ Returns per-video analyses from the `analysis_history` collection. Each document
 
 **Query params:**
 
-| Param   | Type     | Default | Description                           |
-| ------- | -------- | ------- | ------------------------------------- |
+| Param   | Type   | Default | Description                                                                     |
+| ------- | ------ | ------- | ------------------------------------------------------------------------------- |
 | `from`  | string | —       | Filter `published_at >= from` (IST). e.g. `2026-02-08` or `2026-02-08T20:00:00` |
 | `to`    | string | —       | Filter `published_at <= to` (IST). e.g. `2026-02-08` or `2026-02-08T23:59:59`   |
 | `limit` | int    | —       | Max number of results; if omitted, returns entire history                       |
@@ -863,7 +881,10 @@ Returns per-video analyses from the `analysis_history` collection. Each document
     "youtube_video_id": "dQw4w...",
     "title": "Epic Battle Simulation",
     "category": "Simulations",
-    "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
+    "content_params": {
+      "simulation_type": "battle",
+      "music": "Epic Orchestral"
+    },
     "published_at": "2026-03-01T10:00:00+05:30",
     "stats_snapshot": {
       "views": 15000,
@@ -904,12 +925,12 @@ Aggregates per-video analyses across two time periods for side-by-side compariso
 
 **Query params (all required):**
 
-| Param   | Type     | Description           |
-| ------- | -------- | --------------------- |
-| `from1` | datetime | Start of period 1     |
-| `to1`   | datetime | End of period 1       |
-| `from2` | datetime | Start of period 2     |
-| `to2`   | datetime | End of period 2       |
+| Param   | Type     | Description       |
+| ------- | -------- | ----------------- |
+| `from1` | datetime | Start of period 1 |
+| `to1`   | datetime | End of period 1   |
+| `from2` | datetime | Start of period 2 |
+| `to2`   | datetime | End of period 2   |
 
 **Response (200):**
 
@@ -973,9 +994,14 @@ Stores registered YouTube channels with their metadata (auto-fetched from YouTub
   "subscriber_count": 125000, // from YouTube
   "video_count": 342, // from YouTube
   "view_count": 15000000, // from YouTube
-  "content_schema": [  // custom content parameter definitions
-    {"name": "simulation_type", "description": "...", "values": ["battle", "survival"]},
-    {"name": "music", "description": "...", "values": []}
+  "content_schema": [
+    // custom content parameter definitions
+    {
+      "name": "simulation_type",
+      "description": "...",
+      "values": ["battle", "survival"]
+    },
+    { "name": "music", "description": "...", "values": [] }
   ],
   "created_at": "datetime",
   "updated_at": "datetime"
@@ -1018,7 +1044,8 @@ Stores all video records — both manually uploaded and AI-generated to-do items
     "avg_view_duration_seconds": null, // from YouTube Analytics API
     "estimated_minutes_watched": null // from YouTube Analytics API
   },
-  "content_params": {  // channel-specific content dimensions
+  "content_params": {
+    // channel-specific content dimensions
     "simulation_type": "battle",
     "challenge_mechanic": "1v1",
     "music": "Epic Orchestral - Two Steps From Hell"
@@ -1178,7 +1205,11 @@ Stores the AI-generated channel summary. **One document per channel.**
   ],
   "best_combinations": [
     {
-      "params": {"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "Epic Orchestral"},
+      "params": {
+        "simulation_type": "battle",
+        "challenge_mechanic": "1v1",
+        "music": "Epic Orchestral"
+      },
       "reasoning": "Highest avg_percentage_viewed at 72%"
     }
   ],
