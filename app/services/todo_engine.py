@@ -54,7 +54,7 @@ async def _compute_category_metadata(
             videos.append(v)
 
     if not videos:
-        return {"total_videos": 0}
+        return {"total_videos": 0, "video_ids": []}
 
     def _avg(key: str) -> float | None:
         vals = [
@@ -76,10 +76,10 @@ async def _compute_category_metadata(
     ]
 
     # Average subscribers gained: from analysis_history per-video analyses
-    video_ids = [v["video_id"] for v in videos]
+    eligible_video_ids = [v["video_id"] for v in videos]
     subs_vals: list[float] = []
     async for hist in db.analysis_history.find(
-        {"channel_id": channel_id, "video_id": {"$in": video_ids}},
+        {"channel_id": channel_id, "video_id": {"$in": eligible_video_ids}},
         {"stats_snapshot.subscribers_gained": 1},
     ):
         val = (hist.get("stats_snapshot") or {}).get("subscribers_gained")
@@ -89,6 +89,7 @@ async def _compute_category_metadata(
 
     return {
         "total_videos": len(videos),
+        "video_ids": eligible_video_ids,
         "avg_views": _avg("views"),
         "avg_likes": _avg("likes"),
         "avg_comments": _avg("comments"),
@@ -145,6 +146,7 @@ async def update_categories_from_analysis(
                 "$set": {
                     "metadata": meta,
                     "video_count": meta.get("total_videos", 0),
+                    "video_ids": meta.get("video_ids", []),
                     "updated_at": now_ist(),
                 }
             },

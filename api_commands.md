@@ -319,6 +319,22 @@ X-API-Key: <your-api-key>
 }
 ```
 
+### Change Video Category
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/category`
+- **Method**: `PATCH`
+- **Request Body**:
+
+```json
+{
+  "old_category_id": "65f...",
+  "new_category_id": "65f..."
+}
+```
+
+- **Description**: Moves a video from one category to another. Updates the video document and the per-video record in `analysis_history`; recomputes metadata, `video_count`, and `video_ids` for both categories. Category IDs are MongoDB `_id` values.
+- **Response**: `{"ok": true, "video_id": "...", "old_category": "Tutorials", "new_category": "Reviews"}`
+
 ### Extract Content Params
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/extract-params`

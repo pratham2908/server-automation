@@ -443,6 +443,34 @@ Changes a video's status.
 
 ---
 
+#### `PATCH /{video_id}/category` — Change video category
+
+Moves a video from one category to another. Updates the video document, the per-video record in `analysis_history`, and recomputes metadata, `video_count`, and `video_ids` for both the old and new category.
+
+**Path params:** `video_id` — the UUID of the video
+
+**Request body:**
+
+```json
+{
+  "old_category_id": "65f...",  // MongoDB _id of current category
+  "new_category_id": "65f..."   // MongoDB _id of target category
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "video_id": "550e8400-...",
+  "old_category": "Tutorials",
+  "new_category": "Reviews"
+}
+```
+
+---
+
 #### `POST /{video_id}/extract-params` — Extract content params via Gemini
 
 Uses Gemini to extract content parameter values from a video's title, description, and tags, based on the channel's `content_schema`. Results are saved with `content_params_status: "unverified"`.
@@ -775,6 +803,22 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 4. **Exclude recent videos** — skip any with `created_at` less than 3 days ago (hard limit, no exceptions)
 5. **Fetch YouTube stats** (views, likes, comments, duration, engagement rates) + **YouTube Analytics** (avg % viewed, avg view duration, est. minutes watched, **subscribers gained**) for new videos
 6. **For each new video**: build a stats snapshot (including `views_per_subscriber`, `subscribers_gained`, `subscriber_count_at_analysis`), send to **Gemini for individual analysis** → get `performance_rating` (0-100), `what_worked`, `what_didnt`, `key_learnings`
+
+   **Performance rating weightage** (used by Gemini to compute the 0-100 `performance_rating`):
+
+   | Metric | Weight | Signal |
+   |--------|--------|--------|
+   | `subscribers_gained` | 25% | Direct channel growth impact |
+   | `avg_percentage_viewed` | 25% | Content quality / retention |
+   | `views` | 20% | Raw reach |
+   | `engagement_rate` | 10% | (likes + comments) / views |
+   | `comments` | 8% | Active audience participation |
+   | `likes` | 5% | Passive approval |
+   | `views_per_subscriber` | 5% | Viral reach beyond existing audience (>1.0 = beyond subs) |
+   | `estimated_minutes_watched` | 2% | Total accumulated watch time |
+
+   For each metric, Gemini scores that dimension 0-100 relative to the channel's typical range, then computes `performance_rating` as the weighted sum. Missing metrics are treated as 0.
+
 7. **Store each result** in `analysis_history` collection (one doc per video, never re-analysed)
 
 **Step 2 — Channel summary:**
@@ -1140,7 +1184,8 @@ Stores content categories with their performance scores.
   "raw_description": "Original user input",
   "score": 85.5, // 0-100, updated by analysis engine
   "status": "active", // "active" or "archived"
-  "video_count": 12, // incremented when videos marked done
+  "video_count": 12, // published eligible videos (same set as metadata)
+  "video_ids": ["uuid1", "uuid2"], // video_id of eligible videos (published, 3+ days old)
   "metadata": {
     "total_videos": 12, // published videos in this category
     "avg_views": 1500.0,
@@ -1169,6 +1214,8 @@ Stores content categories with their performance scores.
 
 - Score drops below **30** AND
 - Category has **≥ 5 videos** (enough data to be statistically meaningful)
+
+**Backfilling `video_ids`:** For existing categories created before `video_ids` was added, run `python backfill_category_video_ids.py [channel_id ...]` from the project root (with dependencies installed). With no arguments it processes all channels; otherwise pass one or more `channel_id` values.
 
 ---
 
@@ -1321,7 +1368,7 @@ Per-video analysis storage — **one document per video**, created once and neve
 
 ### Gemini Service (`app/services/gemini.py`)
 
-- **Analyze single video**: `analyze_single_video(video_data)` — sends a single video's title, content_params, and stats (including `subscribers_gained`, `views_per_subscriber`) to Gemini → returns `performance_rating` (0-100), `what_worked`, `what_didnt`, `key_learnings`
+- **Analyze single video**: `analyze_single_video(video_data)` — sends a single video's title, content_params, and stats (including `subscribers_gained`, `views_per_subscriber`) to Gemini → returns `performance_rating` (0-100), `what_worked`, `what_didnt`, `key_learnings`. The `performance_rating` uses fixed weightage: `subscribers_gained` 25%, `avg_percentage_viewed` 25%, `views` 20%, `engagement_rate` 10%, `comments` 8%, `likes` 5%, `views_per_subscriber` 5%, `estimated_minutes_watched` 2%
 - **Analyze videos (channel summary)**: Sends aggregated per-video data (now including `ai_insight` per video) + previous analysis + content_schema → returns updated channel summary JSON
 - **Generate content**: Given a category + its analysis insights + content_schema + content_param_analysis + best_combinations → generates title, description, tags, and `content_params` (with music) for new videos
 - **Model fallback chain**: Tries models in order — if one fails (rate limit, error), automatically falls back to the next:

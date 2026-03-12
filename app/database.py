@@ -14,12 +14,24 @@ _client: AsyncIOMotorClient | None = None
 _db: AsyncIOMotorDatabase | None = None
 
 
-async def connect_db(mongodb_uri: str, db_name: str) -> AsyncIOMotorDatabase:
-    """Create the Motor client, store references, and build indexes."""
+async def connect_db(
+    mongodb_uri: str,
+    db_name: str,
+    *,
+    create_indexes: bool = True,
+) -> AsyncIOMotorDatabase:
+    """Create the Motor client, store references, and optionally build indexes.
+
+    Set create_indexes=False for one-off scripts (e.g. backfills) so they only
+    open a connection; indexes are assumed to already exist from the main app.
+    """
     global _client, _db
 
     _client = AsyncIOMotorClient(mongodb_uri, tlsCAFile=certifi.where())
     _db = _client[db_name]
+
+    if not create_indexes:
+        return _db
 
     # ---------- indexes ----------
     await _db.channels.create_index("channel_id", unique=True)

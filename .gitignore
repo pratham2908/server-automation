@@ -1,7 +1,7 @@
 ssh-key-2.key
 ssh-key-2.pub
 .env
-.venv
+.venv*
 youtube_token.json
 youtube_tokens/
 __pycache__/

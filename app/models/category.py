@@ -44,6 +44,7 @@ class Category(BaseModel):
     score: float = 0.0
     status: CategoryStatus = CategoryStatus.ACTIVE
     video_count: int = 0
+    video_ids: list[str] = Field(default_factory=list, description="Video IDs of eligible videos in this category")
     metadata: CategoryMetadata = Field(default_factory=CategoryMetadata)
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)

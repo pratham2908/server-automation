@@ -8,6 +8,7 @@ from app.timezone import now_ist, to_ist_iso
 
 from dateutil.parser import isoparse
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
@@ -288,6 +289,110 @@ async def update_video_status(
             )
 
     return {"ok": True, "video_id": video_id, "status": body.status.value}
+
+
+# ------------------------------------------------------------------
+# PATCH /{video_id}/category  –  move video to another category
+# ------------------------------------------------------------------
+
+
+class VideoCategoryChange(BaseModel):
+    """Body for changing a video's category."""
+
+    old_category_id: str = Field(..., description="MongoDB _id of the current category")
+    new_category_id: str = Field(..., description="MongoDB _id of the target category")
+
+
+@router.patch("/{video_id}/category")
+async def change_video_category(
+    channel_id: str,
+    video_id: str,
+    body: VideoCategoryChange,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Move a video from one category to another.
+
+    Updates the video document, the per-video analysis record in analysis_history,
+    and recomputes metadata/video_count/video_ids for both categories.
+    """
+    video = await db.videos.find_one(
+        {"channel_id": channel_id, "video_id": video_id}
+    )
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+
+    try:
+        old_oid = ObjectId(body.old_category_id)
+        new_oid = ObjectId(body.new_category_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid category_id format",
+        )
+
+    old_cat = await db.categories.find_one(
+        {"_id": old_oid, "channel_id": channel_id}
+    )
+    new_cat = await db.categories.find_one(
+        {"_id": new_oid, "channel_id": channel_id}
+    )
+    if not old_cat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Old category not found",
+        )
+    if not new_cat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="New category not found",
+        )
+
+    old_name = old_cat["name"]
+    new_name = new_cat["name"]
+    if video.get("category") != old_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Video category is '{video.get('category')}', not '{old_name}'",
+        )
+
+    # Update video
+    await db.videos.update_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {"$set": {"category": new_name, "updated_at": now_ist()}},
+    )
+
+    # Update per-video analysis record
+    await db.analysis_history.update_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {"$set": {"category": new_name}},
+    )
+
+    # Recompute metadata + video_count + video_ids for both categories
+    from app.services.todo_engine import _compute_category_metadata
+
+    for cat_doc, cat_name in [(old_cat, old_name), (new_cat, new_name)]:
+        meta = await _compute_category_metadata(channel_id, cat_name, db)
+        await db.categories.update_one(
+            {"_id": cat_doc["_id"]},
+            {
+                "$set": {
+                    "metadata": meta,
+                    "video_count": meta.get("total_videos", 0),
+                    "video_ids": meta.get("video_ids", []),
+                    "updated_at": now_ist(),
+                }
+            },
+        )
+
+    return {
+        "ok": True,
+        "video_id": video_id,
+        "old_category": old_name,
+        "new_category": new_name,
+    }
 
 
 # ------------------------------------------------------------------
