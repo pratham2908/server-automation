@@ -204,9 +204,9 @@ async def api_schema():
                 "group": "Channels",
                 "method": "DELETE",
                 "path": "/api/v1/channels/{channel_id}",
-                "description": "Delete channel and all associated data",
+                "description": "Delete channel and all associated data, including R2 files",
                 "request": None,
-                "response": {"status": "deleted"},
+                "response": {"ok": True, "channel_id": "ch1", "deleted": True},
             },
             # -- Categories --
             {
@@ -255,9 +255,17 @@ async def api_schema():
                 "group": "Categories",
                 "method": "PATCH",
                 "path": "/api/v1/channels/{channel_id}/categories/{category_object_id}",
-                "description": "Update a category",
+                "description": "Update a category. Name changes propagate to videos.",
                 "request": {"name": "New Name", "description": "Updated", "score": 90, "status": "archived"},
-                "response": {"name": "New Name", "score": 90},
+                "response": {"ok": True, "category_id": "inserted_id_1"},
+            },
+            {
+                "group": "Categories",
+                "method": "DELETE",
+                "path": "/api/v1/channels/{channel_id}/categories/{category_object_id}",
+                "description": "Delete a category and move its videos to 'Uncategorized'",
+                "request": None,
+                "response": {"ok": True, "category_id": "inserted_id_1", "deleted": True},
             },
             # -- Videos --
             {
@@ -407,7 +415,15 @@ async def api_schema():
                 "path": "/api/v1/channels/{channel_id}/videos/updateToDoList",
                 "description": "Generate n new video ideas via Gemini based on latest analysis",
                 "request": {"n": 5},
-                "response": {"status": "generating in background"},
+                "response": {"ok": True, "message": "Successfully generated 5 new videos for the to-do list."},
+            },
+            {
+                "group": "Videos",
+                "method": "DELETE",
+                "path": "/api/v1/channels/{channel_id}/videos/{video_id}",
+                "description": "Delete a video document and clean up all associated assets and queue entries",
+                "request": None,
+                "response": {"ok": True, "video_id": "uuid-1234", "deleted": True},
             },
             # -- Analysis --
             {

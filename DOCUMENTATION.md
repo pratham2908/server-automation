@@ -271,14 +271,10 @@ Partially update channel fields.
 
 ---
 
-#### `DELETE /{channel_id}` — Delete a channel
-
-**⚠️ Destructive operation.** Removes the channel AND all associated data:
-
-- All videos in the `videos` collection for this channel
-- All entries in `video_queue` for this channel
-- All categories for this channel
-- The analysis document for this channel
+- **Endpoint**: `/api/v1/channels/{channel_id}`
+- **Method**: `DELETE`
+- **Description**: Removes channel and ALL associated data (videos, categories, analysis, queues).
+- **Cleanup**: It automatically iterates through all videos and deletes their associated `.mp4` files from Cloudflare R2 storage before removing the database records.
 
 **Response (200):** `{"ok": true, "channel_id": "tech-tips", "deleted": true}`
 
@@ -388,9 +384,9 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 3. **Refreshes metadata** for all existing published videos in the DB — updates views, likes, comments, engagement rates, analytics, etc. with the latest data from YouTube
 4. **Reconciles scheduled videos** — finds all videos in the DB with status `scheduled` and checks YouTube to see if they are actually live (privacy status is `public`). If live, marks them as `published`, sets `published_at` from YouTube's publish time, and cleans up their `schedule_queue` entry
 5. Skips any already in the `videos` collection (by `youtube_video_id`)
-6. **Extracts content params AND derives category** for new videos in batches of 5 via a single Gemini call — extracts `content_params` (including music) based on the channel's `content_schema`, then derives `category` from those extracted parameters (not from title/description/tags directly). Content params are saved as `"unverified"`
-7. Auto-creates new categories with `score: 0` and `video_count: 0` (scores/counts are updated later during analysis)
-8. Inserts videos as `published` with `category`, `content_params`, and `content_params_status` assigned; `created_at` and `published_at` are set to the **YouTube publish date**; `metadata` is fully populated
+6. **Extracts content params AND derives category** for new videos in batches of 5 via Gemini.
+7. Auto-creates categories and **updates video counts** for all newly imported/reconciled videos.
+8. Inserts videos as `published` with full metadata.
 
 **Response (200):**
 
@@ -398,21 +394,24 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 {
   "ok": true,
   "synced": 15,
-  "reconciled": 2,
-  "metadata_refreshed": 45,
-  "categories_created": ["Tutorials", "Reviews", "Vlogs"],
-  "videos": [
-    {
-      "title": "10 VS Code Tricks",
-      "category": "Tutorials"
-    },
-    {
-      "title": "iPhone 16 Review",
-      "category": "Reviews"
-    }
-  ]
+  ...
 }
 ```
+
+---
+
+#### `DELETE /{video_id}` — Delete a video
+
+Permanently remove a video and its assets.
+
+**What happens:**
+
+1. Deletes `.mp4` from R2.
+2. Decrements category `video_count` if the video was published.
+3. Removes from `posting_queue` and `schedule_queue`.
+4. Deletes video document and `analysis_history` records.
+
+**Response (200):** `{"ok": true, "video_id": "...", "deleted": true}`
 
 ---
 
@@ -432,8 +431,10 @@ Changes a video's status.
 
 **Side effects:**
 
-- When marking a video as `published`, the corresponding category's `video_count` is incremented by 1.
-- When marking as `published`, `published_at` is automatically set to the current time.
+- **Automatic Cleanup**: If moving FROM `ready` TO any other status, the video's `.mp4` file is deleted from R2 and it's removed from the `posting_queue`.
+- **Category Counts**: When marking as `published`, the category's `video_count` is incremented. If moving AWAY from `published`, the count is decremented.
+- **Timestamps**: When marking as `published`, `published_at` is set. When moving to `todo`, `scheduled_at` is cleared.
+- **Scheduled Queue**: If moving away from `scheduled`, the entry is removed from the `schedule_queue`.
 
 **Response (200):**
 
@@ -453,8 +454,8 @@ Moves a video from one category to another. Updates the video document, the per-
 
 ```json
 {
-  "old_category_id": "65f...",  // MongoDB _id of current category
-  "new_category_id": "65f..."   // MongoDB _id of target category
+  "old_category_id": "65f...", // MongoDB _id of current category
+  "new_category_id": "65f..." // MongoDB _id of target category
 }
 ```
 
@@ -781,6 +782,23 @@ Accepts a **single category** or a **list of categories**.
 
 **Response (200):** `{"ok": true, "category_id": "65f..."}`
 
+**Name Propagation**: If the category name is updated, the server automatically updates the `category` field on all associated `videos` and `analysis_history` records to prevent broken metadata.
+
+---
+
+#### `DELETE /{category_id}` — Delete a category
+
+Removes a category and re-allocates its videos.
+
+**What happens:**
+
+1. Finds all videos belonging to this category.
+2. Sets their `category` field to `"Uncategorized"`.
+3. Updates `analysis_history` records to `"Uncategorized"`.
+4. Deletes the category document from the `categories` collection.
+
+**Response (200):** `{"ok": true, "category_id": "...", "deleted": true}`
+
 ---
 
 ### Analysis
@@ -806,16 +824,16 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 
    **Performance rating weightage** (used by Gemini to compute the 0-100 `performance_rating`):
 
-   | Metric | Weight | Signal |
-   |--------|--------|--------|
-   | `subscribers_gained` | 25% | Direct channel growth impact |
-   | `avg_percentage_viewed` | 25% | Content quality / retention |
-   | `views` | 20% | Raw reach |
-   | `engagement_rate` | 10% | (likes + comments) / views |
-   | `comments` | 8% | Active audience participation |
-   | `likes` | 5% | Passive approval |
-   | `views_per_subscriber` | 5% | Viral reach beyond existing audience (>1.0 = beyond subs) |
-   | `estimated_minutes_watched` | 2% | Total accumulated watch time |
+   | Metric                      | Weight | Signal                                                    |
+   | --------------------------- | ------ | --------------------------------------------------------- |
+   | `subscribers_gained`        | 25%    | Direct channel growth impact                              |
+   | `avg_percentage_viewed`     | 25%    | Content quality / retention                               |
+   | `views`                     | 20%    | Raw reach                                                 |
+   | `engagement_rate`           | 10%    | (likes + comments) / views                                |
+   | `comments`                  | 8%     | Active audience participation                             |
+   | `likes`                     | 5%     | Passive approval                                          |
+   | `views_per_subscriber`      | 5%     | Viral reach beyond existing audience (>1.0 = beyond subs) |
+   | `estimated_minutes_watched` | 2%     | Total accumulated watch time                              |
 
    For each metric, Gemini scores that dimension 0-100 relative to the channel's typical range, then computes `performance_rating` as the weighted sum. Missing metrics are treated as 0.
 

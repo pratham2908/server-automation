@@ -323,7 +323,7 @@ async def delete_channel(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Remove a channel and all its associated data."""
+    """Remove a channel and all its associated data, including R2 files."""
     doc = await db.channels.find_one({"channel_id": channel_id})
     if not doc:
         raise HTTPException(
@@ -331,7 +331,26 @@ async def delete_channel(
             detail=f"Channel '{channel_id}' not found",
         )
 
-    # Delete channel and all scoped data.
+    # 1. Clean up R2 storage
+    # Fetch all videos with an R2 key to delete files first
+    videos_with_files = await db.videos.find(
+        {"channel_id": channel_id, "r2_object_key": {"$ne": None}},
+        {"r2_object_key": 1}
+    ).to_list(length=None)
+
+    if videos_with_files:
+        from app.routers.videos import _get_r2
+        try:
+            r2 = _get_r2()
+            for v in videos_with_files:
+                r2.delete_video(v["r2_object_key"])
+        except Exception as exc:
+            # We log but continue, as orphaned R2 files are better than failing deletion
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Cleanup of R2 files for channel {channel_id} partially failed: {exc}")
+
+    # 2. Delete channel and all scoped data from DB.
     await db.channels.delete_one({"channel_id": channel_id})
     await db.videos.delete_many({"channel_id": channel_id})
     await db.posting_queue.delete_many({"channel_id": channel_id})

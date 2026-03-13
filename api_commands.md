@@ -162,7 +162,7 @@ X-API-Key: <your-api-key>
 
 - **Endpoint**: `/api/v1/channels/{channel_id}`
 - **Method**: `DELETE`
-- **Description**: Removes channel and ALL associated videos, categories, analysis, and queues.
+- **Description**: Removes channel and ALL associated data (videos, categories, analysis, queues). Also deletes all associated video files from R2 storage.
 - **Response**:
 
 ```json
@@ -230,6 +230,7 @@ X-API-Key: <your-api-key>
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/categories/{category_object_id}`
 - **Method**: `PATCH`
+- **Description**: Partially update a category. If the `name` is changed, all videos and analysis history records in that category are automatically updated to the new name.
 - **Request Body**: (All fields optional)
 
 ```json
@@ -242,6 +243,13 @@ X-API-Key: <your-api-key>
 ```
 
 - **Response**: Updated Category object.
+
+### Delete Category
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/categories/{category_object_id}`
+- **Method**: `DELETE`
+- **Description**: Deletes a category. All videos belonging to this category are moved to "Uncategorized" to maintain data integrity.
+- **Response**: `{"ok": true, "category_id": "...", "deleted": true}`
 
 ---
 
@@ -308,7 +316,10 @@ X-API-Key: <your-api-key>
 }
 ```
 
-- **Notes**: When status is set to `published`, `published_at` is automatically set to the current time.
+- **Notes**:
+  - When status is set to `published`, `published_at` is automatically set to the current time.
+  - If moving FROM `ready` TO `todo` or `published`, the video is automatically removed from the ready queue and its file is deleted from Cloudflare R2.
+  - If moving TO `todo`, scheduling info (`scheduled_at`) is cleared and it's removed from the scheduled queue.
 
 - **Response**:
 
@@ -334,6 +345,13 @@ X-API-Key: <your-api-key>
 
 - **Description**: Moves a video from one category to another. Updates the video document and the per-video record in `analysis_history`; recomputes metadata, `video_count`, and `video_ids` for both categories. Category IDs are MongoDB `_id` values.
 - **Response**: `{"ok": true, "video_id": "...", "old_category": "Tutorials", "new_category": "Reviews"}`
+
+### Delete Video
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}`
+- **Method**: `DELETE`
+- **Description**: Permanently deletes a video and its assets. Cleans up R2 storage, removes it from all queues (posting/schedule), updates category video counts, and deletes analysis history.
+- **Response**: `{"ok": true, "video_id": "...", "deleted": true}`
 
 ### Extract Content Params
 

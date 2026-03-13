@@ -259,36 +259,84 @@ async def update_video_status(
     body: VideoStatusUpdate,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Toggle video status between ``done`` and ``todo``."""
-    update_fields = {
-        "status": body.status.value,
-        "updated_at": now_ist(),
-    }
-    if body.status == VideoStatus.PUBLISHED:
-        update_fields["published_at"] = now_ist()
+    """Toggle video status between various lifecycle states.
 
-    result = await db.videos.update_one(
-        {"channel_id": channel_id, "video_id": video_id},
-        {"$set": update_fields},
-    )
-    if result.matched_count == 0:
+    If moving FROM 'ready' TO 'todo' or 'published', the video is removed
+    from the ready queue and its file is deleted from R2.
+    """
+    # 1. Fetch current video state
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if not video:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Video {video_id} not found",
         )
 
-    # Update category video count when marking published.
+    old_status = video.get("status")
+    new_status = body.status.value
+
+    update_fields = {
+        "status": new_status,
+        "updated_at": now_ist(),
+    }
+
+    # 2. Cleanup logic if the video WAS 'ready'
+    if old_status == VideoStatus.READY and new_status != VideoStatus.READY:
+        # Delete from R2
+        r2_key = video.get("r2_object_key")
+        if r2_key:
+            try:
+                r2 = _get_r2()
+                r2.delete_video(r2_key)
+            except Exception as exc:
+                logger.warning(f"Failed to delete R2 object {r2_key} for video {video_id}: {exc}")
+        
+        # Remove from ready queue (posting_queue)
+        await db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
+        
+        # Clear R2 key in document
+        update_fields["r2_object_key"] = None
+
+    # 3. Logic if moving TO 'published'
     if body.status == VideoStatus.PUBLISHED:
-        video = await db.videos.find_one(
-            {"channel_id": channel_id, "video_id": video_id}
-        )
-        if video and video.get("category"):
+        update_fields["published_at"] = now_ist()
+        
+        # If it was scheduled, clean up scheduled queue
+        if old_status == VideoStatus.SCHEDULED:
+            await db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
+
+        # Update category count (increment)
+        if new_status == VideoStatus.PUBLISHED and old_status != VideoStatus.PUBLISHED:
+            if video.get("category"):
+                await db.categories.update_one(
+                    {"channel_id": channel_id, "name": video["category"]},
+                    {"$inc": {"video_count": 1}},
+                )
+
+    # 4. Logic if moving TO any other status FROM 'published'
+    if old_status == VideoStatus.PUBLISHED and new_status != VideoStatus.PUBLISHED:
+        if video.get("category"):
             await db.categories.update_one(
                 {"channel_id": channel_id, "name": video["category"]},
-                {"$inc": {"video_count": 1}},
+                {"$inc": {"video_count": -1}},
             )
 
-    return {"ok": True, "video_id": video_id, "status": body.status.value}
+    # 5. Logic if moving TO 'todo'
+    if body.status == VideoStatus.TODO:
+        # Clear scheduling info
+        update_fields["scheduled_at"] = None
+        
+        # If it was scheduled, clean up scheduled queue
+        if old_status == VideoStatus.SCHEDULED:
+            await db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
+
+    # 6. Perform update
+    await db.videos.update_one(
+        {"_id": video["_id"]},
+        {"$set": update_fields},
+    )
+
+    return {"ok": True, "video_id": video_id, "status": new_status}
 
 
 # ------------------------------------------------------------------
@@ -1145,6 +1193,13 @@ async def sync_videos(
             await db.schedule_queue.delete_one(
                 {"channel_id": channel_id, "video_id": vid["video_id"]}
             )
+            
+            # Increment category video count for reconciled video
+            if vid.get("category"):
+                await db.categories.update_one(
+                    {"channel_id": channel_id, "name": vid["category"]},
+                    {"$inc": {"video_count": 1}}
+                )
             reconciled += 1
             logger.info(
                 "Reconciled scheduled video '%s' — now live on YouTube.",
@@ -1288,6 +1343,18 @@ async def sync_videos(
     if docs:
         await db.videos.insert_many(docs)
         logger.success(f"Inserted {len(docs)} new synchronized videos into database")
+        
+        # Batch update category video counts for new videos
+        new_cat_counts: dict[str, int] = {}
+        for d in docs:
+            cat = d["category"]
+            new_cat_counts[cat] = new_cat_counts.get(cat, 0) + 1
+            
+        for cat_name, count in new_cat_counts.items():
+            await db.categories.update_one(
+                {"channel_id": channel_id, "name": cat_name},
+                {"$inc": {"video_count": count}}
+            )
 
     # Build per-video summary.
     video_summary = [
@@ -1350,3 +1417,49 @@ async def generate_todos(
         "ok": True,
         "message": f"Successfully generated {body.n} new videos for the to-do list.",
     }
+
+
+# ------------------------------------------------------------------
+# DELETE /{video_id}  –  remove a video and its assets
+# ------------------------------------------------------------------
+
+
+@router.delete("/{video_id}")
+async def delete_video(
+    channel_id: str,
+    video_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Delete a video document and clean up all associated assets and queue entries."""
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+
+    # 1. Clean up R2 storage
+    r2_key = video.get("r2_object_key")
+    if r2_key:
+        try:
+            r2 = _get_r2()
+            r2.delete_video(r2_key)
+        except Exception as exc:
+            logger.warning(f"Failed to delete R2 object {r2_key} for video {video_id}: {exc}")
+
+    # 2. Update category video count if it was published
+    if video.get("status") == VideoStatus.PUBLISHED and video.get("category"):
+        await db.categories.update_one(
+            {"channel_id": channel_id, "name": video["category"]},
+            {"$inc": {"video_count": -1}}
+        )
+
+    # 3. Remove from all possible queues
+    await db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
+    await db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
+
+    # 4. Delete the video document and its analysis history
+    await db.videos.delete_one({"_id": video["_id"]})
+    await db.analysis_history.delete_many({"channel_id": channel_id, "video_id": video_id})
+
+    return {"ok": True, "video_id": video_id, "deleted": True}
