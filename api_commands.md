@@ -453,10 +453,11 @@ X-API-Key: <your-api-key>
 ```
 
 - **What it does**:
-  - Fetches all videos from the YouTube channel
+  - Fetches all videos from the YouTube channel (including `status.publishAt` for scheduled detection)
   - **Refreshes metadata** (views, likes, comments, engagement rates, analytics) for every existing video in the DB
   - Reconciles scheduled videos that are actually live (public) on YouTube (marks them as `published`, sets `published_at` from YouTube's publish time)
   - Imports new videos: **extracts content_params (including music) AND derives category** from those params via a single Gemini call. Content params saved as `"unverified"`
+  - **Detects scheduled videos**: if a YouTube video has a future `status.publishAt`, it is imported as `scheduled` (with `scheduled_at` set) and added to the `schedule_queue`, instead of being marked as `published`
 
 - **Response**:
 
@@ -464,10 +465,12 @@ X-API-Key: <your-api-key>
 {
   "ok": true,
   "synced": 5,
+  "synced_published": 4,
+  "synced_scheduled": 1,
   "reconciled": 2,
   "metadata_refreshed": 45,
   "categories_created": ["Tutorials"],
-  "videos": [{ "title": "New Video Title", "category": "Tutorials" }]
+  "videos": [{ "title": "New Video Title", "category": "Tutorials", "status": "published" }]
 }
 ```
 

@@ -950,7 +950,7 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
         resp = (
             yt._youtube.videos()
             .list(
-                part="snippet,statistics,contentDetails",
+                part="snippet,statistics,contentDetails,status",
                 id=",".join(batch_ids),
             )
             .execute()
@@ -959,6 +959,7 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
             snippet = item.get("snippet", {})
             stats = item.get("statistics", {})
             content = item.get("contentDetails", {})
+            yt_status = item.get("status", {})
 
             views = int(stats.get("viewCount", 0))
             likes = int(stats.get("likeCount", 0))
@@ -973,6 +974,8 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
                     "description": snippet.get("description", ""),
                     "tags": snippet.get("tags", []),
                     "published_at": snippet.get("publishedAt", ""),
+                    "privacy_status": yt_status.get("privacyStatus", ""),
+                    "publish_at": yt_status.get("publishAt"),
                     "views": views,
                     "likes": likes,
                     "comments": comments,
@@ -1281,8 +1284,11 @@ async def sync_videos(
 
     # ------------------------------------------------------------------
     # Insert newly discovered videos.
+    # Scheduled (private + future publishAt) videos go to schedule_queue.
     # ------------------------------------------------------------------
     docs = []
+    scheduled_docs = []
+
     for v in new_videos:
         yt_id = v["youtube_video_id"]
         cat_info = categorizations.get(yt_id, {"category": "Uncategorized", "content_params": {}})
@@ -1298,61 +1304,106 @@ async def sync_videos(
 
         extracted_params = cat_info.get("content_params", {})
 
-        docs.append(
-            {
-                "channel_id": channel_id,
-                "video_id": str(uuid.uuid4()),
-                "title": v["title"],
-                "description": v["description"],
-                "tags": v["tags"],
-                "category": cat_info["category"],
-                "status": "published",
-                "suggested": False,
-                "youtube_video_id": yt_id,
-                "r2_object_key": None,
-                "metadata": {
-                    "views": v.get("views"),
-                    "likes": v.get("likes"),
-                    "comments": v.get("comments"),
-                    "duration_seconds": v.get("duration_seconds"),
-                    "engagement_rate": v.get("engagement_rate"),
-                    "like_rate": v.get("like_rate"),
-                    "comment_rate": v.get("comment_rate"),
-                    "avg_percentage_viewed": v.get("avg_percentage_viewed"),
-                    "avg_view_duration_seconds": v.get("avg_view_duration_seconds"),
-                    "estimated_minutes_watched": v.get("estimated_minutes_watched"),
-                },
-                "content_params": extracted_params if extracted_params else None,
-                "content_params_status": "unverified" if extracted_params else None,
-                "published_at": yt_published_at,
-                "created_at": yt_published_at,
-                "updated_at": now,
-            }
-        )
+        is_scheduled = False
+        scheduled_at_dt = None
+        if v.get("publish_at"):
+            try:
+                from app.timezone import IST
+                scheduled_at_dt = isoparse(v["publish_at"]).astimezone(IST)
+                if scheduled_at_dt > now:
+                    is_scheduled = True
+            except (ValueError, TypeError):
+                pass
+
+        vid_id = str(uuid.uuid4())
+
+        doc = {
+            "channel_id": channel_id,
+            "video_id": vid_id,
+            "title": v["title"],
+            "description": v["description"],
+            "tags": v["tags"],
+            "category": cat_info["category"],
+            "status": "scheduled" if is_scheduled else "published",
+            "suggested": False,
+            "youtube_video_id": yt_id,
+            "r2_object_key": None,
+            "metadata": {
+                "views": v.get("views"),
+                "likes": v.get("likes"),
+                "comments": v.get("comments"),
+                "duration_seconds": v.get("duration_seconds"),
+                "engagement_rate": v.get("engagement_rate"),
+                "like_rate": v.get("like_rate"),
+                "comment_rate": v.get("comment_rate"),
+                "avg_percentage_viewed": v.get("avg_percentage_viewed"),
+                "avg_view_duration_seconds": v.get("avg_view_duration_seconds"),
+                "estimated_minutes_watched": v.get("estimated_minutes_watched"),
+            },
+            "content_params": extracted_params if extracted_params else None,
+            "content_params_status": "unverified" if extracted_params else None,
+            "scheduled_at": scheduled_at_dt if is_scheduled else None,
+            "published_at": None if is_scheduled else yt_published_at,
+            "created_at": yt_published_at,
+            "updated_at": now,
+        }
+        docs.append(doc)
+
+        if is_scheduled:
+            scheduled_docs.append(doc)
 
     if docs:
         await db.videos.insert_many(docs)
         logger.success(f"Inserted {len(docs)} new synchronized videos into database")
-        
+
+        # Add scheduled videos to the schedule_queue.
+        if scheduled_docs:
+            last = await db.schedule_queue.find_one(
+                {"channel_id": channel_id},
+                sort=[("position", -1)],
+            )
+            next_pos = (last["position"] + 1) if last else 1
+
+            queue_entries = []
+            for sd in scheduled_docs:
+                queue_entries.append({
+                    "channel_id": channel_id,
+                    "video_id": sd["video_id"],
+                    "position": next_pos,
+                    "scheduled_at": sd["scheduled_at"],
+                    "added_at": now_ist(),
+                })
+                next_pos += 1
+            await db.schedule_queue.insert_many(queue_entries)
+            logger.success(
+                f"Added {len(scheduled_docs)} scheduled video(s) to schedule_queue"
+            )
+
         from app.services.todo_engine import recompute_category
-        affected_cats = {d["category"] for d in docs}
+        affected_cats = {d["category"] for d in docs if d["status"] == "published"}
         for cat_name in affected_cats:
             await recompute_category(channel_id, cat_name, db)
 
     # Build per-video summary.
     video_summary = [
-        {"title": d["title"], "category": d["category"]}
+        {"title": d["title"], "category": d["category"], "status": d["status"]}
         for d in docs
     ]
 
+    published_count = sum(1 for d in docs if d["status"] == "published")
+    scheduled_count = len(scheduled_docs)
+
     logger.success(
-        f"✅ YouTube Sync Complete! Synced {len(docs)} new videos.",
+        f"✅ YouTube Sync Complete! Synced {len(docs)} new videos "
+        f"({published_count} published, {scheduled_count} scheduled).",
         extra={"color": "BRIGHT_GREEN"}
     )
 
     return {
         "ok": True,
         "synced": len(docs),
+        "synced_published": published_count,
+        "synced_scheduled": scheduled_count,
         "reconciled": reconciled,
         "metadata_refreshed": metadata_updated,
         "categories_created": [

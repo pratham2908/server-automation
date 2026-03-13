@@ -379,14 +379,15 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 
 **What happens:**
 
-1. Fetches all videos from the channel's uploads playlist (paginated) — pulls `snippet`, `statistics`, and `contentDetails` (duration)
+1. Fetches all videos from the channel's uploads playlist (paginated) — pulls `snippet`, `statistics`, `contentDetails` (duration), and `status` (privacyStatus, publishAt)
 2. Enriches with YouTube Analytics API data (`avg_percentage_viewed`, `avg_view_duration_seconds`, `estimated_minutes_watched`) when available
 3. **Refreshes metadata** for all existing published videos in the DB — updates views, likes, comments, engagement rates, analytics, etc. with the latest data from YouTube
 4. **Reconciles scheduled videos** — finds all videos in the DB with status `scheduled` and checks YouTube to see if they are actually live (privacy status is `public`). If live, marks them as `published`, sets `published_at` from YouTube's publish time, and cleans up their `schedule_queue` entry
 5. Skips any already in the `videos` collection (by `youtube_video_id`)
 6. **Extracts content params AND derives category** for new videos in batches of 5 via Gemini.
 7. Auto-creates categories and **updates video counts** for all newly imported/reconciled videos.
-8. Inserts videos as `published` with full metadata.
+8. **Detects scheduled videos** — if a video has `status.publishAt` set to a future time, it is inserted as `scheduled` (not `published`) with `scheduled_at` set to that time, and an entry is added to the `schedule_queue`. This correctly recognises videos that were uploaded to YouTube with a future publish time.
+9. Remaining videos are inserted as `published` with full metadata.
 
 **Response (200):**
 
@@ -394,6 +395,10 @@ Fetches all videos from the YouTube channel, finds any not already in the DB, ca
 {
   "ok": true,
   "synced": 15,
+  "synced_published": 14,
+  "synced_scheduled": 1,
+  "reconciled": 0,
+  "metadata_refreshed": 30,
   ...
 }
 ```
@@ -1128,10 +1133,48 @@ Stores all video records — both manually uploaded and AI-generated to-do items
 
 **Status lifecycle:**
 
-- `todo` → Video idea exists (AI-generated or manual), not yet produced
-- `ready` → Video file uploaded to R2, sitting in the ready queue
-- `scheduled` → Video uploaded to YouTube as private with a future `publishAt`, sitting in the scheduled queue waiting for YouTube to auto-publish
 - `published` → Video is live on YouTube; `published_at` is set at this transition (reconciled by the sync endpoint)
+
+---
+
+### Video Timestamp Logic
+
+The system maintains several timestamps to track a video's lifecycle. All timestamps are in **IST (GMT+5:30)**.
+
+#### `created_at`
+
+- **Manual/AI Generation**: Set to the time the "todo" idea was generated.
+- **YouTube Sync**: Set to the **YouTube publish date**. This preserves the historical timeline for imported videos.
+- **Purpose**: Represents the conceptual "birth" of the video entry in our system.
+
+#### `updated_at`
+
+- **Trigger**: Updated on every metadata change, status transition, or category move.
+- **Purpose**: Tracks the last time the database record was modified.
+
+#### `scheduled_at`
+
+- **Initial State**: `null`.
+- **Trigger**: Set during the **Schedule** operation when a future publish slot is calculated or manually provided.
+- **YouTube Sync**: If a video on YouTube has `status.publishAt` set to a future time (i.e. it was uploaded as private with a scheduled go-live time), the sync flow imports it with status `scheduled` and sets `scheduled_at` to that time.
+- **Cleanup**: Cleared if the video is moved back to `todo` or `ready`.
+- **Purpose**: Represents the target time for the video to go live on YouTube.
+
+#### `published_at`
+
+- **Initial State**: `null`.
+- **Manual Update**: Set to current time when status is manually set to `published`.
+- **YouTube Sync/Reconciliation**: Set to the actual publish time from the YouTube API.
+- **YouTube Sync (scheduled video)**: Left as `null` when a video is imported as `scheduled` (it hasn't gone live yet).
+- **Purpose**: Represents the definitive time the video became public.
+
+#### `added_at` (Queue Specific)
+
+- **`posting_queue`**: Set when the file is uploaded to R2, marking it as `ready`.
+- **`schedule_queue`**: Set when the video is successfully pushed to YouTube with a schedule.
+- **Purpose**: Tracks how long an item has been waiting in a specific processing queue.
+
+---
 
 ---
 
@@ -1539,8 +1582,8 @@ sequenceDiagram
 
     S->>YT: Fetch all video IDs (uploads playlist)
     YT-->>S: Video IDs (paginated)
-    S->>YT: Fetch snippet + stats + contentDetails (batches of 50)
-    YT-->>S: Title, views, likes, duration, etc.
+    S->>YT: Fetch snippet + stats + contentDetails + status (batches of 50)
+    YT-->>S: Title, views, likes, duration, privacyStatus, publishAt, etc.
     S->>YTA: Fetch analytics (avg % viewed, watch time)
     YTA-->>S: Analytics data
 
@@ -1559,9 +1602,14 @@ sequenceDiagram
     end
 
     Note over S,DB: Step 4: Insert new videos
-    S->>DB: Insert all new videos (status=published)
+    alt Video has future status.publishAt
+        S->>DB: Insert as scheduled (scheduled_at = publishAt)
+        S->>DB: Add entry to schedule_queue
+    else Video is public
+        S->>DB: Insert as published
+    end
 
-    S-->>C: {synced, reconciled, metadata_refreshed, videos}
+    S-->>C: {synced, synced_published, synced_scheduled, reconciled, metadata_refreshed, videos}
 ```
 
 ### Analysis Flow
