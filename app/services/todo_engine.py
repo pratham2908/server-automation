@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.timezone import IST, now_ist
+from app.timezone import IST, UTC, now_ist
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -49,7 +49,7 @@ async def _compute_category_metadata(
             videos.append(v)
             continue
         if created.tzinfo is None:
-            created = created.replace(tzinfo=IST)
+            created = created.replace(tzinfo=UTC)
         if created <= three_days_ago:
             videos.append(v)
 
@@ -105,6 +105,26 @@ async def _compute_category_metadata(
         ),
         "avg_subscribers": avg_subscribers,
     }
+
+
+async def recompute_category(
+    channel_id: str,
+    category_name: str,
+    db: AsyncIOMotorDatabase,
+) -> None:
+    """Recompute and persist metadata, video_count, and video_ids for one category."""
+    meta = await _compute_category_metadata(channel_id, category_name, db)
+    await db.categories.update_one(
+        {"channel_id": channel_id, "name": category_name},
+        {
+            "$set": {
+                "metadata": meta,
+                "video_count": meta.get("total_videos", 0),
+                "video_ids": meta.get("video_ids", []),
+                "updated_at": now_ist(),
+            }
+        },
+    )
 
 
 async def update_categories_from_analysis(

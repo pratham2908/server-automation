@@ -74,7 +74,7 @@ def compute_schedule_slots(
         if dt is None:
             continue
         if dt.tzinfo is None:
-            dt = tz.localize(dt)
+            dt = dt.replace(tzinfo=pytz.utc).astimezone(tz)
         else:
             dt = dt.astimezone(tz)
         occupied_keys.add((dt.year, dt.month, dt.day, dt.hour, dt.minute))

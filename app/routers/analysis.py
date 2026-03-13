@@ -7,7 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
 from app.dependencies import verify_api_key
-from app.timezone import IST
+from app.timezone import IST, UTC
 
 router = APIRouter(
     prefix="/api/v1/channels/{channel_id}/analysis",
@@ -104,7 +104,7 @@ async def get_latest_analysis(
             ready_for_analysis += 1
             continue
         if v_created_at.tzinfo is None:
-            v_created_at = v_created_at.replace(tzinfo=IST)
+            v_created_at = v_created_at.replace(tzinfo=UTC)
         if v_created_at <= three_days_ago:
             ready_for_analysis += 1
 

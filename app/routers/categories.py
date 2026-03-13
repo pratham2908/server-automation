@@ -9,6 +9,10 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.logger import get_logger
+
+logger = get_logger(__name__)
+
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.models.category import CategoryCreate, CategoryUpdate
@@ -136,18 +140,33 @@ async def update_category(
         {"$set": update_data},
     )
 
-    # If the name changed, propagate to all videos and analysis history
+    # If the name changed, propagate to all videos, analysis history, and analysis summary
     if new_name and new_name != old_name:
-        # Update videos
         await db.videos.update_many(
             {"channel_id": channel_id, "category": old_name},
             {"$set": {"category": new_name, "updated_at": now_ist()}}
         )
-        # Update analysis history
         await db.analysis_history.update_many(
             {"channel_id": channel_id, "category": old_name},
             {"$set": {"category": new_name}}
         )
+        # Rename inside analysis.category_analysis array entries
+        await db.analysis.update_one(
+            {"channel_id": channel_id, "category_analysis.category": old_name},
+            {"$set": {"category_analysis.$.category": new_name}},
+        )
+
+    # Warn if archiving a category that still has non-todo videos
+    if update_data.get("status") == "archived":
+        active_count = await db.videos.count_documents(
+            {"channel_id": channel_id, "category": new_name or old_name, "status": {"$ne": "todo"}}
+        )
+        if active_count:
+            logger.warning(
+                "Category '%s' archived but still has %d non-todo videos (ready/scheduled/published)",
+                new_name or old_name,
+                active_count,
+            )
 
     return {"ok": True, "category_id": category_id}
 
@@ -193,7 +212,21 @@ async def delete_category(
         {"$set": {"category": "Uncategorized"}}
     )
 
-    # 3. Delete the category document
+    # 3. Update analysis summary
+    await db.analysis.update_one(
+        {"channel_id": channel_id, "category_analysis.category": cat_name},
+        {"$set": {"category_analysis.$.category": "Uncategorized"}},
+    )
+
+    # 4. Delete the category document
     await db.categories.delete_one({"_id": oid})
+
+    # 5. Recompute Uncategorized category if it exists
+    from app.services.todo_engine import recompute_category
+    uncat = await db.categories.find_one(
+        {"channel_id": channel_id, "name": "Uncategorized"}
+    )
+    if uncat:
+        await recompute_category(channel_id, "Uncategorized", db)
 
     return {"ok": True, "category_id": category_id, "deleted": True}

@@ -252,6 +252,14 @@ async def _get_sync_status(channel_id: str, db) -> dict:
 # ------------------------------------------------------------------
 
 
+_VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "todo": {"published"},
+    "ready": {"todo", "published"},
+    "scheduled": {"todo", "published"},
+    "published": set(),
+}
+
+
 @router.patch("/{video_id}/status")
 async def update_video_status(
     channel_id: str,
@@ -259,12 +267,14 @@ async def update_video_status(
     body: VideoStatusUpdate,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Toggle video status between various lifecycle states.
+    """Change a video's lifecycle status.
 
-    If moving FROM 'ready' TO 'todo' or 'published', the video is removed
-    from the ready queue and its file is deleted from R2.
+    Valid transitions (other paths use dedicated endpoints like upload/schedule):
+      todo -> published | ready -> todo, published | scheduled -> todo, published
+    ``published`` is terminal.
     """
-    # 1. Fetch current video state
+    from app.services.todo_engine import recompute_category
+
     video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
     if not video:
         raise HTTPException(
@@ -275,14 +285,20 @@ async def update_video_status(
     old_status = video.get("status")
     new_status = body.status.value
 
-    update_fields = {
+    allowed = _VALID_STATUS_TRANSITIONS.get(old_status, set())
+    if new_status not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status transition: '{old_status}' -> '{new_status}'. Allowed: {sorted(allowed) or 'none (terminal)'}",
+        )
+
+    update_fields: dict = {
         "status": new_status,
         "updated_at": now_ist(),
     }
 
-    # 2. Cleanup logic if the video WAS 'ready'
-    if old_status == VideoStatus.READY and new_status != VideoStatus.READY:
-        # Delete from R2
+    # Cleanup: leaving 'ready' — delete R2 file and remove from posting queue
+    if old_status == "ready":
         r2_key = video.get("r2_object_key")
         if r2_key:
             try:
@@ -290,51 +306,27 @@ async def update_video_status(
                 r2.delete_video(r2_key)
             except Exception as exc:
                 logger.warning(f"Failed to delete R2 object {r2_key} for video {video_id}: {exc}")
-        
-        # Remove from ready queue (posting_queue)
         await db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
-        
-        # Clear R2 key in document
         update_fields["r2_object_key"] = None
 
-    # 3. Logic if moving TO 'published'
-    if body.status == VideoStatus.PUBLISHED:
-        update_fields["published_at"] = now_ist()
-        
-        # If it was scheduled, clean up scheduled queue
-        if old_status == VideoStatus.SCHEDULED:
-            await db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
-
-        # Update category count (increment)
-        if new_status == VideoStatus.PUBLISHED and old_status != VideoStatus.PUBLISHED:
-            if video.get("category"):
-                await db.categories.update_one(
-                    {"channel_id": channel_id, "name": video["category"]},
-                    {"$inc": {"video_count": 1}},
-                )
-
-    # 4. Logic if moving TO any other status FROM 'published'
-    if old_status == VideoStatus.PUBLISHED and new_status != VideoStatus.PUBLISHED:
-        if video.get("category"):
-            await db.categories.update_one(
-                {"channel_id": channel_id, "name": video["category"]},
-                {"$inc": {"video_count": -1}},
-            )
-
-    # 5. Logic if moving TO 'todo'
-    if body.status == VideoStatus.TODO:
-        # Clear scheduling info
+    # Cleanup: leaving 'scheduled' — remove from schedule queue
+    if old_status == "scheduled":
+        await db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
         update_fields["scheduled_at"] = None
-        
-        # If it was scheduled, clean up scheduled queue
-        if old_status == VideoStatus.SCHEDULED:
-            await db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
 
-    # 6. Perform update
+    # Moving to 'published'
+    if new_status == "published":
+        update_fields["published_at"] = now_ist()
+
+    # Perform update
     await db.videos.update_one(
         {"_id": video["_id"]},
         {"$set": update_fields},
     )
+
+    # Recompute category counts when entering or leaving 'published'
+    if video.get("category") and (new_status == "published" or old_status == "published"):
+        await recompute_category(channel_id, video["category"], db)
 
     return {"ok": True, "video_id": video_id, "status": new_status}
 
@@ -398,6 +390,17 @@ async def change_video_category(
             detail="New category not found",
         )
 
+    if old_cat.get("status") == "archived":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot move video from an archived category",
+        )
+    if new_cat.get("status") == "archived":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot move video to an archived category",
+        )
+
     old_name = old_cat["name"]
     new_name = new_cat["name"]
     if video.get("category") != old_name:
@@ -412,28 +415,17 @@ async def change_video_category(
         {"$set": {"category": new_name, "updated_at": now_ist()}},
     )
 
-    # Update per-video analysis record
-    await db.analysis_history.update_one(
+    # Update all per-video analysis records (use update_many for safety)
+    await db.analysis_history.update_many(
         {"channel_id": channel_id, "video_id": video_id},
         {"$set": {"category": new_name}},
     )
 
     # Recompute metadata + video_count + video_ids for both categories
-    from app.services.todo_engine import _compute_category_metadata
+    from app.services.todo_engine import recompute_category
 
-    for cat_doc, cat_name in [(old_cat, old_name), (new_cat, new_name)]:
-        meta = await _compute_category_metadata(channel_id, cat_name, db)
-        await db.categories.update_one(
-            {"_id": cat_doc["_id"]},
-            {
-                "$set": {
-                    "metadata": meta,
-                    "video_count": meta.get("total_videos", 0),
-                    "video_ids": meta.get("video_ids", []),
-                    "updated_at": now_ist(),
-                }
-            },
-        )
+    await recompute_category(channel_id, old_name, db)
+    await recompute_category(channel_id, new_name, db)
 
     return {
         "ok": True,
@@ -1194,12 +1186,6 @@ async def sync_videos(
                 {"channel_id": channel_id, "video_id": vid["video_id"]}
             )
             
-            # Increment category video count for reconciled video
-            if vid.get("category"):
-                await db.categories.update_one(
-                    {"channel_id": channel_id, "name": vid["category"]},
-                    {"$inc": {"video_count": 1}}
-                )
             reconciled += 1
             logger.info(
                 "Reconciled scheduled video '%s' — now live on YouTube.",
@@ -1207,6 +1193,10 @@ async def sync_videos(
             )
 
     if reconciled:
+        from app.services.todo_engine import recompute_category
+        reconciled_cats = {vid["category"] for vid in scheduled_videos if vid.get("category")}
+        for cat_name in reconciled_cats:
+            await recompute_category(channel_id, cat_name, db)
         logger.success(f"Reconciled {reconciled} scheduled video(s) as published.")
 
     new_videos = [
@@ -1344,26 +1334,17 @@ async def sync_videos(
         await db.videos.insert_many(docs)
         logger.success(f"Inserted {len(docs)} new synchronized videos into database")
         
-        # Batch update category video counts for new videos
-        new_cat_counts: dict[str, int] = {}
-        for d in docs:
-            cat = d["category"]
-            new_cat_counts[cat] = new_cat_counts.get(cat, 0) + 1
-            
-        for cat_name, count in new_cat_counts.items():
-            await db.categories.update_one(
-                {"channel_id": channel_id, "name": cat_name},
-                {"$inc": {"video_count": count}}
-            )
+        from app.services.todo_engine import recompute_category
+        affected_cats = {d["category"] for d in docs}
+        for cat_name in affected_cats:
+            await recompute_category(channel_id, cat_name, db)
 
     # Build per-video summary.
     video_summary = [
         {"title": d["title"], "category": d["category"]}
         for d in docs
     ]
-    
-    new_cats_count = len(existing_cats) - len(categories_before_sync) if 'categories_before_sync' in locals() else 0
-    # Calculate created categories cleanly
+
     logger.success(
         f"✅ YouTube Sync Complete! Synced {len(docs)} new videos.",
         extra={"color": "BRIGHT_GREEN"}
@@ -1447,19 +1428,20 @@ async def delete_video(
         except Exception as exc:
             logger.warning(f"Failed to delete R2 object {r2_key} for video {video_id}: {exc}")
 
-    # 2. Update category video count if it was published
-    if video.get("status") == VideoStatus.PUBLISHED and video.get("category"):
-        await db.categories.update_one(
-            {"channel_id": channel_id, "name": video["category"]},
-            {"$inc": {"video_count": -1}}
-        )
+    was_published = video.get("status") == "published"
+    category_name = video.get("category")
 
-    # 3. Remove from all possible queues
+    # 2. Remove from all possible queues
     await db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
     await db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
 
-    # 4. Delete the video document and its analysis history
+    # 3. Delete the video document and its analysis history
     await db.videos.delete_one({"_id": video["_id"]})
     await db.analysis_history.delete_many({"channel_id": channel_id, "video_id": video_id})
+
+    # 4. Recompute category after deletion
+    if was_published and category_name:
+        from app.services.todo_engine import recompute_category
+        await recompute_category(channel_id, category_name, db)
 
     return {"ok": True, "video_id": video_id, "deleted": True}

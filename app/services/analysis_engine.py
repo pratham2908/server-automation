@@ -96,7 +96,7 @@ async def run_analysis(
     )
 
     # Exclude videos less than 3 days old.
-    from app.timezone import IST
+    from app.timezone import UTC
     three_days_ago = now_ist() - timedelta(days=3)
 
     filtered_videos = []
@@ -106,7 +106,7 @@ async def run_analysis(
             filtered_videos.append(v)
             continue
         if v_created_at.tzinfo is None:
-            v_created_at = v_created_at.replace(tzinfo=IST)
+            v_created_at = v_created_at.replace(tzinfo=UTC)
         if v_created_at <= three_days_ago:
             filtered_videos.append(v)
 
@@ -188,19 +188,23 @@ async def run_analysis(
             extra={"color": "MAGENTA"},
         )
 
-        # Insert into analysis_history (one doc per video)
-        await db.analysis_history.insert_one({
-            "channel_id": channel_id,
-            "video_id": v["video_id"],
-            "youtube_video_id": yt_id,
-            "title": v.get("title", ""),
-            "category": v.get("category", ""),
-            "content_params": v.get("content_params"),
-            "published_at": v.get("published_at"),
-            "stats_snapshot": stats,
-            "ai_insight": ai_insight,
-            "analyzed_at": now_ist(),
-        })
+        # Upsert into analysis_history (one doc per video, idempotent)
+        await db.analysis_history.update_one(
+            {"channel_id": channel_id, "video_id": v["video_id"]},
+            {
+                "$set": {
+                    "youtube_video_id": yt_id,
+                    "title": v.get("title", ""),
+                    "category": v.get("category", ""),
+                    "content_params": v.get("content_params"),
+                    "published_at": v.get("published_at"),
+                    "stats_snapshot": stats,
+                    "ai_insight": ai_insight,
+                    "analyzed_at": now_ist(),
+                }
+            },
+            upsert=True,
+        )
 
     if per_video_count:
         logger.success(f"✅ Completed per-video analysis for {per_video_count} videos.")

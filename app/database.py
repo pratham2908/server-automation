@@ -52,6 +52,10 @@ async def connect_db(
     await _db.analysis_history.create_index(
         [("channel_id", 1), ("created_at", -1)],
     )
+    await _db.analysis_history.create_index(
+        [("channel_id", 1), ("video_id", 1)],
+        unique=True,
+    )
 
     return _db
 
