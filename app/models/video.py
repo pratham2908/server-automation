@@ -53,9 +53,9 @@ class Video(BaseModel):
         None,
         description="Channel-specific content dimensions (e.g. simulation_type, challenge_mechanic, music)",
     )
-    content_params_status: Optional[str] = Field(
+    verification_status: Optional[str] = Field(
         None,
-        description="'unverified' when Gemini-extracted, 'verified' when user-confirmed or system-defined",
+        description="'unverified' when AI-assigned (category + content_params), 'verified' when user-confirmed or system-defined",
     )
     scheduled_at: Optional[datetime] = Field(
         None,

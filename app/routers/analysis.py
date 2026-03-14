@@ -94,26 +94,35 @@ async def get_latest_analysis(
             "status": "published",
             "video_id": {"$nin": list(already_analysed_ids)},
         },
-        {"created_at": 1},
+        {"created_at": 1, "verification_status": 1},
     ).to_list(length=None)
 
     ready_for_analysis = 0
+    unverified = 0
+    not_ready_yet = 0
+
     for v in unanalysed:
         v_created_at = v.get("created_at")
+        is_old_enough = False
         if not v_created_at:
-            ready_for_analysis += 1
-            continue
-        if v_created_at.tzinfo is None:
-            v_created_at = v_created_at.replace(tzinfo=UTC)
-        if v_created_at <= three_days_ago:
-            ready_for_analysis += 1
+            is_old_enough = True
+        else:
+            if v_created_at.tzinfo is None:
+                v_created_at = v_created_at.replace(tzinfo=UTC)
+            is_old_enough = v_created_at <= three_days_ago
 
-    not_ready_yet = len(unanalysed) - ready_for_analysis
+        if not is_old_enough:
+            not_ready_yet += 1
+        elif v.get("verification_status") == "unverified":
+            unverified += 1
+        else:
+            ready_for_analysis += 1
 
     return {
         **doc,
         "analysis_status": {
             "ready_for_analysis": ready_for_analysis,
+            "unverified": unverified,
             "not_ready_yet": not_ready_yet,
         },
     }

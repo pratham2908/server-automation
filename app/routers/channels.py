@@ -65,7 +65,7 @@ class ChannelUpdate(BaseModel):
 # ------------------------------------------------------------------
 
 
-from app.models.channel import Channel, ContentParam
+from app.models.channel import Channel
 
 @router.get("/", response_model=list[Channel])
 async def list_channels(
@@ -275,42 +275,119 @@ async def refresh_channel(
 
 
 # ------------------------------------------------------------------
-# PUT /{channel_id}/content-schema  –  define content parameter schema
+# Content params CRUD  –  stored in the ``content_params`` collection
 # ------------------------------------------------------------------
 
 
-class ContentSchemaUpdate(BaseModel):
-    """Payload for setting a channel's content parameter schema."""
+class ContentParamCreate(BaseModel):
+    """Payload for adding a new content param."""
+    name: str = Field(..., description="Parameter key, e.g. 'simulation_type'")
+    description: str = Field("", description="What this parameter represents")
+    values: list[str] = Field(default_factory=list, description="Allowed values. Empty = free-form.")
+    belongs_to: list[str] = Field(default_factory=lambda: ["all"], description="Categories this applies to. ['all'] = every category.")
 
-    content_schema: list[ContentParam]
+
+class ContentParamUpdate(BaseModel):
+    """Payload for updating an existing content param."""
+    description: Optional[str] = None
+    values: Optional[list[str]] = None
+    belongs_to: Optional[list[str]] = None
 
 
-@router.put("/{channel_id}/content-schema")
-async def update_content_schema(
+@router.get("/{channel_id}/content-params")
+async def list_content_params(
     channel_id: str,
-    body: ContentSchemaUpdate,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Replace the channel's content parameter schema.
+    """List all content param definitions for a channel."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
 
-    This defines the custom dimensions (e.g. simulation_type, music)
-    that videos in this channel are tagged with.
-    """
-    result = await db.channels.update_one(
-        {"channel_id": channel_id},
-        {
-            "$set": {
-                "content_schema": [p.model_dump() for p in body.content_schema],
-                "updated_at": now_ist(),
-            }
-        },
-    )
-    if result.matched_count == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Channel '{channel_id}' not found",
-        )
-    return {"ok": True, "channel_id": channel_id, "params_defined": len(body.content_schema)}
+    docs = await db.content_params.find({"channel_id": channel_id}).to_list(length=None)
+    for d in docs:
+        d.pop("_id", None)
+    return docs
+
+
+@router.post("/{channel_id}/content-params", status_code=status.HTTP_201_CREATED)
+async def create_content_param(
+    channel_id: str,
+    body: ContentParamCreate,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Add a new content param definition for a channel."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
+
+    existing = await db.content_params.find_one({"channel_id": channel_id, "name": body.name})
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Content param '{body.name}' already exists for this channel")
+
+    now = now_ist()
+    doc = {
+        "channel_id": channel_id,
+        "name": body.name,
+        "description": body.description,
+        "values": [{"value": v, "score": 0, "video_count": 0} for v in body.values],
+        "belongs_to": body.belongs_to,
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.content_params.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.put("/{channel_id}/content-params/{param_name}")
+async def update_content_param(
+    channel_id: str,
+    param_name: str,
+    body: ContentParamUpdate,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Update an existing content param (description, values, belongs_to)."""
+    existing = await db.content_params.find_one({"channel_id": channel_id, "name": param_name})
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Content param '{param_name}' not found for channel '{channel_id}'")
+
+    update_fields: dict = {"updated_at": now_ist()}
+
+    if body.description is not None:
+        update_fields["description"] = body.description
+
+    if body.belongs_to is not None:
+        update_fields["belongs_to"] = body.belongs_to
+
+    if body.values is not None:
+        existing_values_map = {v["value"]: v for v in existing.get("values", [])}
+        new_values = []
+        for v in body.values:
+            if v in existing_values_map:
+                new_values.append(existing_values_map[v])
+            else:
+                new_values.append({"value": v, "score": 0, "video_count": 0})
+        update_fields["values"] = new_values
+
+    await db.content_params.update_one({"_id": existing["_id"]}, {"$set": update_fields})
+
+    updated = await db.content_params.find_one({"_id": existing["_id"]})
+    updated.pop("_id", None)
+    return updated
+
+
+@router.delete("/{channel_id}/content-params/{param_name}")
+async def delete_content_param(
+    channel_id: str,
+    param_name: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Remove a content param definition."""
+    result = await db.content_params.delete_one({"channel_id": channel_id, "name": param_name})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Content param '{param_name}' not found for channel '{channel_id}'")
+    return {"ok": True, "channel_id": channel_id, "deleted_param": param_name}
 
 
 # ------------------------------------------------------------------
@@ -358,5 +435,6 @@ async def delete_channel(
     await db.categories.delete_many({"channel_id": channel_id})
     await db.analysis.delete_many({"channel_id": channel_id})
     await db.analysis_history.delete_many({"channel_id": channel_id})
+    await db.content_params.delete_many({"channel_id": channel_id})
 
     return {"ok": True, "channel_id": channel_id, "deleted": True}

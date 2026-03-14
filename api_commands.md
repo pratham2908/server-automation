@@ -131,32 +131,56 @@ X-API-Key: <your-api-key>
 - **Description**: Re-fetches name and stats from YouTube.
 - **Response**: Updated Channel object.
 
-### Set Content Schema
+### Content Params (CRUD)
 
-- **Endpoint**: `/api/v1/channels/{channel_id}/content-schema`
-- **Method**: `PUT`
-- **Description**: Defines or replaces the channel's content parameter schema (custom dimensions for classifying videos).
+Content params are custom dimensions for classifying videos. Manage them with these endpoints:
+
+#### List Content Params
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/content-params`
+- **Method**: `GET`
+- **Description**: Returns all content params for the channel.
+- **Response**: Array of param objects with `name`, `description`, `values`, `belongs_to`.
+
+#### Add Content Param
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/content-params`
+- **Method**: `POST`
 - **Request Body**:
 
 ```json
 {
-  "content_schema": [
-    {
-      "name": "simulation_type",
-      "description": "Type of simulation",
-      "values": ["battle", "survival", "puzzle"]
-    },
-    {
-      "name": "challenge_mechanic",
-      "description": "Core challenge format",
-      "values": ["1v1", "tournament"]
-    },
-    { "name": "music", "description": "Background music style", "values": [] }
-  ]
+  "name": "simulation_type",
+  "description": "Type of simulation",
+  "values": ["battle", "survival", "puzzle"],
+  "belongs_to": ["all"]
 }
 ```
 
-- **Response**: `{"ok": true, "channel_id": "...", "params_defined": 3}`
+- **Description**: `values` is a list of strings. `belongs_to` defaults to `["all"]` if omitted.
+- **Response**: Created param object.
+
+#### Update Content Param
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/content-params/{param_name}`
+- **Method**: `PUT`
+- **Request Body** (all fields optional):
+
+```json
+{
+  "description": "Updated description",
+  "values": ["battle", "survival", "puzzle", "adventure"],
+  "belongs_to": ["all"]
+}
+```
+
+- **Response**: Updated param object.
+
+#### Delete Content Param
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/content-params/{param_name}`
+- **Method**: `DELETE`
+- **Response**: `{"ok": true, "param_name": "...", "deleted": true}`
 
 ### Delete Channel
 
@@ -261,7 +285,7 @@ X-API-Key: <your-api-key>
 - **Method**: `GET`
 - **Query Params**:
   - `status_filter=todo|ready|scheduled|published` (optional)
-  - `content_params_status=unverified|verified|missing` (optional, filter by param verification status)
+  - `verification_status=unverified|verified|missing` (optional, filter by param verification status)
   - `suggest_n=3` (optional, brings top N suggestions first)
 - **Response**: Object with `videos` array and `sync_status` summary.
 
@@ -357,7 +381,7 @@ X-API-Key: <your-api-key>
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/extract-params`
 - **Method**: `POST`
-- **Description**: Uses Gemini to extract content parameter values from a video's title, description, and tags based on the channel's `content_schema`. Saves with `content_params_status: "unverified"`.
+- **Description**: Uses Gemini to extract content parameter values from a video's title, description, and tags based on the channel's `content_params` collection. Sets `verification_status: "unverified"`.
 - **Response**:
 
 ```json
@@ -365,7 +389,7 @@ X-API-Key: <your-api-key>
   "ok": true,
   "video_id": "uuid-1234",
   "content_params": { "simulation_type": "battle", "music": "Epic Orchestral" },
-  "content_params_status": "unverified"
+  "verification_status": "unverified"
 }
 ```
 
@@ -376,20 +400,21 @@ X-API-Key: <your-api-key>
 - **Description**: Extracts content parameters for every video that doesn't have them yet.
 - **Response**: `{"ok": true, "extracted": 42, "total": 45}`
 
-### Verify Content Params
+### Verify Video (Category + Content Params)
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/verify-params`
 - **Method**: `POST`
-- **Description**: Marks a video's content_params as verified. Optionally pass corrected values.
+- **Description**: Marks a video as verified (`verification_status: "verified"`). Optionally pass corrected `category` and/or `content_params` in the body to override AI-assigned values.
 - **Request Body** (optional):
 
 ```json
 {
+  "category": "battle",
   "content_params": { "simulation_type": "survival", "music": "Dramatic Piano" }
 }
 ```
 
-- **Response**: `{"ok": true, "video_id": "...", "content_params": {...}, "content_params_status": "verified"}`
+- **Response**: `{"ok": true, "video_id": "...", "category": "battle", "content_params": {...}, "verification_status": "verified"}`
 
 ### Upload Video File
 
@@ -456,7 +481,7 @@ X-API-Key: <your-api-key>
   - Fetches all videos from the YouTube channel (including `status.publishAt` for scheduled detection)
   - **Refreshes metadata** (views, likes, comments, engagement rates, analytics) for every existing video in the DB
   - Reconciles scheduled videos that are actually live (public) on YouTube (marks them as `published`, sets `published_at` from YouTube's publish time)
-  - Imports new videos: **extracts content_params (including music) AND derives category** from those params via a single Gemini call. Content params saved as `"unverified"`
+  - Imports new videos: **extracts content_params (including music) AND derives category** from those params via a single Gemini call. Content params saved with `verification_status: "unverified"`
   - **Detects scheduled videos**: if a YouTube video has a future `status.publishAt`, it is imported as `scheduled` (with `scheduled_at` set) and added to the `schedule_queue`, instead of being marked as `published`
 
 - **Response**:
@@ -537,13 +562,15 @@ X-API-Key: <your-api-key>
     }
   ],
   "analysis_status": {
-    "ready_for_analysis": 5,
+    "ready_for_analysis": 3,
+    "unverified": 4,
     "not_ready_yet": 2
   }
 }
 ```
 
 - `ready_for_analysis`: published videos not yet in `analysis_history`, older than 3 days
+- `unverified`: videos with extracted content params awaiting verification
 - `not_ready_yet`: published videos not yet in `analysis_history`, less than 3 days old
 
 ### Trigger Analysis Update

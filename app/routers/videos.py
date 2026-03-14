@@ -51,7 +51,7 @@ from app.models.video import Video
 async def list_videos(
     channel_id: str,
     status_filter: Optional[str] = None,
-    content_params_status: Optional[str] = None,
+    verification_status: Optional[str] = None,
     suggest_n: Optional[int] = None,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -60,17 +60,17 @@ async def list_videos(
     Query params
     ------------
     status : ``todo`` | ``ready`` | ``scheduled`` | ``published`` | ``all`` (default ``all``)
-    content_params_status : ``unverified`` | ``verified`` | ``missing`` — filter by param status
+    verification_status : ``unverified`` | ``verified`` | ``missing`` — filter by verification state
     suggest_n : if provided, mark the top *n* to-do videos as suggested.
     """
     query: dict = {"channel_id": channel_id}
     if status_filter and status_filter != "all":
         query["status"] = status_filter
-    if content_params_status:
-        if content_params_status == "missing":
-            query["content_params_status"] = None
+    if verification_status:
+        if verification_status == "missing":
+            query["verification_status"] = None
         else:
-            query["content_params_status"] = content_params_status
+            query["verification_status"] = verification_status
 
     # If suggest_n is requested, pick top-N to-do videos (ordered by
     # category score) and flag them.
@@ -448,9 +448,10 @@ async def extract_content_params(
 ):
     """Use Gemini to extract content parameters from a video's metadata.
 
-    Reads the channel's ``content_schema`` and asks Gemini to identify
-    values from the video's title, description, and tags.  Results are
-    saved on the video document with ``content_params_status = 'unverified'``.
+    Reads content parameter definitions from the ``content_params``
+    collection and asks Gemini to identify values from the video's title,
+    description, and tags.  Results are saved on the video document with
+    ``verification_status = 'unverified'``.
     """
     import json
 
@@ -468,14 +469,13 @@ async def extract_content_params(
             detail=f"Video {video_id} not found",
         )
 
-    channel = await db.channels.find_one({"channel_id": channel_id})
-    if not channel or not channel.get("content_schema"):
+    from app.database import get_content_schema_for_prompt
+    schema_defs = await get_content_schema_for_prompt(db, channel_id)
+    if not schema_defs:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Channel has no content_schema defined — set one via PUT /channels/{channel_id}/content-schema",
+            detail="Channel has no content params defined — add them via POST /channels/{channel_id}/content-params",
         )
-
-    schema_defs = channel["content_schema"]
 
     prompt = f"""You are a YouTube content analyst. Extract content parameter values for this video.
 
@@ -517,7 +517,7 @@ Example: {{"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "E
         {
             "$set": {
                 "content_params": params,
-                "content_params_status": "unverified",
+                "verification_status": "unverified",
                 "updated_at": now_ist(),
             }
         },
@@ -527,7 +527,7 @@ Example: {{"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "E
         "ok": True,
         "video_id": video_id,
         "content_params": params,
-        "content_params_status": "unverified",
+        "verification_status": "unverified",
     }
 
 
@@ -551,21 +551,20 @@ async def extract_all_content_params(
             detail="Gemini service not initialised",
         )
 
-    channel = await db.channels.find_one({"channel_id": channel_id})
-    if not channel or not channel.get("content_schema"):
+    from app.database import get_content_schema_for_prompt
+    schema_defs = await get_content_schema_for_prompt(db, channel_id)
+    if not schema_defs:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Channel has no content_schema defined",
+            detail="Channel has no content params defined",
         )
 
     videos = await db.videos.find(
-        {"channel_id": channel_id, "content_params_status": None}
+        {"channel_id": channel_id, "verification_status": None}
     ).to_list(length=None)
 
     if not videos:
         return {"ok": True, "extracted": 0, "message": "All videos already have content_params"}
-
-    schema_defs = channel["content_schema"]
     extracted = 0
 
     for video in videos:
@@ -595,7 +594,7 @@ Include a "music" key."""
                 {
                     "$set": {
                         "content_params": params,
-                        "content_params_status": "unverified",
+                        "verification_status": "unverified",
                         "updated_at": now_ist(),
                     }
                 },
@@ -612,24 +611,27 @@ Include a "music" key."""
 # ------------------------------------------------------------------
 
 
-class VerifyParamsRequest(BaseModel):
-    """Optional overrides when verifying content params."""
+class VerifyRequest(BaseModel):
+    """Optional overrides when verifying a video (category + content params)."""
+    category: Optional[str] = Field(
+        None, description="Override category before marking verified"
+    )
     content_params: Optional[dict[str, str]] = Field(
-        None, description="Override params before marking verified"
+        None, description="Override content params before marking verified"
     )
 
 
 @router.post("/{video_id}/verify-params")
-async def verify_content_params(
+async def verify_video(
     channel_id: str,
     video_id: str,
-    body: Optional[VerifyParamsRequest] = None,
+    body: Optional[VerifyRequest] = None,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Mark a video's content_params as verified.
+    """Mark a video as verified (both category and content_params).
 
-    Optionally pass corrected ``content_params`` in the body to override
-    the Gemini-extracted values before marking verified.
+    Optionally pass corrected ``category`` and/or ``content_params``
+    in the body to override the AI-assigned values before marking verified.
     """
     video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
     if not video:
@@ -645,20 +647,24 @@ async def verify_content_params(
         )
 
     update: dict = {
-        "content_params_status": "verified",
+        "verification_status": "verified",
         "updated_at": now_ist(),
     }
     if body and body.content_params:
         update["content_params"] = body.content_params
+    if body and body.category:
+        update["category"] = body.category
 
     await db.videos.update_one({"_id": video["_id"]}, {"$set": update})
 
     final_params = body.content_params if (body and body.content_params) else video.get("content_params")
+    final_category = body.category if (body and body.category) else video.get("category")
     return {
         "ok": True,
         "video_id": video_id,
+        "category": final_category,
         "content_params": final_params,
-        "content_params_status": "verified",
+        "verification_status": "verified",
     }
 
 
@@ -1232,8 +1238,8 @@ async def sync_videos(
         )
     ]
 
-    # Fetch channel's content_schema for param extraction during sync.
-    content_schema = channel.get("content_schema", [])
+    from app.database import get_content_schema_for_prompt
+    content_schema = await get_content_schema_for_prompt(db, channel_id)
 
     # Extract content params AND derive category in batches of 5.
     BATCH_SIZE = 5
@@ -1341,7 +1347,7 @@ async def sync_videos(
                 "estimated_minutes_watched": v.get("estimated_minutes_watched"),
             },
             "content_params": extracted_params if extracted_params else None,
-            "content_params_status": "unverified" if extracted_params else None,
+            "verification_status": "unverified" if extracted_params else None,
             "scheduled_at": scheduled_at_dt if is_scheduled else None,
             "published_at": None if is_scheduled else yt_published_at,
             "created_at": yt_published_at,

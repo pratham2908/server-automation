@@ -38,7 +38,12 @@ async def _compute_category_metadata(
     analysis_history.stats_snapshot.subscribers_gained.
     """
     all_published = await db.videos.find(
-        {"channel_id": channel_id, "category": category_name, "status": "published"}
+        {
+            "channel_id": channel_id,
+            "category": category_name,
+            "status": "published",
+            "verification_status": {"$ne": "unverified"},
+        }
     ).to_list(length=None)
 
     three_days_ago = now_ist() - timedelta(days=3)
@@ -250,9 +255,7 @@ async def generate_todo_videos(
         {"channel_id": channel_id, "status": "active"}
     ).to_list(length=None)
 
-    # Fetch channel's content_schema for param-aware generation
-    channel_doc = await db.channels.find_one({"channel_id": channel_id})
-    content_schema = (channel_doc or {}).get("content_schema", [])
+    from app.database import get_content_schema_for_prompt
 
     # We need the latest analysis document to get category insights
     # so we can pass them to Gemini.
@@ -312,6 +315,8 @@ async def generate_todo_videos(
             
         cat_insights = analysis_by_cat[cat_name]
 
+        content_schema = await get_content_schema_for_prompt(db, channel_id, category=cat_name)
+
         # Fetch existing titles AND content_params to avoid duplication
         existing_docs = await db.videos.find(
             {"channel_id": channel_id, "category": cat_name},
@@ -363,7 +368,7 @@ async def generate_todo_videos(
                     "avg_percentage_viewed": None,
                 },
                 "content_params": gen_params,
-                "content_params_status": "verified",
+                "verification_status": "verified",
                 "created_at": now_ist(),
                 "updated_at": now_ist(),
             }

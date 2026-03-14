@@ -189,16 +189,19 @@ async def api_schema():
             },
             {
                 "group": "Channels",
-                "method": "PUT",
-                "path": "/api/v1/channels/{channel_id}/content-schema",
-                "description": "Define or replace the channel's content parameter schema",
-                "request": {
-                    "content_schema": [
-                        {"name": "simulation_type", "description": "Type of simulation", "values": ["battle", "survival"]},
-                        {"name": "music", "description": "Background music style", "values": []},
-                    ]
-                },
-                "response": {"ok": True, "channel_id": "ch1", "params_defined": 2},
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/content-params",
+                "description": "List all content param definitions for the channel",
+                "request": None,
+                "response": [{"name": "simulation_type", "values": [{"value": "battle", "score": 85, "video_count": 4}], "belongs_to": ["all"]}],
+            },
+            {
+                "group": "Channels",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/content-params",
+                "description": "Add a new content param definition",
+                "request": {"name": "simulation_type", "description": "Type of simulation", "values": ["battle", "survival"], "belongs_to": ["all"]},
+                "response": {"name": "simulation_type", "values": [{"value": "battle", "score": 0, "video_count": 0}], "belongs_to": ["all"]},
             },
             {
                 "group": "Channels",
@@ -275,7 +278,7 @@ async def api_schema():
                 "description": "List videos with sync status",
                 "query_params": {
                     "status_filter": {"type": "string", "enum": ["todo", "ready", "scheduled", "published"], "optional": True},
-                    "content_params_status": {"type": "string", "enum": ["unverified", "verified", "missing"], "optional": True},
+                    "verification_status": {"type": "string", "enum": ["unverified", "verified", "missing"], "optional": True},
                     "suggest_n": {"type": "integer", "optional": True, "description": "Mark top N todo videos as suggested"},
                 },
                 "request": None,
@@ -330,7 +333,7 @@ async def api_schema():
                     "ok": True,
                     "video_id": "uuid-1234",
                     "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
-                    "content_params_status": "unverified",
+                    "verification_status": "unverified",
                 },
             },
             {
@@ -351,7 +354,7 @@ async def api_schema():
                     "ok": True,
                     "video_id": "uuid-1234",
                     "content_params": {"simulation_type": "survival", "music": "Dramatic Piano"},
-                    "content_params_status": "verified",
+                    "verification_status": "verified",
                 },
             },
             {

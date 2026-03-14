@@ -56,6 +56,10 @@ async def connect_db(
         [("channel_id", 1), ("video_id", 1)],
         unique=True,
     )
+    await _db.content_params.create_index(
+        [("channel_id", 1), ("name", 1)],
+        unique=True,
+    )
 
     return _db
 
@@ -77,3 +81,32 @@ def get_db() -> AsyncIOMotorDatabase:
     if _db is None:
         raise RuntimeError("Database not initialised – call connect_db first")
     return _db
+
+
+async def get_content_schema_for_prompt(
+    db: AsyncIOMotorDatabase,
+    channel_id: str,
+    category: str | None = None,
+) -> list[dict]:
+    """Fetch content param definitions from the ``content_params`` collection
+    and return them in the list-of-dicts format that Gemini prompts expect.
+
+    When *category* is provided, only params whose ``belongs_to`` includes
+    that category name or ``"all"`` are returned.
+    """
+    query: dict = {"channel_id": channel_id}
+    if category:
+        query["$or"] = [
+            {"belongs_to": "all"},
+            {"belongs_to": category},
+        ]
+
+    docs = await db.content_params.find(query).to_list(length=None)
+    return [
+        {
+            "name": d["name"],
+            "description": d.get("description", ""),
+            "values": [v["value"] for v in d.get("values", [])],
+        }
+        for d in docs
+    ]

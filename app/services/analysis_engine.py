@@ -61,7 +61,9 @@ async def run_analysis(
         return {}
 
     youtube_channel_id = channel_doc.get("youtube_channel_id", "")
-    content_schema = channel_doc.get("content_schema", [])
+
+    from app.database import get_content_schema_for_prompt
+    content_schema = await get_content_schema_for_prompt(db, channel_id)
 
     subscriber_count = 0
     try:
@@ -74,7 +76,11 @@ async def run_analysis(
     # Step 1: Per-video analysis
     # ------------------------------------------------------------------
     done_videos = await db.videos.find(
-        {"channel_id": channel_id, "status": "published"}
+        {
+            "channel_id": channel_id,
+            "status": "published",
+            "verification_status": {"$ne": "unverified"},
+        }
     ).to_list(length=None)
 
     already_analysed_ids: set[str] = set()
@@ -302,6 +308,11 @@ async def run_analysis(
         analysed_videos=new_videos,
     )
 
+    # ------------------------------------------------------------------
+    # Step 3: Update content param value scores & video counts
+    # ------------------------------------------------------------------
+    await _update_content_param_scores(channel_id, db)
+
     # Return
     saved = await db.analysis.find_one({"channel_id": channel_id})
     if saved:
@@ -310,3 +321,77 @@ async def run_analysis(
 
     analysis_doc.pop("_id", None)
     return analysis_doc
+
+
+async def _update_content_param_scores(
+    channel_id: str,
+    db: AsyncIOMotorDatabase,
+) -> None:
+    """Recompute score and video_count for every tracked value in the
+    ``content_params`` collection using data from ``analysis_history``.
+
+    Only params with a non-empty ``values`` list are processed (free-form
+    params are skipped).  If an analysed video uses a value that isn't
+    already tracked, the value is auto-added with its computed score.
+    """
+    param_docs = await db.content_params.find(
+        {"channel_id": channel_id, "values.0": {"$exists": True}}
+    ).to_list(length=None)
+
+    if not param_docs:
+        return
+
+    all_history = await db.analysis_history.find(
+        {"channel_id": channel_id},
+        {"content_params": 1, "ai_insight.performance_rating": 1},
+    ).to_list(length=None)
+
+    for pdoc in param_docs:
+        param_name = pdoc["name"]
+        value_stats: dict[str, dict] = {}
+
+        for entry in all_history:
+            cp = entry.get("content_params") or {}
+            vid_value = cp.get(param_name)
+            if vid_value is None:
+                continue
+
+            if vid_value not in value_stats:
+                value_stats[vid_value] = {"total_rating": 0.0, "count": 0}
+            rating = (entry.get("ai_insight") or {}).get("performance_rating", 0)
+            value_stats[vid_value]["total_rating"] += rating
+            value_stats[vid_value]["count"] += 1
+
+        existing_value_names = {v["value"] for v in pdoc["values"]}
+
+        updated_values = []
+        for v_entry in pdoc["values"]:
+            val = v_entry["value"]
+            stats = value_stats.get(val)
+            if stats and stats["count"] > 0:
+                updated_values.append({
+                    "value": val,
+                    "score": round(stats["total_rating"] / stats["count"], 1),
+                    "video_count": stats["count"],
+                })
+            else:
+                updated_values.append({
+                    "value": val,
+                    "score": 0,
+                    "video_count": 0,
+                })
+
+        for val, stats in value_stats.items():
+            if val not in existing_value_names and stats["count"] > 0:
+                updated_values.append({
+                    "value": val,
+                    "score": round(stats["total_rating"] / stats["count"], 1),
+                    "video_count": stats["count"],
+                })
+
+        await db.content_params.update_one(
+            {"_id": pdoc["_id"]},
+            {"$set": {"values": updated_values, "updated_at": now_ist()}},
+        )
+
+    logger.info("📊 Updated content param scores for %d param(s)", len(param_docs))
