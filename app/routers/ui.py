@@ -2,13 +2,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 import asyncio
 from app.logger import get_logs
-import json
+import os
 
 router = APIRouter(tags=["ui"])
 
 @router.get("/logs", response_class=HTMLResponse)
 async def get_log_viewer():
-    """Returns a premium live log viewer page."""
+    """Returns a premium live log viewer page using EventSource for real-time streaming."""
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -30,11 +30,7 @@ async def get_log_viewer():
                 --error: #f87171;
             }
 
-            * {
-                box-sizing: border-box;
-                margin: 0;
-                padding: 0;
-            }
+            * { box-sizing: border-box; margin: 0; padding: 0; }
 
             body {
                 font-family: 'Inter', sans-serif;
@@ -80,8 +76,10 @@ async def get_log_viewer():
                 background-color: var(--success);
                 border-radius: 50%;
                 box-shadow: 0 0 8px var(--success);
-                animation: pulse 2s infinite;
             }
+
+            .status-dot.live { animation: pulse 2s infinite; }
+            .status-dot.error { background-color: var(--error); box-shadow: 0 0 8px var(--error); }
 
             @keyframes pulse {
                 0% { opacity: 1; }
@@ -94,34 +92,34 @@ async def get_log_viewer():
                 overflow-y: auto;
                 padding: 1.5rem 2rem;
                 font-family: 'Fira Code', monospace;
-                font-size: 0.9rem;
-                line-height: 1.6;
+                font-size: 0.85rem;
+                line-height: 1.5;
                 scroll-behavior: smooth;
             }
 
             .log-line {
-                margin-bottom: 0.5rem;
+                margin-bottom: 0.25rem;
                 white-space: pre-wrap;
                 word-break: break-all;
                 border-left: 2px solid transparent;
                 padding-left: 0.75rem;
-                transition: background 0.2s;
+                transition: background 0.1s;
+                color: var(--text-muted);
             }
 
-            .log-line:hover {
-                background: rgba(255, 255, 255, 0.03);
-            }
+            .log-line:hover { background: rgba(255, 255, 255, 0.03); }
 
-            .level-INFO { color: var(--text-main); }
-            .level-SUCCESS { color: var(--success); border-left-color: var(--success); }
-            .level-WARNING { color: var(--warning); border-left-color: var(--warning); }
-            .level-ERROR { color: var(--error); border-left-color: var(--error); }
-            .level-CRITICAL { color: var(--error); font-weight: bold; border-left-color: var(--error); background: rgba(248, 113, 113, 0.1); }
+            /* journalctl specific coloring */
+            .line-error, .line-critical { color: var(--error); border-left-color: var(--error); }
+            .line-warning { color: var(--warning); border-left-color: var(--warning); }
+            .line-info { color: var(--text-main); }
+            .line-success { color: var(--success); border-left-color: var(--success); }
 
-            .timestamp { color: var(--text-muted); margin-right: 0.5rem; font-size: 0.8rem; }
-            .logger-name { color: var(--accent); margin-right: 0.5rem; }
+            /* Highlight keywords */
+            .keyword-info { color: var(--primary); font-weight: 500; }
+            .keyword-error { color: var(--error); font-weight: 600; }
+            .keyword-warning { color: var(--warning); font-weight: 500; }
 
-            /* Scrollbar styling */
             ::-webkit-scrollbar { width: 8px; }
             ::-webkit-scrollbar-track { background: var(--bg-dark); }
             ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
@@ -132,7 +130,7 @@ async def get_log_viewer():
                 bottom: 2rem;
                 right: 2rem;
                 display: flex;
-                gap: 1rem;
+                gap: 0.75rem;
             }
 
             .btn {
@@ -150,27 +148,19 @@ async def get_log_viewer():
                 backdrop-filter: blur(8px);
             }
 
-            .btn:hover {
-                background: #334155;
-                border-color: var(--primary);
-            }
-
-            .btn.active {
-                background: var(--primary);
-                color: var(--bg-dark);
-                font-weight: 600;
-            }
+            .btn:hover { background: #334155; border-color: var(--primary); }
+            .btn.active { background: var(--primary); color: var(--bg-dark); font-weight: 600; }
         </style>
     </head>
     <body>
         <header>
             <div class="logo">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                <span>Automation Server Logs</span>
+                <span>System Logs (journalctl)</span>
             </div>
             <div class="status">
-                <div class="status-dot"></div>
-                <span id="connection-status">Live</span>
+                <div id="status-dot" class="status-dot live"></div>
+                <span id="connection-status">Live Stream</span>
             </div>
         </header>
 
@@ -196,79 +186,64 @@ async def get_log_viewer():
             const copyBtn = document.getElementById('copy-btn');
             const autoscrollBtn = document.getElementById('autoscroll-btn');
             const connectionStatus = document.getElementById('connection-status');
+            const statusDot = document.getElementById('status-dot');
             
             let autoscroll = true;
-            let lastSeenLogs = [];
+            let eventSource = null;
 
             function formatLogLine(line) {
-                const regex = /^\[(.*?)\] \[(.*?)\] \[(.*?)\] (.*)$/;
-                const match = line.match(regex);
+                if (!line.trim()) return '';
                 
-                if (match) {
-                    const [_, timestamp, level, logger, message] = match;
-                    return `
-                        <div class="log-line level-${level}">
-                            <span class="timestamp">${timestamp}</span>
-                            <span class="logger-name">[${logger}]</span>
-                            <span class="message">${message}</span>
-                        </div>
-                    `;
+                let className = '';
+                if (line.toLowerCase().includes('error') || line.toLowerCase().includes('failed') || line.toLowerCase().includes('exception')) {
+                    className = 'line-error';
+                } else if (line.toLowerCase().includes('warning')) {
+                    className = 'line-warning';
+                } else if (line.toLowerCase().includes('info')) {
+                    className = 'line-info';
+                } else if (line.toLowerCase().includes('success') || line.toLowerCase().includes('started')) {
+                    className = 'line-success';
                 }
-                return `<div class="log-line">${line}</div>`;
+
+                // Keyword highlighting
+                let formattedLine = line
+                    .replace(/INFO:/g, '<span class="keyword-info">INFO:</span>')
+                    .replace(/ERROR:/g, '<span class="keyword-error">ERROR:</span>')
+                    .replace(/WARNING:/g, '<span class="keyword-warning">WARNING:</span>');
+
+                return `<div class="log-line ${className}">${formattedLine}</div>`;
             }
 
-            async function fetchLogs() {
-                try {
-                    const response = await fetch('/api/v1/logs');
-                    if (!response.ok) throw new Error('Failed to fetch');
-                    const logs = await response.json();
+            function connect() {
+                if (eventSource) eventSource.close();
+                
+                eventSource = new EventSource('/api/v1/logs/stream');
+                
+                eventSource.onmessage = (event) => {
+                    const line = event.data;
+                    logContainer.insertAdjacentHTML('beforeend', formatLogLine(line));
                     
-                    // Find where the new logs start
-                    let newLogsIndex = 0;
-                    if (lastSeenLogs.length > 0) {
-                        const lastSeen = lastSeenLogs[lastSeenLogs.length - 1];
-                        newLogsIndex = logs.lastIndexOf(lastSeen) + 1;
-                        
-                        // If we can't find the last log, it might have rolled over or been duplicated
-                        // In that case, we might miss some or show duplicates, but lastIndexOf is usually safe
-                        if (newLogsIndex === 0 && logs.length > 0) {
-                             // If the last seen log isn't in the new list at all, just take everything
-                             // unless the list is exactly the same as before
-                             if (JSON.stringify(logs) === JSON.stringify(lastSeenLogs)) {
-                                 newLogsIndex = logs.length;
-                             }
-                        }
+                    if (autoscroll) {
+                        logContainer.scrollTop = logContainer.scrollHeight;
                     }
+                    
+                    connectionStatus.textContent = 'Live Stream';
+                    statusDot.className = 'status-dot live';
+                };
 
-                    const newLogs = logs.slice(newLogsIndex);
-                    if (newLogs.length > 0) {
-                        newLogs.forEach(log => {
-                            logContainer.insertAdjacentHTML('beforeend', formatLogLine(log));
-                        });
-                        lastSeenLogs = logs;
-                        
-                        if (autoscroll) {
-                            logContainer.scrollTop = logContainer.scrollHeight;
-                        }
-                    }
-                    connectionStatus.textContent = 'Live';
-                    connectionStatus.parentElement.querySelector('.status-dot').style.backgroundColor = 'var(--success)';
-                } catch (err) {
-                    console.error('Error fetching logs:', err);
-                    connectionStatus.textContent = 'Disconnected';
-                    connectionStatus.parentElement.querySelector('.status-dot').style.backgroundColor = 'var(--error)';
-                }
+                eventSource.onerror = (err) => {
+                    console.error('SSE Error:', err);
+                    connectionStatus.textContent = 'Reconnecting...';
+                    statusDot.className = 'status-dot error';
+                };
             }
 
-            clearBtn.onclick = () => {
-                logContainer.innerHTML = '';
-                lastSeenLogs = [];
-            };
+            clearBtn.onclick = () => { logContainer.innerHTML = ''; };
 
             copyBtn.onclick = () => {
                 const text = Array.from(logContainer.querySelectorAll('.log-line'))
                     .map(el => el.innerText)
-                    .join('\n');
+                    .join('\\n');
                 navigator.clipboard.writeText(text).then(() => {
                     const originalText = copyBtn.innerHTML;
                     copyBtn.textContent = 'Copied!';
@@ -282,16 +257,54 @@ async def get_log_viewer():
                 autoscrollBtn.classList.toggle('active', autoscroll);
             };
 
-            // Poll every 1 second for simplicity, or we could use SSE
-            setInterval(fetchLogs, 1000);
-            fetchLogs(); // Initial fetch
+            connect();
         </script>
     </body>
     </html>
     """
     return HTMLResponse(content=html_content)
 
+@router.get("/api/v1/logs/stream")
+async def stream_logs():
+    """Streams journalctl logs in real-time using Server-Sent Events."""
+    async def log_generator():
+        # Check if journalctl is available and if we are on Linux
+        if os.name != 'posix':
+            yield f"data: [Internal Log Fallback (Non-Linux OS)]\\n\\n"
+            for log in get_logs():
+                yield f"data: {log}\\n\\n"
+            return
+
+        try:
+            # -u automation-server: specific unit
+            # -f: follow (real-time)
+            # -n 100: show last 100 lines initially
+            process = await asyncio.create_subprocess_exec(
+                "journalctl", "-u", "automation-server", "-f", "-n", "100",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    # Check if process died
+                    if process.returncode is not None:
+                        error = await process.stderr.read()
+                        yield f"data: [journalctl process exited with code {process.returncode}: {error.decode()}]\\n\\n"
+                        break
+                    break
+                
+                yield f"data: {line.decode().strip()}\\n\\n"
+        except Exception as e:
+            yield f"data: [Error starting log stream: {str(e)}]\\n\\n"
+            yield f"data: [Falling back to internal app logs...]\\n\\n"
+            for log in get_logs():
+                yield f"data: {log}\\n\\n"
+
+    return StreamingResponse(log_generator(), media_type="text/event-stream")
+
 @router.get("/api/v1/logs")
 async def get_logs_api():
-    """Returns the current log buffer as JSON."""
+    """Fallback JSON endpoint for internal log buffer."""
     return get_logs()
