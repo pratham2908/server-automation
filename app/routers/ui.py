@@ -194,14 +194,25 @@ async def get_log_viewer():
                 
                 let className = '';
                 const lowerLine = line.toLowerCase();
+                
                 if (lowerLine.includes('error') || lowerLine.includes('failed') || lowerLine.includes('exception')) {
                     className = 'line-error';
                 } else if (lowerLine.includes('warning')) {
                     className = 'line-warning';
+                } else if (
+                    lowerLine.includes('success') || 
+                    lowerLine.includes('successfully') ||
+                    lowerLine.includes('started') || 
+                    lowerLine.includes('analyzed') || 
+                    lowerLine.includes('completed') ||
+                    line.includes('🔍') || 
+                    line.includes('✅') || 
+                    line.includes('✨') ||
+                    line.includes('💥')
+                ) {
+                    className = 'line-success';
                 } else if (lowerLine.includes('info')) {
                     className = 'line-info';
-                } else if (lowerLine.includes('success') || lowerLine.includes('started')) {
-                    className = 'line-success';
                 }
 
                 let formattedLine = line
