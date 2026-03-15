@@ -4,6 +4,8 @@ Configures the app, lifespan events (DB + service init), and router mounting.
 """
 
 import logging
+from app.logger import setup_root_logging
+setup_root_logging()
 
 logging.basicConfig(level=logging.INFO)
 from contextlib import asynccontextmanager
@@ -93,12 +95,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.routers import analysis, categories, channels, videos  # noqa: E402
+from app.routers import analysis, categories, channels, ui, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
 app.include_router(categories.router)
 app.include_router(analysis.router)
+app.include_router(ui.router)
 
 
 @app.get("/health", tags=["health"])
