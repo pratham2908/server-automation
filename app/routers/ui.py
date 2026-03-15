@@ -109,13 +109,11 @@ async def get_log_viewer():
 
             .log-line:hover { background: rgba(255, 255, 255, 0.03); }
 
-            /* journalctl specific coloring */
             .line-error, .line-critical { color: var(--error); border-left-color: var(--error); }
             .line-warning { color: var(--warning); border-left-color: var(--warning); }
             .line-info { color: var(--text-main); }
             .line-success { color: var(--success); border-left-color: var(--success); }
 
-            /* Highlight keywords */
             .keyword-info { color: var(--primary); font-weight: 500; }
             .keyword-error { color: var(--error); font-weight: 600; }
             .keyword-warning { color: var(--warning); font-weight: 500; }
@@ -195,17 +193,17 @@ async def get_log_viewer():
                 if (!line.trim()) return '';
                 
                 let className = '';
-                if (line.toLowerCase().includes('error') || line.toLowerCase().includes('failed') || line.toLowerCase().includes('exception')) {
+                const lowerLine = line.toLowerCase();
+                if (lowerLine.includes('error') || lowerLine.includes('failed') || lowerLine.includes('exception')) {
                     className = 'line-error';
-                } else if (line.toLowerCase().includes('warning')) {
+                } else if (lowerLine.includes('warning')) {
                     className = 'line-warning';
-                } else if (line.toLowerCase().includes('info')) {
+                } else if (lowerLine.includes('info')) {
                     className = 'line-info';
-                } else if (line.toLowerCase().includes('success') || line.toLowerCase().includes('started')) {
+                } else if (lowerLine.includes('success') || lowerLine.includes('started')) {
                     className = 'line-success';
                 }
 
-                // Keyword highlighting
                 let formattedLine = line
                     .replace(/INFO:/g, '<span class="keyword-info">INFO:</span>')
                     .replace(/ERROR:/g, '<span class="keyword-error">ERROR:</span>')
@@ -221,20 +219,24 @@ async def get_log_viewer():
                 
                 eventSource.onmessage = (event) => {
                     const line = event.data;
-                    logContainer.insertAdjacentHTML('beforeend', formatLogLine(line));
-                    
-                    if (autoscroll) {
-                        logContainer.scrollTop = logContainer.scrollHeight;
+                    const logEntry = formatLogLine(line);
+                    if (logEntry) {
+                        logContainer.insertAdjacentHTML('beforeend', logEntry);
+                        if (autoscroll) {
+                            logContainer.scrollTop = logContainer.scrollHeight;
+                        }
                     }
                     
                     connectionStatus.textContent = 'Live Stream';
                     statusDot.className = 'status-dot live';
+                    statusDot.style.opacity = '1';
                 };
 
                 eventSource.onerror = (err) => {
                     console.error('SSE Error:', err);
                     connectionStatus.textContent = 'Reconnecting...';
                     statusDot.className = 'status-dot error';
+                    statusDot.style.opacity = '0.5';
                 };
             }
 
@@ -268,14 +270,15 @@ async def get_log_viewer():
 async def stream_logs():
     """Streams journalctl logs in real-time using Server-Sent Events."""
     async def log_generator():
+        # Fallback to internal logs if not posix
         if os.name != 'posix':
-            yield f"data: [Internal Log Fallback (Non-Linux OS)]\\n\\n"
+            yield "data: [Internal Log Fallback (Non-Linux OS)]\n\n"
             for log in get_logs():
-                yield f"data: {log}\\n\\n"
+                yield f"data: {log}\n\n"
             return
 
         try:
-            # Use absolute path and disable buffering for immediate delivery
+            # Absolute path to journalctl
             process = await asyncio.create_subprocess_exec(
                 "/usr/bin/journalctl", "-u", "automation-server", "-f", "-n", "50",
                 stdout=asyncio.subprocess.PIPE,
@@ -287,22 +290,31 @@ async def stream_logs():
                 if not line:
                     if process.returncode is not None:
                         error = await process.stderr.read()
-                        yield f"data: [System Log Stream disconnected (Code {process.returncode}): {error.decode().strip()}]\\n\\n"
+                        err_msg = error.decode().strip()
+                        yield f"data: [Stream Disconnected (Code {process.returncode}): {err_msg}]\n\n"
                         break
-                    # Minor delay if stdout is empty but process is still alive
-                    await asyncio.sleep(0.1)
+                    # Keep-alive in case of silence
+                    await asyncio.sleep(0.5)
                     continue
                 
-                # Sanitize and encode for SSE data format
                 clean_line = line.decode().strip()
-                yield f"data: {clean_line}\\n\\n"
+                if clean_line:
+                    yield f"data: {clean_line}\n\n"
                 
         except Exception as e:
-            yield f"data: [Error: {str(e)}]\\n\\n"
+            yield f"data: [Error: {str(e)}]\n\n"
             for log in get_logs():
-                yield f"data: {log}\\n\\n"
+                yield f"data: {log}\n\n"
 
-    return StreamingResponse(log_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        log_generator(), 
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 @router.get("/api/v1/logs")
 async def get_logs_api():
