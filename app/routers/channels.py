@@ -340,7 +340,7 @@ async def create_content_param(
     return doc
 
 
-@router.put("/{channel_id}/content-params/{param_name}")
+@router.patch("/{channel_id}/content-params/{param_name}")
 async def update_content_param(
     channel_id: str,
     param_name: str,
