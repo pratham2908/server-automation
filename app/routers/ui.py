@@ -268,7 +268,6 @@ async def get_log_viewer():
 async def stream_logs():
     """Streams journalctl logs in real-time using Server-Sent Events."""
     async def log_generator():
-        # Check if journalctl is available and if we are on Linux
         if os.name != 'posix':
             yield f"data: [Internal Log Fallback (Non-Linux OS)]\\n\\n"
             for log in get_logs():
@@ -276,11 +275,9 @@ async def stream_logs():
             return
 
         try:
-            # -u automation-server: specific unit
-            # -f: follow (real-time)
-            # -n 100: show last 100 lines initially
+            # Use absolute path and disable buffering for immediate delivery
             process = await asyncio.create_subprocess_exec(
-                "journalctl", "-u", "automation-server", "-f", "-n", "100",
+                "/usr/bin/journalctl", "-u", "automation-server", "-f", "-n", "50",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -288,17 +285,20 @@ async def stream_logs():
             while True:
                 line = await process.stdout.readline()
                 if not line:
-                    # Check if process died
                     if process.returncode is not None:
                         error = await process.stderr.read()
-                        yield f"data: [journalctl process exited with code {process.returncode}: {error.decode()}]\\n\\n"
+                        yield f"data: [System Log Stream disconnected (Code {process.returncode}): {error.decode().strip()}]\\n\\n"
                         break
-                    break
+                    # Minor delay if stdout is empty but process is still alive
+                    await asyncio.sleep(0.1)
+                    continue
                 
-                yield f"data: {line.decode().strip()}\\n\\n"
+                # Sanitize and encode for SSE data format
+                clean_line = line.decode().strip()
+                yield f"data: {clean_line}\\n\\n"
+                
         except Exception as e:
-            yield f"data: [Error starting log stream: {str(e)}]\\n\\n"
-            yield f"data: [Falling back to internal app logs...]\\n\\n"
+            yield f"data: [Error: {str(e)}]\\n\\n"
             for log in get_logs():
                 yield f"data: {log}\\n\\n"
 
