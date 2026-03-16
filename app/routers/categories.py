@@ -86,6 +86,8 @@ async def add_categories(
     ]
 
     result = await db.categories.insert_many(docs)
+    names = [item.name for item in items]
+    logger.success("✅ Created %d category(ies) for channel '%s': %s", len(names), channel_id, ", ".join(names))
     return {
         "ok": True,
         "inserted_count": len(result.inserted_ids),
@@ -168,6 +170,13 @@ async def update_category(
                 active_count,
             )
 
+    if new_name and new_name != old_name:
+        logger.success("✅ Renamed category '%s' → '%s' for channel '%s'", old_name, new_name, channel_id)
+    elif update_data.get("status") == "archived":
+        logger.success("📦 Archived category '%s' for channel '%s'", new_name or old_name, channel_id)
+    else:
+        logger.success("✅ Updated category '%s' for channel '%s'", new_name or old_name, channel_id)
+
     return {"ok": True, "category_id": category_id}
 
 
@@ -229,4 +238,5 @@ async def delete_category(
     if uncat:
         await recompute_category(channel_id, "Uncategorized", db)
 
+    logger.success("🗑️ Deleted category '%s' for channel '%s' — videos moved to Uncategorized", cat_name, channel_id)
     return {"ok": True, "category_id": category_id, "deleted": True}

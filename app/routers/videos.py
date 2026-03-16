@@ -328,6 +328,8 @@ async def update_video_status(
     if video.get("category") and (new_status == "published" or old_status == "published"):
         await recompute_category(channel_id, video["category"], db)
 
+    logger.success("✅ Video '%s' status: %s → %s", video.get("title", video_id)[:50], old_status, new_status)
+
     return {"ok": True, "video_id": video_id, "status": new_status}
 
 
@@ -427,6 +429,8 @@ async def change_video_category(
     await recompute_category(channel_id, old_name, db)
     await recompute_category(channel_id, new_name, db)
 
+    logger.success("✅ Moved video '%s' from '%s' → '%s'", video.get("title", video_id)[:50], old_name, new_name)
+
     return {
         "ok": True,
         "video_id": video_id,
@@ -523,6 +527,8 @@ Example: {{"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "E
         },
     )
 
+    logger.success("🔍 Extracted content params for '%s'", video.get("title", video_id)[:50])
+
     return {
         "ok": True,
         "video_id": video_id,
@@ -603,6 +609,8 @@ Include a "music" key."""
         except Exception as exc:
             logger.warning("Failed to extract params for video '%s': %s", video.get("title", video["video_id"]), exc)
 
+    logger.success("🔍 Bulk extracted content params: %d/%d videos for channel '%s'", extracted, len(videos), channel_id)
+
     return {"ok": True, "extracted": extracted, "total": len(videos)}
 
 
@@ -659,6 +667,7 @@ async def verify_video(
 
     final_params = body.content_params if (body and body.content_params) else video.get("content_params")
     final_category = body.category if (body and body.category) else video.get("category")
+    logger.success("✅ Verified video '%s' — category: %s", video.get("title", video_id)[:50], final_category)
     return {
         "ok": True,
         "video_id": video_id,
@@ -738,6 +747,8 @@ async def upload_video(
     if updated_video:
         updated_video.pop("_id", None)
         
+    logger.success("📤 Uploaded video '%s' to R2 — queue position %d", video.get("title", video_id)[:50], next_pos)
+
     return {"ok": True, "video": updated_video, "queue_position": next_pos}
 
 
@@ -883,6 +894,8 @@ async def schedule_video(
             scheduled += 1
         else:
             failed += 1
+
+    logger.success("📅 Scheduled %d video(s) for channel '%s' (%d failed)", scheduled, channel_id, failed)
 
     return {
         "ok": True,
@@ -1451,6 +1464,8 @@ async def generate_todos(
         gemini_service=gemini_service,
     )
 
+    logger.success("📝 Generated %d new to-do videos for channel '%s'", body.n, channel_id)
+
     return {
         "ok": True,
         "message": f"Successfully generated {body.n} new videos for the to-do list.",
@@ -1500,5 +1515,7 @@ async def delete_video(
     if was_published and category_name:
         from app.services.todo_engine import recompute_category
         await recompute_category(channel_id, category_name, db)
+
+    logger.success("🗑️ Deleted video '%s' from channel '%s'", video.get("title", video_id)[:50], channel_id)
 
     return {"ok": True, "video_id": video_id, "deleted": True}

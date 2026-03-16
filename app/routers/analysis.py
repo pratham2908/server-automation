@@ -7,7 +7,10 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
 from app.dependencies import verify_api_key
+from app.logger import get_logger
 from app.timezone import IST, UTC
+
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/channels/{channel_id}/analysis",
@@ -125,6 +128,78 @@ async def get_latest_analysis(
             "unverified": unverified,
             "not_ready_yet": not_ready_yet,
         },
+    }
+
+
+# ------------------------------------------------------------------
+# DELETE /  –  wipe all analysis data for a channel
+# ------------------------------------------------------------------
+
+
+@router.delete("/")
+async def delete_analysis(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Delete all analysis data for *channel_id* and reset derived scores.
+
+    Removes the channel summary (``analysis``), all per-video records
+    (``analysis_history``), resets every category's score / video_count /
+    video_ids / metadata, and zeros out content-param value scores.
+    The next ``POST /update`` will re-analyse everything from scratch.
+    """
+    from app.timezone import now_ist
+
+    # 1. Delete channel summary
+    await db.analysis.delete_one({"channel_id": channel_id})
+
+    # 2. Delete all per-video analysis records
+    hist_result = await db.analysis_history.delete_many({"channel_id": channel_id})
+
+    # 3. Reset categories: score, video_count, video_ids, metadata
+    cat_result = await db.categories.update_many(
+        {"channel_id": channel_id},
+        {
+            "$set": {
+                "score": 0,
+                "video_count": 0,
+                "video_ids": [],
+                "metadata": {"total_videos": 0},
+                "updated_at": now_ist(),
+            }
+        },
+    )
+
+    # 4. Zero out content_params value scores and video counts
+    param_docs = await db.content_params.find(
+        {"channel_id": channel_id, "values.0": {"$exists": True}}
+    ).to_list(length=None)
+
+    for pdoc in param_docs:
+        zeroed = [
+            {"value": v["value"], "score": 0, "video_count": 0}
+            for v in pdoc["values"]
+        ]
+        await db.content_params.update_one(
+            {"_id": pdoc["_id"]},
+            {"$set": {"values": zeroed, "updated_at": now_ist()}},
+        )
+
+    logger.success(
+        "🗑️ Deleted analysis for channel '%s': %d history records, %d categories reset, %d content params reset",
+        channel_id,
+        hist_result.deleted_count,
+        cat_result.modified_count,
+        len(param_docs),
+    )
+
+    return {
+        "ok": True,
+        "channel_id": channel_id,
+        "analysis_deleted": True,
+        "analysis_history_deleted": hist_result.deleted_count,
+        "categories_reset": cat_result.modified_count,
+        "content_params_reset": len(param_docs),
     }
 
 

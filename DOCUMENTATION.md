@@ -956,6 +956,32 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 
 ---
 
+#### `DELETE /` — Delete all analysis data
+
+Wipes all analysis data for the channel and resets derived scores. Use this to force a full re-analysis from scratch on the next `POST /update`.
+
+**What gets deleted / reset:**
+
+1. The `analysis` document (channel summary) is deleted
+2. All `analysis_history` records (per-video analyses) are deleted
+3. All categories have their `score`, `video_count`, `video_ids`, and `metadata` reset to zero/empty
+4. All `content_params` value entries have their `score` and `video_count` set to 0
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "channel_id": "tech-tips",
+  "analysis_deleted": true,
+  "analysis_history_deleted": 42,
+  "categories_reset": 5,
+  "content_params_reset": 3
+}
+```
+
+---
+
 #### `GET /latest` — Get latest channel summary
 
 Returns the most recent channel summary for the channel, including `subscriber_count` and an `analysis_status` summary.

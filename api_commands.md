@@ -580,6 +580,13 @@ Content params are custom dimensions for classifying videos. Manage them with th
 - **Description**: Two-step pipeline: (1) per-video analysis with stats snapshot + AI insight stored in `analysis_history`, (2) channel summary aggregation. Includes subscriber count and subscribers gained per video.
 - **Response**: Returns the updated channel summary.
 
+### Delete Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/analysis/`
+- **Method**: `DELETE`
+- **Description**: Deletes the channel summary, all per-video analysis records, resets category scores/video_count/video_ids/metadata to zero, and zeros out content_params value scores. Forces a full re-analysis on next `POST /update`.
+- **Response**: `{"ok": true, "channel_id": "...", "analysis_deleted": true, "analysis_history_deleted": 42, "categories_reset": 5, "content_params_reset": 3}`
+
 ### Get Per-Video Analyses (History)
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/analysis/history`
