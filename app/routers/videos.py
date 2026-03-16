@@ -839,20 +839,6 @@ async def schedule_video(
             detail="No ready videos found to schedule",
         )
 
-    # ---- Fetch best_posting_times from the latest analysis ----
-    analysis = await db.analysis.find_one({"channel_id": channel_id})
-    if not analysis or not analysis.get("best_posting_times"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No analysis with best_posting_times found — run analysis first",
-        )
-
-    # ---- Gather already-occupied slots from existing scheduled queue ----
-    existing_scheduled = await db.schedule_queue.find(
-        {"channel_id": channel_id}
-    ).to_list(length=None)
-    occupied_datetimes = [e.get("scheduled_at") for e in existing_scheduled]
-
     # ---- Compute or use manual publish slots ----
     is_all = video_id.lower() == "all"
     manual_dt = body.scheduled_at if (body and not is_all) else None
@@ -861,6 +847,20 @@ async def schedule_video(
         # Use the provided manual time.
         slots = [manual_dt]
     else:
+        # ---- Fetch best_posting_times from the latest analysis ----
+        analysis = await db.analysis.find_one({"channel_id": channel_id})
+        if not analysis or not analysis.get("best_posting_times"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No analysis with best_posting_times found — run analysis first",
+            )
+
+        # ---- Gather already-occupied slots from existing scheduled queue ----
+        existing_scheduled = await db.schedule_queue.find(
+            {"channel_id": channel_id}
+        ).to_list(length=None)
+        occupied_datetimes = [e.get("scheduled_at") for e in existing_scheduled]
+
         # Compute slots using the scheduler logic.
         slots = compute_schedule_slots(
             best_posting_times=analysis["best_posting_times"],
