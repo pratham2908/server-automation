@@ -95,13 +95,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.routers import analysis, categories, channels, ui, videos  # noqa: E402
+from app.routers import analysis, categories, channels, system, ui, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
 app.include_router(categories.router)
 app.include_router(analysis.router)
 app.include_router(ui.router)
+app.include_router(system.router)
 
 
 @app.get("/health", tags=["health"])
