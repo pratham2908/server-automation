@@ -140,7 +140,7 @@ Content params are custom dimensions for classifying videos. Manage them with th
 - **Endpoint**: `/api/v1/channels/{channel_id}/content-params`
 - **Method**: `GET`
 - **Description**: Returns all content params for the channel.
-- **Response**: Array of param objects with `name`, `description`, `values`, `belongs_to`.
+- **Response**: Array of param objects with `name`, `description`, `values`, `belongs_to`, `unique`.
 
 #### Add Content Param
 
@@ -153,11 +153,12 @@ Content params are custom dimensions for classifying videos. Manage them with th
   "name": "simulation_type",
   "description": "Type of simulation",
   "values": ["battle", "survival", "puzzle"],
-  "belongs_to": ["all"]
+  "belongs_to": ["all"],
+  "unique": false
 }
 ```
 
-- **Description**: `values` is a list of strings. `belongs_to` defaults to `["all"]` if omitted.
+- **Description**: `values` is a list of strings. `belongs_to` defaults to `["all"]` if omitted. `unique` (default `false`) — if `true`, the TODO generator tells Gemini not to reuse already-used values for this param.
 - **Response**: Created param object.
 
 #### Update Content Param
@@ -170,7 +171,8 @@ Content params are custom dimensions for classifying videos. Manage them with th
 {
   "description": "Updated description",
   "values": ["battle", "survival", "puzzle", "adventure"],
-  "belongs_to": ["all"]
+  "belongs_to": ["all"],
+  "unique": true
 }
 ```
 

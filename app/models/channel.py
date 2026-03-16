@@ -34,6 +34,10 @@ class ContentParamDefinition(BaseModel):
         default_factory=lambda: ["all"],
         description="Categories this param applies to. ['all'] = every category.",
     )
+    unique: bool = Field(
+        False,
+        description="If True, Gemini must not reuse existing values for this param when generating new videos",
+    )
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)
 

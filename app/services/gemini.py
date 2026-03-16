@@ -381,19 +381,24 @@ Guidelines:
                 + "\n".join(f"- {title}" for title in existing_titles)
             )
 
-        if existing_content_params:
-            has_video_topic = any("video_topic" in p for p in existing_content_params)
-            if has_video_topic:
-                used_topics = sorted({
-                    p["video_topic"] for p in existing_content_params if p.get("video_topic")
+        unique_param_names: list[str] = []
+        if existing_content_params and content_schema:
+            for schema_entry in content_schema:
+                if not schema_entry.get("unique"):
+                    continue
+                param_name = schema_entry["name"]
+                unique_param_names.append(param_name)
+                used_values = sorted({
+                    p[param_name] for p in existing_content_params if p.get(param_name)
                 })
-                existing_section += (
-                    "\n\n## Already-Used video_topic Values — DO NOT REPEAT\n"
-                    "These video_topic values have already been covered. You MUST pick completely "
-                    "NEW, UNUSED video_topic values. Do NOT reuse any from this list, "
-                    "even with a different ranking_factor or angle.\n"
-                    + "\n".join(f"- {t}" for t in used_topics)
-                )
+                if used_values:
+                    existing_section += (
+                        f"\n\n## Already-Used `{param_name}` Values — DO NOT REPEAT\n"
+                        f"These `{param_name}` values have already been covered. You MUST pick completely "
+                        f"NEW, UNUSED `{param_name}` values. Do NOT reuse any from this list, "
+                        "even with a different angle or combination of other params.\n"
+                        + "\n".join(f"- {v}" for v in used_values)
+                    )
 
         params_section = ""
         if content_schema:
@@ -462,5 +467,5 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 - Generate exactly {count} completely distinct video ideas. DO NOT repeat titles or topics.
 - **content_params**: MUST include values for every parameter in the content schema. ALWAYS include a "music" key with a specific music/audio track recommendation that fits the video's theme and mood.
 - **basis_factor**: Provide a short reasoning for why this video idea should perform well.
-- If an "Already-Used video_topic Values" list is provided above, you MUST NOT reuse ANY video_topic from that list. Every `video_topic` value must be completely new and never covered before.
+- For any content param marked as unique above, you MUST NOT reuse ANY value from its "Already-Used" list. Every value for that param must be completely new and never covered before.
 - Strictly return a JSON array of objects (`[]`), even if count is 1."""

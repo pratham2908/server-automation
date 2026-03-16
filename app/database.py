@@ -107,6 +107,7 @@ async def get_content_schema_for_prompt(
             "name": d["name"],
             "description": d.get("description", ""),
             "values": [v["value"] for v in d.get("values", [])],
+            "unique": d.get("unique", False),
         }
         for d in docs
     ]

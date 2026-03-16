@@ -220,6 +220,7 @@ Returns all content param definitions for the channel.
       { "value": "Population", "score": 72, "video_count": 6 }
     ],
     "belongs_to": ["all"],
+    "unique": true,
     "created_at": "2024-01-15T10:30:00Z",
     "updated_at": "2024-01-15T10:30:00Z"
   }
@@ -228,6 +229,7 @@ Returns all content param definitions for the channel.
 
 - `values` — for params with predefined options: array of `{value, score, video_count}`; scores and video_count are updated after channel summary analysis. If an analysed video uses a value not yet tracked, it is auto-added. Free-form params have `values: []`.
 - `belongs_to` — array of category names this param applies to; default `["all"]` means it applies to all categories. User can scope to specific categories.
+- `unique` — if `true`, the TODO generator tells Gemini not to reuse already-used values for this param when generating new video ideas. Useful for free-form params like `video_topic` where each video should cover a distinct topic. Default `false`.
 
 ---
 
@@ -240,7 +242,8 @@ Returns all content param definitions for the channel.
   "name": "video_topic",
   "description": "The thing that the video is ranking",
   "values": [],
-  "belongs_to": ["all"]
+  "belongs_to": ["all"],
+  "unique": true
 }
 ```
 
@@ -248,6 +251,7 @@ Returns all content param definitions for the channel.
 - `description` — what this parameter represents (optional)
 - `values` — for predefined options: array of `{value, score?, video_count?}`; empty list means free-form (Gemini infers)
 - `belongs_to` — array of category names; default `["all"]`
+- `unique` — if `true`, the TODO generator tells Gemini not to reuse already-used values for this param (default `false`)
 
 **Response (201):** `{"ok": true, "channel_id": "...", "param": {...}}`
 
@@ -255,7 +259,7 @@ Returns all content param definitions for the channel.
 
 #### `PUT /{channel_id}/content-params/{param_name}` — Update a content param
 
-Updates `description`, `values`, and/or `belongs_to` for an existing param.
+Updates `description`, `values`, `belongs_to`, and/or `unique` for an existing param.
 
 **Path params:** `param_name` — the param's `name` field
 
@@ -265,7 +269,8 @@ Updates `description`, `values`, and/or `belongs_to` for an existing param.
 {
   "description": "Updated description",
   "values": [{ "value": "GDP", "score": 85, "video_count": 4 }],
-  "belongs_to": ["Geography", "Economics"]
+  "belongs_to": ["Geography", "Economics"],
+  "unique": true
 }
 ```
 

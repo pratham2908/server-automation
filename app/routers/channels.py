@@ -285,6 +285,7 @@ class ContentParamCreate(BaseModel):
     description: str = Field("", description="What this parameter represents")
     values: list[str] = Field(default_factory=list, description="Allowed values. Empty = free-form.")
     belongs_to: list[str] = Field(default_factory=lambda: ["all"], description="Categories this applies to. ['all'] = every category.")
+    unique: bool = Field(False, description="If True, Gemini must not reuse existing values when generating new videos")
 
 
 class ContentParamUpdate(BaseModel):
@@ -292,6 +293,7 @@ class ContentParamUpdate(BaseModel):
     description: Optional[str] = None
     values: Optional[list[str]] = None
     belongs_to: Optional[list[str]] = None
+    unique: Optional[bool] = None
 
 
 @router.get("/{channel_id}/content-params")
@@ -332,6 +334,7 @@ async def create_content_param(
         "description": body.description,
         "values": [{"value": v, "score": 0, "video_count": 0} for v in body.values],
         "belongs_to": body.belongs_to,
+        "unique": body.unique,
         "created_at": now,
         "updated_at": now,
     }
@@ -359,6 +362,9 @@ async def update_content_param(
 
     if body.belongs_to is not None:
         update_fields["belongs_to"] = body.belongs_to
+
+    if body.unique is not None:
+        update_fields["unique"] = body.unique
 
     if body.values is not None:
         existing_values_map = {v["value"]: v for v in existing.get("values", [])}
