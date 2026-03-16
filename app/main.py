@@ -471,6 +471,21 @@ async def api_schema():
             },
             {
                 "group": "Analysis",
+                "method": "DELETE",
+                "path": "/api/v1/channels/{channel_id}/analysis/",
+                "description": "Delete channel summary, history records, and reset category/param scores",
+                "request": None,
+                "response": {
+                    "ok": True,
+                    "channel_id": "ch1",
+                    "analysis_deleted": True,
+                    "analysis_history_deleted": 42,
+                    "categories_reset": 5,
+                    "content_params_reset": 3,
+                },
+            },
+            {
+                "group": "Analysis",
                 "method": "GET",
                 "path": "/api/v1/channels/{channel_id}/analysis/history",
                 "description": "List per-video analyses with optional date range filter",

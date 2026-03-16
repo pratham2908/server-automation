@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse
 import asyncio
 from app.logger import get_logs
@@ -53,6 +53,12 @@ async def get_log_viewer():
                 z-index: 10;
             }
 
+            .nav {
+                display: flex;
+                gap: 2rem;
+                align-items: center;
+            }
+
             .logo {
                 display: flex;
                 align-items: center;
@@ -60,7 +66,18 @@ async def get_log_viewer():
                 font-weight: 600;
                 font-size: 1.25rem;
                 color: var(--primary);
+                text-decoration: none;
             }
+
+            .nav-link {
+                color: var(--text-muted);
+                text-decoration: none;
+                font-size: 0.875rem;
+                font-weight: 500;
+                transition: color 0.2s;
+            }
+
+            .nav-link:hover, .nav-link.active { color: var(--text-main); }
 
             .status {
                 display: flex;
@@ -152,9 +169,13 @@ async def get_log_viewer():
     </head>
     <body>
         <header>
-            <div class="logo">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                <span>System Logs (journalctl)</span>
+            <div class="nav">
+                <a href="/logs" class="logo">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    <span>YouTube Automation</span>
+                </a>
+                <a href="/logs" class="nav-link active">Logs</a>
+                <a href="/analysis" class="nav-link">Analysis</a>
             </div>
             <div class="status">
                 <div id="status-dot" class="status-dot live"></div>
@@ -277,15 +298,246 @@ async def get_log_viewer():
     """
     return HTMLResponse(content=html_content)
 
+@router.get("/analysis", response_class=HTMLResponse)
+async def get_analysis_viewer():
+    """Returns a premium analysis management page."""
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Analysis Management | YouTube Automation</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+        <style>
+            :root {
+                --bg-dark: #0f172a;
+                --bg-card: #1e293b;
+                --text-main: #f8fafc;
+                --text-muted: #94a3b8;
+                --primary: #38bdf8;
+                --danger: #f87171;
+                --success: #4ade80;
+            }
+
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+
+            body {
+                font-family: 'Inter', sans-serif;
+                background-color: var(--bg-dark);
+                color: var(--text-main);
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }
+
+            header {
+                padding: 1rem 2rem;
+                background: rgba(30, 41, 59, 0.8);
+                backdrop-filter: blur(12px);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                z-index: 10;
+            }
+
+            .nav {
+                display: flex;
+                gap: 2rem;
+                align-items: center;
+            }
+
+            .logo {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                font-weight: 600;
+                font-size: 1.25rem;
+                color: var(--primary);
+                text-decoration: none;
+            }
+
+            .nav-link {
+                color: var(--text-muted);
+                text-decoration: none;
+                font-size: 0.875rem;
+                font-weight: 500;
+                transition: color 0.2s;
+            }
+
+            .nav-link:hover, .nav-link.active { color: var(--text-main); }
+
+            main {
+                flex: 1;
+                max-width: 800px;
+                margin: 3rem auto;
+                padding: 0 2rem;
+                width: 100%;
+            }
+
+            .card {
+                background: var(--bg-card);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 1rem;
+                padding: 2rem;
+                margin-bottom: 2rem;
+            }
+
+            h2 { margin-bottom: 1.5rem; font-size: 1.5rem; font-weight: 600; }
+            p { color: var(--text-muted); margin-bottom: 1.5rem; line-height: 1.6; }
+
+            .danger-zone {
+                border-top: 1px solid rgba(248, 113, 113, 0.2);
+                margin-top: 2rem;
+                padding-top: 2rem;
+            }
+
+            .danger-zone h3 { color: var(--danger); margin-bottom: 0.75rem; font-size: 1.125rem; }
+
+            .btn {
+                padding: 0.75rem 1.5rem;
+                border-radius: 0.5rem;
+                border: none;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+
+            .btn-danger { background: var(--danger); color: white; }
+            .btn-danger:hover { background: #ef4444; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(248, 113, 113, 0.3); }
+
+            .input-group { margin-bottom: 1.5rem; }
+            label { display: block; margin-bottom: 0.5rem; color: var(--text-muted); font-size: 0.875rem; }
+            input {
+                width: 100%;
+                background: #0f172a;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                padding: 0.75rem;
+                border-radius: 0.5rem;
+                color: white;
+                font-size: 1rem;
+            }
+
+            #status-message {
+                margin-top: 1rem;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                display: none;
+            }
+
+            #status-message.success { display: block; background: rgba(74, 222, 128, 0.1); color: var(--success); border: 1px solid rgba(74, 222, 128, 0.2); }
+            #status-message.error { display: block; background: rgba(248, 113, 113, 0.1); color: var(--danger); border: 1px solid rgba(248, 113, 113, 0.2); }
+        </style>
+    </head>
+    <body>
+        <header>
+            <div class="nav">
+                <a href="/logs" class="logo">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    <span>YouTube Automation</span>
+                </a>
+                <a href="/logs" class="nav-link">Logs</a>
+                <a href="/analysis" class="nav-link active">Analysis</a>
+            </div>
+        </header>
+
+        <main>
+            <div class="card">
+                <h2>Analysis Management</h2>
+                <p>Use the controls below to manage the channel's analysis data. Wiping analysis will reset all computed scores and history, allowing for a fresh update.</p>
+                
+                <div class="input-group">
+                    <label>Channel ID (slug)</label>
+                    <input type="text" id="channel-id" value="physicsasmr_official" placeholder="e.g. tech-tips">
+                </div>
+                
+                <div class="input-group">
+                    <label>API Key</label>
+                    <input type="password" id="api-key" placeholder="Enter your X-API-Key">
+                </div>
+
+                <div class="danger-zone">
+                    <h3>Danger Zone</h3>
+                    <p>Wiping analysis is permanent. This will delete the summary, video history, and reset category/param scores.</p>
+                    <button id="delete-btn" class="btn btn-danger">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                        Delete Analysis Data
+                    </button>
+                </div>
+
+                <div id="status-message"></div>
+            </div>
+        </main>
+
+        <script>
+            const deleteBtn = document.getElementById('delete-btn');
+            const channelIdInput = document.getElementById('channel-id');
+            const apiKeyInput = document.getElementById('api-key');
+            const statusMsg = document.getElementById('status-message');
+
+            deleteBtn.onclick = async () => {
+                const channelId = channelIdInput.value.trim();
+                const apiKey = apiKeyInput.value.trim();
+
+                if (!channelId || !apiKey) {
+                    showStatus('Channel ID and API Key are required.', 'error');
+                    return;
+                }
+
+                if (!confirm(`Are you sure you want to wipe analysis for "${channelId}"? This cannot be undone.`)) {
+                    return;
+                }
+
+                deleteBtn.disabled = true;
+                deleteBtn.textContent = 'Deleting...';
+                statusMsg.style.display = 'none';
+
+                try {
+                    const response = await fetch(`/api/v1/channels/${channelId}/analysis/`, {
+                        method: 'DELETE',
+                        headers: {
+                            'X-API-Key': apiKey
+                        }
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        showStatus(`Successfully wiped analysis. Records deleted: ${data.analysis_history_deleted}, Categories reset: ${data.categories_reset}.`, 'success');
+                    } else {
+                        showStatus(`Error: ${data.detail || 'Failed to delete analysis.'}`, 'error');
+                    }
+                } catch (err) {
+                    showStatus(`Network Error: ${err.message}`, 'error');
+                } finally {
+                    deleteBtn.disabled = false;
+                    deleteBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg> Delete Analysis Data';
+                }
+            };
+
+            function showStatus(msg, type) {
+                statusMsg.textContent = msg;
+                statusMsg.className = type;
+            }
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
 @router.get("/api/v1/logs/stream")
 async def stream_logs():
     """Streams journalctl logs in real-time using Server-Sent Events."""
     async def log_generator():
         # Fallback to internal logs if not posix
         if os.name != 'posix':
-            yield "data: [Internal Log Fallback (Non-Linux OS)]\n\n"
+            yield "data: [Internal Log Fallback (Non-Linux OS)]\\n\\n"
             for log in get_logs():
-                yield f"data: {log}\n\n"
+                yield f"data: {log}\\n\\n"
             return
 
         try:
@@ -302,7 +554,7 @@ async def stream_logs():
                     if process.returncode is not None:
                         error = await process.stderr.read()
                         err_msg = error.decode().strip()
-                        yield f"data: [Stream Disconnected (Code {process.returncode}): {err_msg}]\n\n"
+                        yield f"data: [Stream Disconnected (Code {process.returncode}): {err_msg}]\\n\\n"
                         break
                     # Keep-alive in case of silence
                     await asyncio.sleep(0.5)
@@ -310,12 +562,12 @@ async def stream_logs():
                 
                 clean_line = line.decode().strip()
                 if clean_line:
-                    yield f"data: {clean_line}\n\n"
+                    yield f"data: {clean_line}\\n\\n"
                 
         except Exception as e:
-            yield f"data: [Error: {str(e)}]\n\n"
+            yield f"data: [Error: {str(e)}]\\n\\n"
             for log in get_logs():
-                yield f"data: {log}\n\n"
+                yield f"data: {log}\\n\\n"
 
     return StreamingResponse(
         log_generator(), 
