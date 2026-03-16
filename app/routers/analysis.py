@@ -72,16 +72,16 @@ async def get_latest_analysis(
     """Return the latest channel summary for *channel_id*,
     plus counts of videos ready / not yet ready for analysis."""
     from datetime import timedelta
-    from app.timezone import now_ist, IST
+    from app.timezone import now_ist
 
+    # 1. Fetch analysis doc (if any)
     doc = await db.analysis.find_one({"channel_id": channel_id})
-    if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No analysis found for channel {channel_id}",
-        )
-    doc.pop("_id", None)
+    if doc:
+        doc.pop("_id", None)
+    else:
+        doc = {}
 
+    # 2. Calculate analysis_status (ready/unverified/waiting)
     already_analysed_ids: set[str] = set()
     async for h in db.analysis_history.find(
         {"channel_id": channel_id}, {"video_id": 1}
