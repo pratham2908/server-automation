@@ -136,7 +136,7 @@ class InstagramService:
             resp.raise_for_status()
             data = resp.json()
             new_token = data.get("access_token")
-            if new_token and self._db and self._channel_id:
+            if new_token and self._db is not None and self._channel_id:
                 import asyncio
 
                 expires_in = data.get("expires_in", 5184000)

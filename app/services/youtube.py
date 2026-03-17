@@ -110,7 +110,7 @@ class YouTubeService:
 
     def _save_credentials(self, creds: Credentials) -> None:
         """Persist refreshed credentials back to MongoDB (fire-and-forget)."""
-        if not self._db or not self._channel_id:
+        if self._db is None or self._channel_id is None:
             return
 
         import asyncio
