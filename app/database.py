@@ -60,6 +60,10 @@ async def connect_db(
         [("channel_id", 1), ("name", 1)],
         unique=True,
     )
+    await _db.competitors.create_index(
+        [("channel_id", 1), ("youtube_channel_id", 1)],
+        unique=True,
+    )
 
     return _db
 

@@ -184,6 +184,55 @@ Content params are custom dimensions for classifying videos. Manage them with th
 - **Method**: `DELETE`
 - **Response**: `{"ok": true, "param_name": "...", "deleted": true}`
 
+### Competitors
+
+#### List Competitors
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/competitors`
+- **Method**: `GET`
+- **Response**:
+
+```json
+{
+  "channel_id": "physicsasmr_official",
+  "competitors": [
+    {
+      "channel_id": "physicsasmr_official",
+      "youtube_channel_id": "UC...",
+      "handle": "@MrBeast",
+      "name": "MrBeast",
+      "thumbnail": "https://...",
+      "created_at": "2026-03-07T12:00:00+05:30"
+    }
+  ]
+}
+```
+
+#### Add Competitor
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/competitors`
+- **Method**: `POST`
+- **Request Body**:
+
+```json
+{
+  "youtube_channel_id": "UC...",
+  "handle": "@MrBeast",
+  "name": "MrBeast",
+  "thumbnail": "https://..."
+}
+```
+
+- **Response**: The created competitor document (201). Returns 409 if the competitor already exists for this channel.
+
+#### Remove Competitor
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/competitors/{youtube_channel_id}`
+- **Method**: `DELETE`
+- **Response**: `{"ok": true, "deleted": "UC..."}`
+
+---
+
 ### YouTube OAuth Config
 
 #### Set YouTube OAuth Client Credentials

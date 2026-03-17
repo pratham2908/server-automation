@@ -334,6 +334,63 @@ Partially update channel fields.
 
 ---
 
+#### Competitors
+
+Manage competitor YouTube channels tracked for each channel. Stored in the `competitors` collection.
+
+---
+
+#### `GET /{channel_id}/competitors` — List competitors
+
+Returns all competitors for a channel.
+
+**Response (200):**
+
+```json
+{
+  "channel_id": "physicsasmr_official",
+  "competitors": [
+    {
+      "channel_id": "physicsasmr_official",
+      "youtube_channel_id": "UC...",
+      "handle": "@SomeCreator",
+      "name": "Some Creator",
+      "thumbnail": "https://...",
+      "created_at": "2026-03-07T12:00:00+05:30"
+    }
+  ]
+}
+```
+
+---
+
+#### `POST /{channel_id}/competitors` — Add a competitor
+
+Adds a competitor channel. Returns 409 if the competitor already exists for this channel.
+
+**Request body:**
+
+```json
+{
+  "youtube_channel_id": "UC...",
+  "handle": "@SomeCreator",
+  "name": "Some Creator",
+  "thumbnail": "https://..."
+}
+```
+
+**Response (201):** The created competitor document.
+
+---
+
+#### `DELETE /{channel_id}/competitors/{youtube_channel_id}` — Remove a competitor
+
+Removes a competitor from the channel. Returns 404 if not found.
+
+**Response (200):** `{"ok": true, "deleted": "UC..."}`
+
+---
+
 ### Videos
 
 Prefix: `/api/v1/channels/{channel_id}/videos`
@@ -1189,6 +1246,29 @@ Stores content param definitions per channel. Each document defines one paramete
 | Fields | Type | Purpose |
 |---|---|---|
 | `(channel_id, name)` | Compound (unique) | Fast lookup per channel |
+
+---
+
+### Collection: `competitors`
+
+Stores competitor YouTube channels tracked for each managed channel.
+
+```json
+{
+  "_id": "ObjectId",
+  "channel_id": "physicsasmr_official",
+  "youtube_channel_id": "UC...",
+  "handle": "@SomeCreator",
+  "name": "Some Creator",
+  "thumbnail": "https://...",
+  "created_at": "datetime"
+}
+```
+
+**Indexes:**
+| Fields | Type | Purpose |
+|---|---|---|
+| `(channel_id, youtube_channel_id)` | Compound (unique) | Prevent duplicate competitors per channel |
 
 ---
 

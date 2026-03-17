@@ -42,6 +42,17 @@ class ContentParamDefinition(BaseModel):
     updated_at: datetime = Field(default_factory=now_ist)
 
 
+class Competitor(BaseModel):
+    """A competitor YouTube channel tracked for a managed channel."""
+
+    channel_id: str = Field(..., description="Parent channel this competitor belongs to")
+    youtube_channel_id: str = Field(..., description="Competitor's YouTube channel ID")
+    handle: str = Field(..., description="Competitor's YouTube handle, e.g. @MrBeast")
+    name: str = Field(..., description="Display name")
+    thumbnail: str = Field("", description="Thumbnail/avatar URL")
+    created_at: datetime = Field(default_factory=now_ist)
+
+
 class YouTubeTokens(BaseModel):
     """OAuth2 tokens for a channel's YouTube account, stored on the channel doc."""
 

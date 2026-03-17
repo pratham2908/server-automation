@@ -402,6 +402,88 @@ async def delete_content_param(
 
 
 # ------------------------------------------------------------------
+# Competitors CRUD  –  stored in the ``competitors`` collection
+# ------------------------------------------------------------------
+
+
+class CompetitorCreate(BaseModel):
+    """Payload for adding a competitor channel."""
+    youtube_channel_id: str = Field(..., description="Competitor's YouTube channel ID")
+    handle: str = Field(..., description="YouTube handle, e.g. @MrBeast")
+    name: str = Field(..., description="Display name")
+    thumbnail: str = Field("", description="Thumbnail/avatar URL")
+
+
+@router.get("/{channel_id}/competitors")
+async def list_competitors(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """List all competitors for a channel."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
+
+    docs = await db.competitors.find({"channel_id": channel_id}).to_list(length=None)
+    for d in docs:
+        d.pop("_id", None)
+    return {"channel_id": channel_id, "competitors": docs}
+
+
+@router.post("/{channel_id}/competitors", status_code=status.HTTP_201_CREATED)
+async def add_competitor(
+    channel_id: str,
+    body: CompetitorCreate,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Add a competitor to a channel."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
+
+    existing = await db.competitors.find_one({
+        "channel_id": channel_id,
+        "youtube_channel_id": body.youtube_channel_id,
+    })
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Competitor '{body.youtube_channel_id}' already exists for this channel",
+        )
+
+    doc = {
+        "channel_id": channel_id,
+        "youtube_channel_id": body.youtube_channel_id,
+        "handle": body.handle,
+        "name": body.name,
+        "thumbnail": body.thumbnail,
+        "created_at": now_ist(),
+    }
+    await db.competitors.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.delete("/{channel_id}/competitors/{competitor_yt_id}")
+async def remove_competitor(
+    channel_id: str,
+    competitor_yt_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Remove a competitor from a channel."""
+    result = await db.competitors.delete_one({
+        "channel_id": channel_id,
+        "youtube_channel_id": competitor_yt_id,
+    })
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Competitor '{competitor_yt_id}' not found for channel '{channel_id}'",
+        )
+    return {"ok": True, "deleted": competitor_yt_id}
+
+
+# ------------------------------------------------------------------
 # YouTube OAuth config  –  stored in the ``config`` collection
 # ------------------------------------------------------------------
 
@@ -679,5 +761,6 @@ async def delete_channel(
     await db.analysis.delete_many({"channel_id": channel_id})
     await db.analysis_history.delete_many({"channel_id": channel_id})
     await db.content_params.delete_many({"channel_id": channel_id})
+    await db.competitors.delete_many({"channel_id": channel_id})
 
     return {"ok": True, "channel_id": channel_id, "deleted": True}
