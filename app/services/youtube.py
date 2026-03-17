@@ -2,17 +2,17 @@ from __future__ import annotations
 
 """YouTube Data API v3 + Analytics API service.
 
-Authentication uses a stored OAuth2 token (initially created via browser-based
-consent flow; refreshed automatically thereafter).
+Authentication uses OAuth2 tokens stored in the MongoDB ``channels``
+collection.  Tokens are refreshed automatically when expired and
+written back to the DB.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.timezone import now_ist
 
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -28,24 +28,64 @@ _SCOPES = [
 
 
 class YouTubeService:
-    """Wraps the YouTube Data API and Analytics API."""
+    """Wraps the YouTube Data API and Analytics API.
+
+    Accepts a token dict (from the DB) and client credentials directly.
+    When tokens are refreshed, the updated credentials are written back
+    to the channel document in MongoDB via ``_save_credentials``.
+    """
 
     def __init__(
         self,
         client_id: str,
         client_secret: str,
-        token_path: str,
+        token_data: dict[str, Any],
+        *,
+        db: Any = None,
+        channel_id: str | None = None,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
-        self._token_path = token_path
-        self._creds = self._load_or_refresh_credentials()
+        self._db = db
+        self._channel_id = channel_id
+        self._creds = self._build_credentials(token_data)
         self._youtube = self._build_data_client()
         self._youtube_analytics = self._build_analytics_client()
 
     # ------------------------------------------------------------------
     # Client bootstrap
     # ------------------------------------------------------------------
+
+    def _build_credentials(self, token_data: dict[str, Any]) -> Credentials:
+        """Construct ``Credentials`` from the DB token dict, refreshing if expired."""
+        expiry_raw = token_data.get("expiry")
+        expiry_dt = None
+        if expiry_raw:
+            try:
+                if isinstance(expiry_raw, str):
+                    expiry_dt = datetime.fromisoformat(expiry_raw.replace("Z", "+00:00"))
+                elif isinstance(expiry_raw, datetime):
+                    expiry_dt = expiry_raw if expiry_raw.tzinfo else expiry_raw.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                pass
+
+        creds = Credentials(
+            token=token_data["token"],
+            refresh_token=token_data.get("refresh_token"),
+            token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+            client_id=self._client_id,
+            client_secret=self._client_secret,
+            scopes=token_data.get("scopes"),
+            expiry=expiry_dt.replace(tzinfo=None) if expiry_dt else None,
+        )
+
+        if not creds.valid and creds.expired and creds.refresh_token:
+            from google.auth.transport.requests import Request
+            creds.refresh(Request())
+            self._save_credentials(creds)
+            logger.info("Refreshed YouTube token for channel '%s'", self._channel_id)
+
+        return creds
 
     def _build_data_client(self) -> Any:
         """Build an authorised YouTube Data API v3 client."""
@@ -54,61 +94,49 @@ class YouTubeService:
     def _build_analytics_client(self) -> Any | None:
         """Build a YouTube Analytics API v2 client.
 
-        Returns ``None`` if the token lacks the analytics scope (the caller
-        should handle this gracefully).
+        Returns ``None`` if the token lacks the analytics scope.
         """
         try:
             return build("youtubeAnalytics", "v2", credentials=self._creds)
         except Exception as exc:
             logger.warning(
                 "Could not build YouTube Analytics client: %s. "
-                "Analytics metrics (avg_percentage_viewed, etc.) will be unavailable. "
-                "Delete the token file and re-authenticate to add the analytics scope.",
+                "Analytics metrics will be unavailable. "
+                "Re-authenticate via the frontend to add the analytics scope.",
                 exc,
             )
             return None
 
-    def _load_or_refresh_credentials(self) -> Credentials:
-        """Load credentials from the token file, refreshing if needed.
-
-        Falls back to the full OAuth consent flow when no token exists yet
-        (only relevant during initial server setup).
-        """
-        import os
-
-        if os.path.exists(self._token_path):
-            creds = Credentials.from_authorized_user_file(
-                self._token_path, _SCOPES
-            )
-            if creds and creds.valid:
-                return creds
-            if creds and creds.expired and creds.refresh_token:
-                from google.auth.transport.requests import Request
-
-                creds.refresh(Request())
-                self._save_credentials(creds)
-                return creds
-
-        # First-time setup – requires interactive browser consent.
-        client_config = {
-            "installed": {
-                "client_id": self._client_id,
-                "client_secret": self._client_secret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": ["http://localhost"],
-            }
-        }
-        flow = InstalledAppFlow.from_client_config(client_config, _SCOPES)
-        creds = flow.run_local_server(port=0)
-        self._save_credentials(creds)
-        return creds
-
     def _save_credentials(self, creds: Credentials) -> None:
-        import json
+        """Persist refreshed credentials back to MongoDB (fire-and-forget)."""
+        if not self._db or not self._channel_id:
+            return
 
-        with open(self._token_path, "w") as f:
-            f.write(creds.to_json())
+        import asyncio
+
+        updated_expiry = (
+            creds.expiry.replace(tzinfo=timezone.utc).isoformat()
+            if creds.expiry
+            else None
+        )
+
+        async def _write() -> None:
+            await self._db.channels.update_one(
+                {"channel_id": self._channel_id},
+                {
+                    "$set": {
+                        "youtube_tokens.token": creds.token,
+                        "youtube_tokens.expiry": updated_expiry,
+                        "updated_at": now_ist(),
+                    }
+                },
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_write())
+        except RuntimeError:
+            asyncio.run(_write())
 
     # ------------------------------------------------------------------
     # Public API
@@ -383,37 +411,57 @@ class YouTubeService:
 class YouTubeServiceManager:
     """Manages per-channel YouTubeService instances.
 
-    Each channel has its own OAuth token (stored at
-    ``youtube_tokens/{channel_id}.json``), so analytics and uploads go
-    to the correct account.  Instances are lazily created and cached.
+    Reads OAuth tokens from the ``channels`` collection in MongoDB
+    and caches ``YouTubeService`` instances.  Client credentials come
+    from the DB ``config`` collection (with an ``.env`` fallback).
     """
 
-    def __init__(self, client_id: str, client_secret: str, tokens_dir: str = "youtube_tokens") -> None:
+    def __init__(
+        self,
+        db: Any,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+    ) -> None:
+        self._db = db
         self._client_id = client_id
         self._client_secret = client_secret
-        self._tokens_dir = tokens_dir
         self._cache: dict[str, YouTubeService] = {}
 
-    def get_service(self, channel_id: str) -> YouTubeService | None:
+    async def _resolve_credentials(self) -> tuple[str, str]:
+        """Return (client_id, client_secret) from DB config or constructor fallback."""
+        from app.database import get_youtube_oauth_config
+
+        cfg = await get_youtube_oauth_config(self._db)
+        cid = (cfg or {}).get("client_id") or self._client_id
+        csecret = (cfg or {}).get("client_secret") or self._client_secret
+        if not cid or not csecret:
+            raise RuntimeError(
+                "YouTube OAuth client credentials are not configured. "
+                "Set them via PUT /api/v1/channels/config/youtube-oauth or in .env"
+            )
+        return cid, csecret
+
+    async def get_service(self, channel_id: str) -> YouTubeService | None:
         """Return the YouTubeService for *channel_id*, or ``None`` if no token exists."""
         if channel_id in self._cache:
             return self._cache[channel_id]
 
-        import os
-        token_path = os.path.join(self._tokens_dir, f"{channel_id}.json")
-        if not os.path.exists(token_path):
+        channel = await self._db.channels.find_one({"channel_id": channel_id})
+        if not channel or not channel.get("youtube_tokens"):
             logger.warning(
-                "No YouTube token found for channel '%s' at %s",
+                "No YouTube tokens stored for channel '%s'",
                 channel_id,
-                token_path,
             )
             return None
 
         try:
+            client_id, client_secret = await self._resolve_credentials()
             service = YouTubeService(
-                client_id=self._client_id,
-                client_secret=self._client_secret,
-                token_path=token_path,
+                client_id=client_id,
+                client_secret=client_secret,
+                token_data=channel["youtube_tokens"],
+                db=self._db,
+                channel_id=channel_id,
             )
             self._cache[channel_id] = service
             logger.info("YouTube service initialised for channel '%s'", channel_id)
@@ -422,7 +470,14 @@ class YouTubeServiceManager:
             logger.exception("Failed to initialise YouTube service for channel '%s'", channel_id)
             return None
 
-    def has_token(self, channel_id: str) -> bool:
-        """Check if a token file exists for *channel_id*."""
-        import os
-        return os.path.exists(os.path.join(self._tokens_dir, f"{channel_id}.json"))
+    async def has_token(self, channel_id: str) -> bool:
+        """Check if YouTube tokens exist for *channel_id* in the DB."""
+        channel = await self._db.channels.find_one(
+            {"channel_id": channel_id, "youtube_tokens": {"$exists": True, "$ne": None}},
+            {"_id": 1},
+        )
+        return channel is not None
+
+    def invalidate(self, channel_id: str) -> None:
+        """Remove a cached service instance (e.g. after token update)."""
+        self._cache.pop(channel_id, None)

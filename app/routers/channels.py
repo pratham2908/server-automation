@@ -67,12 +67,14 @@ class ChannelUpdate(BaseModel):
 
 from app.models.channel import Channel
 
-@router.get("/", response_model=list[Channel])
+@router.get("/")
 async def list_channels(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Return all registered channels."""
-    channels = await db.channels.find().to_list(length=None)
+    """Return all registered channels (tokens excluded)."""
+    channels = await db.channels.find(
+        {}, {"youtube_tokens": 0}
+    ).to_list(length=None)
     for c in channels:
         c["_id"] = str(c["_id"])
     return channels
@@ -83,13 +85,15 @@ async def list_channels(
 # ------------------------------------------------------------------
 
 
-@router.get("/{channel_id}", response_model=Channel)
+@router.get("/{channel_id}")
 async def get_channel(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Return a single channel by its ``channel_id``."""
-    doc = await db.channels.find_one({"channel_id": channel_id})
+    """Return a single channel by its ``channel_id`` (tokens excluded)."""
+    doc = await db.channels.find_one(
+        {"channel_id": channel_id}, {"youtube_tokens": 0}
+    )
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -120,25 +124,26 @@ async def create_channel(
     # Use the new channel_id's token if it exists, otherwise any cached one.
     channel_id_for_token = body.channel_id
     yt = (
-        manager.get_service(channel_id_for_token) if channel_id_for_token else None
+        await manager.get_service(channel_id_for_token) if channel_id_for_token else None
     )
     if yt is None:
-        # Fall back to any available service instance.
+        # Fall back to any available cached service instance.
         if manager._cache:
             yt = next(iter(manager._cache.values()))
         else:
-            # Try to load any token file from the tokens dir.
-            import os
-            for f in os.listdir(manager._tokens_dir):
-                if f.endswith(".json"):
-                    cid = f.removesuffix(".json")
-                    yt = manager.get_service(cid)
-                    if yt:
-                        break
+            # Try to find any channel with stored tokens.
+            channels_with_tokens = await db.channels.find(
+                {"youtube_tokens": {"$exists": True, "$ne": None}},
+                {"channel_id": 1},
+            ).to_list(length=1)
+            for ch in channels_with_tokens:
+                yt = await manager.get_service(ch["channel_id"])
+                if yt:
+                    break
     if yt is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="No YouTube token available. Generate one with: python generate_youtube_token.py <channel_id>",
+            detail="No YouTube token available. Store tokens via POST /channels/{id}/youtube-token",
         )
 
     # Fetch channel data from YouTube.
@@ -242,11 +247,11 @@ async def refresh_channel(
         )
 
     manager = _get_youtube_manager()
-    yt = manager.get_service(channel_id)
+    yt = await manager.get_service(channel_id)
     if yt is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
+            detail=f"No YouTube token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/youtube-token",
         )
     try:
         yt_data = yt.get_channel_info(doc["youtube_channel_id"])
@@ -394,6 +399,238 @@ async def delete_content_param(
     if result.deleted_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Content param '{param_name}' not found for channel '{channel_id}'")
     return {"ok": True, "channel_id": channel_id, "deleted_param": param_name}
+
+
+# ------------------------------------------------------------------
+# YouTube OAuth config  –  stored in the ``config`` collection
+# ------------------------------------------------------------------
+
+
+class YouTubeOAuthConfig(BaseModel):
+    """Client credentials for the Google OAuth app."""
+    client_id: str = Field(..., description="Google OAuth client ID")
+    client_secret: str = Field(..., description="Google OAuth client secret")
+
+
+@router.put("/config/youtube-oauth", tags=["config"])
+async def set_youtube_oauth_config(
+    body: YouTubeOAuthConfig,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Store or update the YouTube OAuth client credentials in the DB."""
+    await db.config.update_one(
+        {"key": "youtube_oauth"},
+        {
+            "$set": {
+                "key": "youtube_oauth",
+                "client_id": body.client_id,
+                "client_secret": body.client_secret,
+                "updated_at": now_ist(),
+            }
+        },
+        upsert=True,
+    )
+    return {"ok": True, "message": "YouTube OAuth config saved"}
+
+
+@router.get("/config/youtube-oauth", tags=["config"])
+async def get_youtube_oauth_config_endpoint(
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Check if YouTube OAuth client credentials are configured."""
+    from app.database import get_youtube_oauth_config
+
+    doc = await get_youtube_oauth_config(db)
+    if not doc:
+        return {"configured": False}
+    return {
+        "configured": True,
+        "client_id": doc["client_id"],
+    }
+
+
+# ------------------------------------------------------------------
+# YouTube token management  –  stored on the channel document
+# ------------------------------------------------------------------
+
+
+class YouTubeTokenStore(BaseModel):
+    """Payload for storing OAuth tokens from the frontend."""
+    token: str = Field(..., description="OAuth2 access token")
+    refresh_token: str = Field(..., description="OAuth2 refresh token")
+    token_uri: str = Field("https://oauth2.googleapis.com/token")
+    scopes: list[str] = Field(default_factory=list)
+    expiry: Optional[str] = Field(None, description="ISO 8601 expiry datetime of the access token")
+
+
+@router.post("/{channel_id}/youtube-token")
+async def store_youtube_token(
+    channel_id: str,
+    body: YouTubeTokenStore,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Store YouTube OAuth tokens on a channel document.
+
+    Called by the frontend after the user completes the Google OAuth
+    consent flow and receives tokens client-side.
+    """
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    token_doc = {
+        "token": body.token,
+        "refresh_token": body.refresh_token,
+        "token_uri": body.token_uri,
+        "scopes": body.scopes,
+        "expiry": body.expiry,
+    }
+
+    await db.channels.update_one(
+        {"channel_id": channel_id},
+        {"$set": {"youtube_tokens": token_doc, "updated_at": now_ist()}},
+    )
+
+    manager = _get_youtube_manager()
+    manager.invalidate(channel_id)
+
+    return {"ok": True, "channel_id": channel_id, "message": "YouTube tokens stored"}
+
+
+@router.get("/{channel_id}/youtube-token")
+async def get_youtube_token(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Return a fresh access token for the channel.
+
+    If the stored access token is expired, it is automatically refreshed
+    using the refresh token and the updated token is saved back to the DB.
+    Only the short-lived access token is returned — never the refresh token.
+    """
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    tokens = channel.get("youtube_tokens")
+    if not tokens:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No YouTube tokens stored for channel '{channel_id}'",
+        )
+
+    from app.database import get_youtube_oauth_config
+    from app.config import get_settings
+    from google.oauth2.credentials import Credentials
+    from datetime import timezone
+
+    settings = get_settings()
+    oauth_cfg = await get_youtube_oauth_config(db)
+    client_id = (oauth_cfg or {}).get("client_id") or settings.YOUTUBE_CLIENT_ID
+    client_secret = (oauth_cfg or {}).get("client_secret") or settings.YOUTUBE_CLIENT_SECRET
+
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="YouTube OAuth client credentials not configured",
+        )
+
+    expiry = tokens.get("expiry")
+    expiry_dt = None
+    if expiry:
+        from datetime import datetime as dt
+        try:
+            expiry_dt = dt.fromisoformat(expiry.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            expiry_dt = None
+
+    creds = Credentials(
+        token=tokens["token"],
+        refresh_token=tokens["refresh_token"],
+        token_uri=tokens.get("token_uri", "https://oauth2.googleapis.com/token"),
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=tokens.get("scopes"),
+        expiry=expiry_dt.replace(tzinfo=None) if expiry_dt else None,
+    )
+
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            from google.auth.transport.requests import Request
+            creds.refresh(Request())
+
+            updated_expiry = creds.expiry.replace(tzinfo=timezone.utc).isoformat() if creds.expiry else None
+            await db.channels.update_one(
+                {"channel_id": channel_id},
+                {
+                    "$set": {
+                        "youtube_tokens.token": creds.token,
+                        "youtube_tokens.expiry": updated_expiry,
+                        "updated_at": now_ist(),
+                    }
+                },
+            )
+            manager = _get_youtube_manager()
+            manager.invalidate(channel_id)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="YouTube token is invalid and cannot be refreshed. Re-authenticate via the frontend.",
+            )
+
+    return {"ok": True, "access_token": creds.token, "expiry": creds.expiry.isoformat() + "Z" if creds.expiry else None}
+
+
+@router.get("/{channel_id}/youtube-token/status")
+async def get_youtube_token_status(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Check YouTube token status without exposing token values."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    tokens = channel.get("youtube_tokens")
+    if not tokens:
+        return {"channel_id": channel_id, "connected": False, "status": "disconnected"}
+
+    expiry = tokens.get("expiry")
+    if expiry:
+        from datetime import datetime as dt, timezone
+        try:
+            expiry_dt = dt.fromisoformat(expiry.replace("Z", "+00:00"))
+            is_expired = expiry_dt <= dt.now(timezone.utc)
+        except (ValueError, TypeError):
+            is_expired = True
+    else:
+        is_expired = True
+
+    has_refresh = bool(tokens.get("refresh_token"))
+
+    if is_expired and has_refresh:
+        token_status = "expired_refreshable"
+    elif is_expired:
+        token_status = "expired"
+    else:
+        token_status = "active"
+
+    return {
+        "channel_id": channel_id,
+        "connected": True,
+        "status": token_status,
+        "has_refresh_token": has_refresh,
+        "expiry": expiry,
+    }
 
 
 # ------------------------------------------------------------------

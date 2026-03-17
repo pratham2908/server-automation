@@ -19,11 +19,11 @@ router = APIRouter(
 )
 
 
-def _get_services(channel_id: str):
+async def _get_services(channel_id: str):
     """Lazy import to avoid circular dependency."""
     from app.main import youtube_service_manager, gemini_service  # type: ignore[import]
 
-    youtube_service = youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
+    youtube_service = await youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
     return youtube_service, gemini_service
 
 
@@ -40,12 +40,12 @@ async def run_analysis_update(
     """Trigger a full analysis update for *channel_id*."""
     from app.services.analysis_engine import run_analysis
 
-    youtube_service, gemini_service = _get_services(channel_id)
+    youtube_service, gemini_service = await _get_services(channel_id)
 
     if youtube_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
+            detail=f"No YouTube token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/youtube-token",
         )
     if gemini_service is None:
         raise HTTPException(

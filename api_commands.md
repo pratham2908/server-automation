@@ -184,6 +184,86 @@ Content params are custom dimensions for classifying videos. Manage them with th
 - **Method**: `DELETE`
 - **Response**: `{"ok": true, "param_name": "...", "deleted": true}`
 
+### YouTube OAuth Config
+
+#### Set YouTube OAuth Client Credentials
+
+- **Endpoint**: `/api/v1/channels/config/youtube-oauth`
+- **Method**: `PUT`
+- **Request Body**:
+
+```json
+{
+  "client_id": "818394441499-...",
+  "client_secret": "GOCSPX-..."
+}
+```
+
+- **Description**: Stores the Google OAuth client ID and secret in the DB. Replaces the old `.env` variables `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET`.
+- **Response**: `{"ok": true, "message": "YouTube OAuth config saved"}`
+
+#### Check YouTube OAuth Config
+
+- **Endpoint**: `/api/v1/channels/config/youtube-oauth`
+- **Method**: `GET`
+- **Description**: Returns whether client credentials are configured (and the `client_id` for verification). Never exposes the secret.
+- **Response**: `{"configured": true, "client_id": "818394441499-..."}`
+
+### YouTube Token Management
+
+#### Store YouTube Token
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/youtube-token`
+- **Method**: `POST`
+- **Request Body**:
+
+```json
+{
+  "token": "ya29.a0ARrdaM...",
+  "refresh_token": "1//0eXyz...",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "scopes": ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/yt-analytics.readonly"],
+  "expiry": "2026-03-07T12:00:00Z"
+}
+```
+
+- **Description**: Called by the frontend after the user completes the Google OAuth consent flow. Stores the tokens on the channel document in the DB. Invalidates any cached YouTube service for the channel.
+- **Response**: `{"ok": true, "channel_id": "...", "message": "YouTube tokens stored"}`
+
+#### Get Fresh Access Token
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/youtube-token`
+- **Method**: `GET`
+- **Description**: Returns a fresh access token for the channel. If the stored token is expired, it is automatically refreshed using the refresh token and saved back. **Only the short-lived access token is returned — never the refresh token.**
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "access_token": "ya29.a0ARrdaM...",
+  "expiry": "2026-03-07T13:00:00Z"
+}
+```
+
+#### Check YouTube Token Status
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/youtube-token/status`
+- **Method**: `GET`
+- **Description**: Returns whether a YouTube token exists and its status, without exposing any token values. Useful for the frontend to show "connected" / "disconnected" / "expired" state.
+- **Response**:
+
+```json
+{
+  "channel_id": "officialgeoranking",
+  "connected": true,
+  "status": "active",
+  "has_refresh_token": true,
+  "expiry": "2026-03-07T13:00:00Z"
+}
+```
+
+- **Status values**: `"disconnected"` (no tokens), `"active"` (valid), `"expired_refreshable"` (expired but has refresh token — will auto-refresh on GET), `"expired"` (expired, no refresh token — re-auth needed)
+
 ### Delete Channel
 
 - **Endpoint**: `/api/v1/channels/{channel_id}`

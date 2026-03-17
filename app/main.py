@@ -51,15 +51,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("R2 service initialised")
 
-    # ---- YouTube (per-channel token manager) ----
+    # ---- YouTube (per-channel token manager, tokens stored in DB) ----
     from app.services.youtube import YouTubeServiceManager
 
     youtube_service_manager = YouTubeServiceManager(
+        db=db,
         client_id=settings.YOUTUBE_CLIENT_ID,
         client_secret=settings.YOUTUBE_CLIENT_SECRET,
-        tokens_dir="youtube_tokens",
     )
-    logger.info("YouTube service manager initialised (per-channel tokens in youtube_tokens/)")
+    logger.info("YouTube service manager initialised (DB-backed tokens)")
 
     # ---- Gemini ----
     from app.services.gemini import GeminiService
@@ -214,6 +214,60 @@ async def api_schema():
                 "description": "Delete channel and all associated data, including R2 files",
                 "request": None,
                 "response": {"ok": True, "channel_id": "ch1", "deleted": True},
+            },
+            # -- YouTube OAuth Config --
+            {
+                "group": "Config",
+                "method": "PUT",
+                "path": "/api/v1/channels/config/youtube-oauth",
+                "description": "Store YouTube OAuth client credentials in DB",
+                "request": {"client_id": "818394441499-...", "client_secret": "GOCSPX-..."},
+                "response": {"ok": True, "message": "YouTube OAuth config saved"},
+            },
+            {
+                "group": "Config",
+                "method": "GET",
+                "path": "/api/v1/channels/config/youtube-oauth",
+                "description": "Check if YouTube OAuth client credentials are configured",
+                "request": None,
+                "response": {"configured": True, "client_id": "818394441499-..."},
+            },
+            # -- YouTube Tokens --
+            {
+                "group": "YouTube Tokens",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/youtube-token",
+                "description": "Store YouTube OAuth tokens for a channel (called by frontend after OAuth flow)",
+                "request": {
+                    "token": "ya29.a0ARrdaM...",
+                    "refresh_token": "1//0eXyz...",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "scopes": ["https://www.googleapis.com/auth/youtube.upload"],
+                    "expiry": "2026-03-07T12:00:00Z",
+                },
+                "response": {"ok": True, "channel_id": "ch1", "message": "YouTube tokens stored"},
+            },
+            {
+                "group": "YouTube Tokens",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/youtube-token",
+                "description": "Get a fresh access token (auto-refreshes if expired). Never returns the refresh token.",
+                "request": None,
+                "response": {"ok": True, "access_token": "ya29.a0ARrdaM...", "expiry": "2026-03-07T13:00:00Z"},
+            },
+            {
+                "group": "YouTube Tokens",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/youtube-token/status",
+                "description": "Check YouTube token status (connected/disconnected/expired) without exposing token values",
+                "request": None,
+                "response": {
+                    "channel_id": "ch1",
+                    "connected": True,
+                    "status": "active",
+                    "has_refresh_token": True,
+                    "expiry": "2026-03-07T13:00:00Z",
+                },
             },
             # -- Categories --
             {

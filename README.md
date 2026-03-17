@@ -37,8 +37,8 @@ cp .env.example .env
 | `MONGODB_URI`                | MongoDB Atlas → Connect → Connection String   |
 | `R2_*`                       | Cloudflare Dashboard → R2 → API Tokens        |
 | `GEMINI_API_KEY`             | Google AI Studio → API Keys                   |
-| `YOUTUBE_CLIENT_SECRET_JSON` | Google Cloud Console → OAuth 2.0 Client       |
-| `YOUTUBE_TOKEN_JSON`         | Auto-generated on first run (browser consent) |
+| `YOUTUBE_CLIENT_ID`          | (Optional) Google Cloud Console → OAuth 2.0 Client ID. Prefer DB config via `PUT /channels/config/youtube-oauth` |
+| `YOUTUBE_CLIENT_SECRET`      | (Optional) Google Cloud Console → OAuth 2.0 Client Secret. Prefer DB config |
 
 ### 3. MongoDB Atlas Setup
 
@@ -50,10 +50,10 @@ cp .env.example .env
 ### 4. YouTube OAuth Setup
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Enable the **YouTube Data API v3**
-3. Create an **OAuth 2.0 Client ID** (Desktop application)
-4. Download the client secret JSON and set `YOUTUBE_CLIENT_SECRET_JSON` path
-5. On first server start, a browser window will open for consent — the token is saved to `YOUTUBE_TOKEN_JSON`
+2. Enable the **YouTube Data API v3** and **YouTube Analytics API**
+3. Create an **OAuth 2.0 Client ID** (Web application or Desktop)
+4. Store client credentials in the DB: `PUT /api/v1/channels/config/youtube-oauth` with `{"client_id": "...", "client_secret": "..."}`
+5. Use the frontend to complete the OAuth consent flow and store per-channel tokens via `POST /channels/{channel_id}/youtube-token`
 
 ### 5. Run
 

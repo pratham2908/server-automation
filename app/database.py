@@ -83,6 +83,11 @@ def get_db() -> AsyncIOMotorDatabase:
     return _db
 
 
+async def get_youtube_oauth_config(db: AsyncIOMotorDatabase) -> dict | None:
+    """Return the YouTube OAuth client credentials from the ``config`` collection."""
+    return await db.config.find_one({"key": "youtube_oauth"})
+
+
 async def get_content_schema_for_prompt(
     db: AsyncIOMotorDatabase,
     channel_id: str,

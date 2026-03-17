@@ -1510,10 +1510,13 @@ Per-video analysis storage — **one document per video**, created once and neve
 
 ### YouTube Service (`app/services/youtube.py`)
 
-- **Per-channel tokens**: Each channel has its own OAuth token stored at `youtube_tokens/{channel_id}.json`. This ensures analytics data is fetched from the correct account and uploads go to the right channel
-- **YouTubeServiceManager**: Manages per-channel `YouTubeService` instances. Lazily creates and caches them on first use. If a channel has no token, endpoints return a clear error with instructions to generate one
-- **Token generation**: Run `python generate_youtube_token.py <channel_id>` to create a token for a new channel. Sign in with the Google account that owns that channel
-- **Auth**: OAuth2 with stored token (auto-refreshes, initial setup requires browser consent). Scopes: `youtube.upload`, `youtube.readonly`, `yt-analytics.readonly`
+- **Per-channel tokens (DB-stored)**: Each channel has its own OAuth tokens stored in the `youtube_tokens` field of its document in the `channels` collection. This ensures analytics data is fetched from the correct account and uploads go to the right channel
+- **YouTubeServiceManager**: Manages per-channel `YouTubeService` instances. Reads tokens from the DB, lazily creates and caches service instances. If a channel has no token, endpoints return a clear error
+- **Token provisioning**: The frontend completes the Google OAuth consent flow in the browser, then POSTs the resulting tokens to `POST /channels/{channel_id}/youtube-token`. The backend stores them on the channel document
+- **Access token serving**: The frontend can call `GET /channels/{channel_id}/youtube-token` to get a fresh short-lived access token. If expired, the backend auto-refreshes it using the refresh token and returns the new one. The refresh token is never exposed to the frontend
+- **Token status**: `GET /channels/{channel_id}/youtube-token/status` returns connection status without exposing tokens
+- **Client credentials**: Google OAuth `client_id` and `client_secret` are stored in the `config` collection (key: `youtube_oauth`), with a fallback to `.env` for backward compatibility. Set via `PUT /channels/config/youtube-oauth`
+- **Auth**: OAuth2 with auto-refresh. Scopes: `youtube.upload`, `youtube.readonly`, `yt-analytics.readonly`
 - **Get channel info**: Fetches channel metadata (name, subscribers, etc.)
 - **Get video stats**: Fetches views, likes, comments, duration (from Data API `statistics` + `contentDetails`), plus computed engagement/like/comment rates. Also merges YouTube Analytics data (avg % viewed, avg view duration, estimated minutes watched) when available
 - **Get video analytics**: Queries the YouTube Analytics API for `averageViewPercentage`, `averageViewDuration`, and `estimatedMinutesWatched` per video. Batches by 40 IDs. Returns empty data for videos less than ~48 hours old (YouTube Analytics processing delay)

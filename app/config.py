@@ -1,5 +1,7 @@
 """Application settings loaded from environment variables via pydantic-settings."""
 
+from typing import Optional
+
 from pydantic_settings import BaseSettings
 
 
@@ -26,10 +28,9 @@ class Settings(BaseSettings):
     # Gemini
     GEMINI_API_KEY: str
 
-    # YouTube
-    YOUTUBE_CLIENT_ID: str
-    YOUTUBE_CLIENT_SECRET: str
-    YOUTUBE_TOKEN_JSON: str = "youtube_token.json"
+    # YouTube (optional — prefer DB config collection; kept for backward compat)
+    YOUTUBE_CLIENT_ID: Optional[str] = None
+    YOUTUBE_CLIENT_SECRET: Optional[str] = None
 
     # Scheduling
     TIMEZONE: str = "Asia/Kolkata"

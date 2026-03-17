@@ -194,7 +194,7 @@ async def _get_sync_status(channel_id: str, db) -> dict:
     if not channel or not channel.get("youtube_channel_id"):
         return {"available": False, "reason": "No YouTube channel linked"}
 
-    youtube_service, _ = _get_services(channel_id)
+    youtube_service, _ = await _get_services(channel_id)
     if youtube_service is None:
         return {"available": False, "reason": "No YouTube token for this channel"}
 
@@ -459,7 +459,7 @@ async def extract_content_params(
     """
     import json
 
-    _, gemini_service = _get_services(channel_id)
+    _, gemini_service = await _get_services(channel_id)
     if gemini_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -550,7 +550,7 @@ async def extract_all_content_params(
     """Bulk-extract content parameters for every video that doesn't have them yet."""
     import json
 
-    _, gemini_service = _get_services(channel_id)
+    _, gemini_service = await _get_services(channel_id)
     if gemini_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -790,12 +790,12 @@ async def schedule_video(
 
     settings = get_settings()
     r2_service = _get_r2()
-    youtube_service, _ = _get_services(channel_id)
+    youtube_service, _ = await _get_services(channel_id)
 
     if youtube_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
+            detail=f"No YouTube token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/youtube-token",
         )
 
     # ---- Collect the videos to schedule ----
@@ -910,11 +910,11 @@ async def schedule_video(
 # ------------------------------------------------------------------
 
 
-def _get_services(channel_id: str):
+async def _get_services(channel_id: str):
     """Lazy import to avoid circular dependency."""
     from app.main import youtube_service_manager, gemini_service  # type: ignore[import]
 
-    youtube_service = youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
+    youtube_service = await youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
     return youtube_service, gemini_service
 
 
@@ -1092,12 +1092,12 @@ async def sync_videos(
     already in the ``videos`` collection, categorises them via Gemini,
     and inserts them as ``done``.
     """
-    youtube_service, gemini_service = _get_services(channel_id)
+    youtube_service, gemini_service = await _get_services(channel_id)
 
     if youtube_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"No YouTube token for channel '{channel_id}'. Run: python generate_youtube_token.py {channel_id}",
+            detail=f"No YouTube token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/youtube-token",
         )
     if gemini_service is None:
         raise HTTPException(
@@ -1449,7 +1449,7 @@ async def generate_todos(
     """Generate `n` new to-do videos for *channel_id*."""
     from app.services.todo_engine import generate_todo_videos
 
-    _, gemini_service = _get_services(channel_id)
+    _, gemini_service = await _get_services(channel_id)
 
     if gemini_service is None:
         raise HTTPException(

@@ -42,11 +42,22 @@ class ContentParamDefinition(BaseModel):
     updated_at: datetime = Field(default_factory=now_ist)
 
 
+class YouTubeTokens(BaseModel):
+    """OAuth2 tokens for a channel's YouTube account, stored on the channel doc."""
+
+    token: str = Field(..., description="OAuth2 access token")
+    refresh_token: str = Field(..., description="OAuth2 refresh token")
+    token_uri: str = Field("https://oauth2.googleapis.com/token")
+    scopes: list[str] = Field(default_factory=list)
+    expiry: Optional[str] = Field(None, description="ISO 8601 expiry datetime")
+
+
 class Channel(BaseModel):
     """Represents a YouTube channel managed by the automation system."""
 
     channel_id: str = Field(..., description="Internal unique identifier")
     name: str = Field(..., description="Human-readable channel name")
     youtube_channel_id: str = Field(..., description="YouTube UC... channel ID")
+    youtube_tokens: Optional[YouTubeTokens] = Field(None, description="YouTube OAuth tokens (excluded from API responses)")
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)

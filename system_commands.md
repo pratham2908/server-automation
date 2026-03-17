@@ -101,34 +101,37 @@ sudo journalctl -u automation-server -n 50 --no-pager
 
 ## 🔑 YouTube Token Management (Per-Channel)
 
-Each channel has its own OAuth token at `youtube_tokens/{channel_id}.json`. This ensures analytics and uploads go to the correct YouTube account.
+Each channel has its own OAuth tokens stored in the `youtube_tokens` field of its document in the `channels` collection in MongoDB.
 
-### Generate a token for a new channel
+### Token provisioning (via frontend)
 
-Run this **locally** (requires a browser):
+YouTube tokens are now stored in the database on each channel document.
+The frontend completes the Google OAuth consent flow in the browser, then
+stores the tokens via:
 
-```bash
-source .venv/bin/activate
-python generate_youtube_token.py <channel_id>
+```
+POST /api/v1/channels/{channel_id}/youtube-token
 ```
 
-Example: `python generate_youtube_token.py physicsasmr_official`
+To check token status:
 
-Sign in with the Google account that **owns** that YouTube channel.
-
-### Re-generate a token for an existing channel
-
-```bash
-# Delete the old token and re-run the script
-rm youtube_tokens/<channel_id>.json
-python generate_youtube_token.py <channel_id>
+```
+GET /api/v1/channels/{channel_id}/youtube-token/status
 ```
 
-### Copy tokens to the production server
+To get a fresh access token (auto-refreshes if expired):
 
-```bash
-scp -i ssh-key-2.key youtube_tokens/*.json ubuntu@68.233.115.135:~/automation-server/youtube_tokens/
-ssh -i ssh-key-2.key ubuntu@68.233.115.135 "sudo systemctl restart automation-server"
+```
+GET /api/v1/channels/{channel_id}/youtube-token
+```
+
+### Setting up OAuth client credentials
+
+Store the Google OAuth client ID and secret in the DB (one-time setup):
+
+```
+PUT /api/v1/channels/config/youtube-oauth
+{"client_id": "...", "client_secret": "..."}
 ```
 
 Current OAuth scopes: `youtube.upload`, `youtube.readonly`, `yt-analytics.readonly`
