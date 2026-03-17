@@ -82,6 +82,7 @@ class GeminiService:
         video_data: list[dict[str, Any]],
         previous_analysis: dict[str, Any] | None = None,
         content_schema: list[dict[str, Any]] | None = None,
+        platform: str = "youtube",
     ) -> dict[str, Any]:
         """Send video metadata + stats to Gemini and get an updated analysis.
 
@@ -103,7 +104,7 @@ class GeminiService:
             (best_posting_times, category_analysis, content_param_analysis, best_combinations).
         """
         logger.info("Starting Gemini analysis for %d videos", len(video_data))
-        prompt = self._build_analysis_prompt(video_data, previous_analysis, content_schema)
+        prompt = self._build_analysis_prompt(video_data, previous_analysis, content_schema, platform)
         text = await self._generate(prompt)
 
         try:
@@ -115,6 +116,7 @@ class GeminiService:
     async def analyze_single_video(
         self,
         video_data: dict[str, Any],
+        platform: str = "youtube",
     ) -> dict[str, Any]:
         """Analyze a single video's performance and produce AI insights.
 
@@ -129,7 +131,7 @@ class GeminiService:
         dict
             ``{"performance_rating": 0-100, "what_worked": "...", "what_didnt": "...", "key_learnings": [...]}``
         """
-        prompt = self._build_single_video_prompt(video_data)
+        prompt = self._build_single_video_prompt(video_data, platform)
         text = await self._generate(prompt)
 
         try:
@@ -149,6 +151,7 @@ class GeminiService:
         content_param_analysis: list[dict[str, Any]] | None = None,
         best_combinations: list[dict[str, Any]] | None = None,
         existing_content_params: list[dict[str, str]] | None = None,
+        platform: str = "youtube",
     ) -> list[dict[str, Any]]:
         """Generate titles, descriptions, tags, and content_params for new to-do videos.
 
@@ -188,7 +191,7 @@ class GeminiService:
         prompt = self._build_content_prompt(
             channel_id, category, category_analysis, count, existing_titles,
             content_schema, content_param_analysis, best_combinations,
-            existing_content_params,
+            existing_content_params, platform,
         )
         text = await self._generate(prompt)
 
@@ -213,6 +216,7 @@ class GeminiService:
         video_data: list[dict[str, Any]],
         previous_analysis: dict[str, Any] | None,
         content_schema: list[dict[str, Any]] | None = None,
+        platform: str = "youtube",
     ) -> str:
         previous_section = ""
         if previous_analysis:
@@ -231,13 +235,26 @@ class GeminiService:
                 f"```json\n{json.dumps(content_schema, indent=2)}\n```"
             )
 
-        return f"""You are a YouTube channel analytics expert. Analyze the following video
+        if platform == "instagram":
+            persona = "Instagram Reels analytics expert"
+            stats_desc = (
+                "Instagram Reels performance metrics including `views` (plays), `likes`, `comments`, "
+                "`shares`, `saves`, `reach`, and `views_per_subscriber` (reach beyond existing followers)."
+            )
+        else:
+            persona = "YouTube channel analytics expert"
+            stats_desc = (
+                "YouTube performance metrics including `subscribers_gained` (how many new subs this video brought) "
+                "and `views_per_subscriber` (reach beyond existing audience)."
+            )
+
+        return f"""You are a {persona}. Analyze the following video
 performance data and produce a comprehensive channel summary.
 
 Each video includes:
 - **title**: Use this to identify titling patterns that drive performance.
 - **content_params**: Custom content dimensions that define what the video is about.
-- **stats**: YouTube performance metrics including `subscribers_gained` (how many new subs this video brought) and `views_per_subscriber` (reach beyond existing audience).
+- **stats**: {stats_desc}
 - **ai_insight**: A per-video AI analysis with `performance_rating`, `what_worked`, `what_didnt`, and `key_learnings`. Use these to identify channel-wide patterns.
 
 Do NOT rely on description or tags — use only title, content_params, stats, and ai_insight.
@@ -295,28 +312,45 @@ Guidelines:
   - `worst_values`: which values underperform.
   - `insight`: a concise explanation of the trend.
 - **best_combinations**: The top 3-5 combinations of content_params values that yield the best results. Include music recommendations.
-- **Subscriber-aware analysis**:
-  - `subscribers_gained` shows how many new subscribers each video brought. Videos with high subscribers_gained are especially valuable even if view counts are moderate.
+- **Follower/subscriber-aware analysis**:
+  - {"For YouTube: `subscribers_gained` shows how many new subscribers each video brought." if platform == "youtube" else "For Instagram: `reach` and `shares` indicate how far each reel spreads beyond followers."}
   - `views_per_subscriber` above 1.0 means the video reached beyond the existing audience — a strong viral signal.
   - Factor these into category scores and combination rankings.
 - **Engagement metrics** (in `stats`):
   - `views`, `likes`, `comments` — raw counts.
-  - `engagement_rate` — (likes + comments) / views x 100.
-  - `avg_percentage_viewed` — strongest signal of content quality.
-  - `avg_view_duration_seconds`, `estimated_minutes_watched`.
+  - `engagement_rate` — {"(likes + comments) / views x 100" if platform == "youtube" else "(likes + comments + shares + saves) / reach x 100"}.
+  - {"`avg_percentage_viewed` — strongest signal of content quality." if platform == "youtube" else "`reach`, `saves`, `shares` — key Instagram engagement signals."}
+  - {"`avg_view_duration_seconds`, `estimated_minutes_watched`." if platform == "youtube" else ""}
 - **Per-video AI insights**: Use the `ai_insight` field to identify recurring patterns in what works and what doesn't across videos. Aggregate `key_learnings` into your recommendations.
 - If previous analysis exists, **refine incrementally**."""
 
     @staticmethod
-    def _build_single_video_prompt(video_data: dict[str, Any]) -> str:
-        return f"""You are a YouTube performance analyst. Analyze this single video's performance data and provide actionable insights.
+    def _build_single_video_prompt(video_data: dict[str, Any], platform: str = "youtube") -> str:
+        if platform == "instagram":
+            persona = "Instagram Reels performance analyst"
+            metrics_section = """## What Each Metric Means
+- **views**: Total plays / views.
+- **likes**, **comments**: Raw engagement counts.
+- **shares**: Number of times the reel was shared — strong viral signal.
+- **saves**: Number of times the reel was saved — indicates high-value content.
+- **reach**: Number of unique accounts that saw the reel.
+- **engagement_rate**: (likes + comments + shares + saves) / reach x 100 — overall interaction rate.
+- **views_per_subscriber**: views / follower count — reach beyond existing audience. Above 1.0 means viral reach.
+- **subscriber_count_at_analysis**: The account's total follower count when this analysis was run.
 
-## Video Data
-```json
-{json.dumps(video_data, indent=2)}
-```
-
-## What Each Metric Means
+## Scoring Weightage (use exactly these weights for performance_rating)
+When computing performance_rating 0-100, weight each factor as follows (total 100%):
+- **reach**: 25%
+- **shares**: 20%
+- **saves**: 15%
+- **views**: 15%
+- **engagement_rate**: 10%
+- **comments**: 5%
+- **likes**: 5%
+- **views_per_subscriber**: 5%"""
+        else:
+            persona = "YouTube performance analyst"
+            metrics_section = """## What Each Metric Means
 - **views**: Total view count.
 - **likes**, **comments**: Raw engagement counts.
 - **engagement_rate**: (likes + comments) / views x 100 — overall interaction rate.
@@ -336,7 +370,16 @@ When computing performance_rating 0-100, weight each factor as follows (total 10
 - **comments**: 8%
 - **likes**: 5%
 - **views_per_subscriber**: 5%
-- **estimated_minutes_watched**: 2%
+- **estimated_minutes_watched**: 2%"""
+
+        return f"""You are a {persona}. Analyze this single video's performance data and provide actionable insights.
+
+## Video Data
+```json
+{json.dumps(video_data, indent=2)}
+```
+
+{metrics_section}
 
 For each metric, score that dimension 0-100 based on how strong the value is (relative to typical expectations for this channel/content). Then compute: performance_rating = weighted sum of those dimension scores. Use 0 for any missing metric. This ensures consistent, comparable ratings across videos.
 
@@ -371,6 +414,7 @@ Guidelines:
         content_param_analysis: list[dict[str, Any]] | None = None,
         best_combinations: list[dict[str, Any]] | None = None,
         existing_content_params: list[dict[str, str]] | None = None,
+        platform: str = "youtube",
     ) -> str:
         existing_section = ""
         if existing_titles:
@@ -419,7 +463,12 @@ Guidelines:
                 f"```json\n{json.dumps(best_combinations, indent=2)}\n```"
             )
 
-        return f"""You are a top-tier YouTube content strategist obsessed with virality, click-through rate, and watch time. Generate metadata for {count} completely distinct new videos in the "{category}" category.
+        if platform == "instagram":
+            strategist = "top-tier Instagram Reels content strategist obsessed with virality, reach, saves, and shares"
+        else:
+            strategist = "top-tier YouTube content strategist obsessed with virality, click-through rate, and watch time"
+
+        return f"""You are a {strategist}. Generate metadata for {count} completely distinct new videos in the "{category}" category.
 
 ## Category Insights
 ```json
@@ -445,23 +494,23 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 - Titles MUST be scroll-stopping and irresistible. Think about what makes someone click while scrolling.
 - Use proven psychological hooks: curiosity gaps ("You Won't Believe..."), strong numbers ("100 vs 1"), superlatives ("The MOST Insane..."), challenges, versus formats, countdowns.
 - Reference trending memes, pop culture, or viral formats when it fits naturally.
-- Keep titles punchy — ideally under 60 characters. Front-load the hook.
+- {"Keep titles punchy — ideally under 60 characters. Front-load the hook." if platform == "youtube" else "Keep titles concise for Instagram captions — the first line of the caption is the hook."}
 - Study the `best_title_patterns` from category insights and push them further. Don't just copy — evolve the pattern to be even more clickable.
 - NEVER use generic or descriptive titles. Every title should create an urge to click.
 
-## Description Guidelines — Optimize for Search & Watch Time
-- Open with a bold, attention-grabbing first line (this shows in search results and suggested videos).
-- Include relevant keywords naturally for YouTube SEO — think about what viewers would search for.
+## Description Guidelines — {"Optimize for Search & Watch Time" if platform == "youtube" else "Optimize for Engagement & Reach"}
+- Open with a bold, attention-grabbing first line ({"this shows in search results and suggested videos" if platform == "youtube" else "this is the hook that shows before 'more' on Instagram"}).
+- {"Include relevant keywords naturally for YouTube SEO — think about what viewers would search for." if platform == "youtube" else "Include relevant hashtags for Instagram discoverability. Use a mix of popular and niche hashtags."}
 - Add a brief teaser of what happens in the video without spoiling the payoff (keep them watching).
 - Keep it concise but compelling — 2-4 short paragraphs max.
-- Include a call-to-action ("Subscribe for more", "Comment your prediction") to drive engagement.
+- Include a call-to-action ("{"Subscribe for more" if platform == "youtube" else "Save this for later"}", "Comment your prediction") to drive engagement.
 
 ## Tag Guidelines — Maximize Discoverability
-- Include 10-15 tags per video.
-- Mix broad high-volume tags (e.g. "simulation", "challenge") with specific long-tail tags (e.g. "1v1 battle simulation", "epic tournament challenge").
+- {"Include 10-15 tags per video." if platform == "youtube" else "Include 15-25 hashtags."}
+- {"Mix broad high-volume tags (e.g. 'simulation', 'challenge') with specific long-tail tags." if platform == "youtube" else "Mix high-volume hashtags with niche ones for optimal reach."}
 - Include the category name and key content_params values as tags.
 - Add trending/seasonal tags if relevant.
-- Order tags from most specific to most broad.
+- {"Order tags from most specific to most broad." if platform == "youtube" else "Place hashtags at the end of the caption or in the first comment."}
 
 ## Other Rules
 - Generate exactly {count} completely distinct video ideas. DO NOT repeat titles or topics.

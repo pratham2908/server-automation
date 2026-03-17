@@ -19,9 +19,14 @@ class VideoStatus(str, Enum):
 
 
 class VideoMetadata(BaseModel):
-    """YouTube performance metrics (populated during sync / stats fetch)."""
+    """Performance metrics (populated during sync / stats fetch).
 
-    # Data API v3
+    Shared fields (views, likes, comments, etc.) are populated for both
+    YouTube and Instagram.  Platform-specific fields are null on the other
+    platform.
+    """
+
+    # Shared
     views: Optional[int] = None
     likes: Optional[int] = None
     comments: Optional[int] = None
@@ -29,10 +34,14 @@ class VideoMetadata(BaseModel):
     engagement_rate: Optional[float] = None
     like_rate: Optional[float] = None
     comment_rate: Optional[float] = None
-    # Analytics API v2
+    # YouTube-specific
     avg_percentage_viewed: Optional[float] = None
     avg_view_duration_seconds: Optional[int] = None
     estimated_minutes_watched: Optional[float] = None
+    # Instagram-specific
+    shares: Optional[int] = None
+    saves: Optional[int] = None
+    reach: Optional[int] = None
 
 
 class Video(BaseModel):
@@ -47,6 +56,7 @@ class Video(BaseModel):
     status: VideoStatus = VideoStatus.TODO
     suggested: bool = False
     youtube_video_id: Optional[str] = None
+    instagram_media_id: Optional[str] = None
     r2_object_key: Optional[str] = None
     metadata: VideoMetadata = Field(default_factory=VideoMetadata)
     content_params: Optional[dict[str, str]] = Field(

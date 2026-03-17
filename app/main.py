@@ -19,6 +19,7 @@ from app.database import close_db, connect_db
 # Services – initialised during lifespan, accessible to routers.
 r2_service = None
 youtube_service_manager = None
+instagram_service_manager = None
 gemini_service = None
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     - Initialises R2, YouTube, and Gemini service singletons.
     - On shutdown, closes the database connection.
     """
-    global r2_service, youtube_service_manager, gemini_service
+    global r2_service, youtube_service_manager, instagram_service_manager, gemini_service
 
     settings = get_settings()
 
@@ -61,6 +62,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("YouTube service manager initialised (DB-backed tokens)")
 
+    # ---- Instagram (per-channel token manager, tokens stored in DB) ----
+    from app.services.instagram import InstagramServiceManager
+
+    instagram_service_manager = InstagramServiceManager(
+        db=db,
+        app_id=settings.INSTAGRAM_APP_ID,
+        app_secret=settings.INSTAGRAM_APP_SECRET,
+    )
+    logger.info("Instagram service manager initialised (DB-backed tokens)")
+
     # ---- Gemini ----
     from app.services.gemini import GeminiService
 
@@ -81,9 +92,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
-    title="YouTube Automation Server",
-    description="Automated multi-channel YouTube video management",
-    version="1.0.0",
+    title="Video Automation Server",
+    description="Automated multi-channel YouTube & Instagram video management",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -136,19 +147,16 @@ async def api_schema():
                 "group": "Channels",
                 "method": "GET",
                 "path": "/api/v1/channels/",
-                "description": "List all channels",
+                "description": "List all channels (YouTube + Instagram)",
                 "request": None,
                 "response": [
                     {
                         "channel_id": "ch1",
                         "name": "My Tech Channel",
+                        "platform": "youtube",
                         "youtube_channel_id": "UCxxxxxxxx",
-                        "description": "...",
                         "subscriber_count": 5000,
                         "video_count": 60,
-                        "view_count": 1500000,
-                        "created_at": "2026-03-01T12:00:00Z",
-                        "updated_at": "2026-03-01T12:00:00Z",
                     }
                 ],
             },
@@ -161,19 +169,20 @@ async def api_schema():
                 "response": {
                     "channel_id": "ch1",
                     "name": "My Tech Channel",
-                    "youtube_channel_id": "UCxxxxxxxx",
+                    "platform": "youtube",
                 },
             },
             {
                 "group": "Channels",
                 "method": "POST",
                 "path": "/api/v1/channels/",
-                "description": "Register a new channel by YouTube channel ID",
+                "description": "Register a new channel (YouTube or Instagram)",
                 "request": {
+                    "platform": "youtube",
                     "youtube_channel_id": "UCxxxxxxxx",
                     "channel_id": "optional-custom-slug",
                 },
-                "response": {"channel_id": "ch1", "name": "Fetched from YouTube"},
+                "response": {"channel_id": "ch1", "name": "Fetched from platform"},
             },
             {
                 "group": "Channels",

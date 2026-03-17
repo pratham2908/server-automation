@@ -29,8 +29,11 @@ logger = get_logger(__name__)
 async def run_analysis(
     channel_id: str,
     db: AsyncIOMotorDatabase,
-    youtube_service: YouTubeService,
+    youtube_service: YouTubeService | None,
     gemini_service: GeminiService,
+    *,
+    instagram_service: Any | None = None,
+    platform: str = "youtube",
 ) -> dict[str, Any]:
     """Execute the full analysis pipeline for *channel_id*.
 
@@ -60,17 +63,24 @@ async def run_analysis(
     if not channel_doc:
         return {}
 
-    youtube_channel_id = channel_doc.get("youtube_channel_id", "")
-
     from app.database import get_content_schema_for_prompt
     content_schema = await get_content_schema_for_prompt(db, channel_id)
 
     subscriber_count = 0
-    try:
-        channel_info = youtube_service.get_channel_info(youtube_channel_id)
-        subscriber_count = channel_info.get("subscriber_count", 0)
-    except Exception as exc:
-        logger.warning("Could not fetch subscriber count: %s", exc)
+    if platform == "youtube" and youtube_service:
+        youtube_channel_id = channel_doc.get("youtube_channel_id", "")
+        try:
+            channel_info = youtube_service.get_channel_info(youtube_channel_id)
+            subscriber_count = channel_info.get("subscriber_count", 0)
+        except Exception as exc:
+            logger.warning("Could not fetch subscriber count: %s", exc)
+    elif platform == "instagram" and instagram_service:
+        ig_user_id = channel_doc.get("instagram_user_id", "")
+        try:
+            ig_info = instagram_service.get_account_info(ig_user_id)
+            subscriber_count = ig_info.get("followers_count", 0)
+        except Exception as exc:
+            logger.warning("Could not fetch Instagram followers count: %s", exc)
 
     # ------------------------------------------------------------------
     # Step 1: Per-video analysis
@@ -122,43 +132,66 @@ async def run_analysis(
     if skipped > 0:
         logger.warning("⏳ 3-Day Filter: Skipped %d recent videos.", skipped)
 
-    # Fetch YouTube stats + subscribers gained for new videos
-    yt_ids = [v["youtube_video_id"] for v in new_videos if v.get("youtube_video_id")]
+    # Fetch platform-specific stats for new videos
     yt_stats: dict[str, Any] = {}
     subs_gained: dict[str, int] = {}
+    ig_insights: dict[str, dict] = {}
 
-    if yt_ids:
-        logger.info(
-            "📡 Fetching YouTube stats + subscribers gained for %d videos...",
-            len(yt_ids),
-            extra={"color": "CYAN"},
-        )
-        yt_stats = youtube_service.get_video_stats(yt_ids)
-        subs_gained = youtube_service.get_subscribers_gained(yt_ids)
+    if platform == "youtube" and youtube_service:
+        yt_ids = [v["youtube_video_id"] for v in new_videos if v.get("youtube_video_id")]
+        if yt_ids:
+            logger.info(
+                "📡 Fetching YouTube stats + subscribers gained for %d videos...",
+                len(yt_ids),
+                extra={"color": "CYAN"},
+            )
+            yt_stats = youtube_service.get_video_stats(yt_ids)
+            subs_gained = youtube_service.get_subscribers_gained(yt_ids)
+    elif platform == "instagram" and instagram_service:
+        ig_ids = [v["instagram_media_id"] for v in new_videos if v.get("instagram_media_id")]
+        if ig_ids:
+            logger.info(
+                "📡 Fetching Instagram insights for %d reels...",
+                len(ig_ids),
+                extra={"color": "CYAN"},
+            )
+            ig_insights = instagram_service.get_reel_insights(ig_ids)
 
-    # Analyze each new video individually
     per_video_count = 0
     for v in new_videos:
-        yt_id = v.get("youtube_video_id")
-
-        # Build stats snapshot
         stats: dict[str, Any] = {}
-        if yt_id and yt_id in yt_stats:
-            stats = dict(yt_stats[yt_id])
+
+        if platform == "youtube":
+            yt_id = v.get("youtube_video_id")
+            if yt_id and yt_id in yt_stats:
+                stats = dict(yt_stats[yt_id])
+            else:
+                meta = v.get("metadata") or {}
+                stats = {
+                    k: meta[k]
+                    for k in (
+                        "views", "likes", "comments", "duration_seconds",
+                        "engagement_rate", "like_rate", "comment_rate",
+                        "avg_percentage_viewed", "avg_view_duration_seconds",
+                        "estimated_minutes_watched",
+                    )
+                    if meta.get(k) is not None
+                }
+            stats["subscribers_gained"] = subs_gained.get(yt_id, 0) if yt_id else 0
         else:
+            ig_id = v.get("instagram_media_id")
             meta = v.get("metadata") or {}
+            reel_insight = ig_insights.get(ig_id, {}) if ig_id else {}
             stats = {
-                k: meta[k]
-                for k in (
-                    "views", "likes", "comments", "duration_seconds",
-                    "engagement_rate", "like_rate", "comment_rate",
-                    "avg_percentage_viewed", "avg_view_duration_seconds",
-                    "estimated_minutes_watched",
-                )
-                if meta.get(k) is not None
+                "views": reel_insight.get("plays") or meta.get("views", 0),
+                "likes": meta.get("likes", 0),
+                "comments": meta.get("comments", 0),
+                "shares": reel_insight.get("shares") or meta.get("shares", 0),
+                "saves": reel_insight.get("saved") or meta.get("saves", 0),
+                "reach": reel_insight.get("reach") or meta.get("reach", 0),
+                "engagement_rate": meta.get("engagement_rate"),
             }
 
-        stats["subscribers_gained"] = subs_gained.get(yt_id, 0) if yt_id else 0
         stats["subscriber_count_at_analysis"] = subscriber_count
         views = stats.get("views", 0) or 0
         stats["views_per_subscriber"] = (
@@ -174,7 +207,7 @@ async def run_analysis(
 
         # Call Gemini for per-video analysis
         try:
-            ai_insight = await gemini_service.analyze_single_video(video_data_for_gemini)
+            ai_insight = await gemini_service.analyze_single_video(video_data_for_gemini, platform=platform)
         except Exception as exc:
             logger.warning("Gemini per-video analysis failed for '%s': %s", v.get("title", v["video_id"]), exc)
             ai_insight = {
@@ -195,20 +228,23 @@ async def run_analysis(
         )
 
         # Upsert into analysis_history (one doc per video, idempotent)
+        history_set: dict[str, Any] = {
+            "title": v.get("title", ""),
+            "category": v.get("category", ""),
+            "content_params": v.get("content_params"),
+            "published_at": v.get("published_at"),
+            "stats_snapshot": stats,
+            "ai_insight": ai_insight,
+            "analyzed_at": now_ist(),
+        }
+        if platform == "youtube":
+            history_set["youtube_video_id"] = v.get("youtube_video_id")
+        else:
+            history_set["instagram_media_id"] = v.get("instagram_media_id")
+
         await db.analysis_history.update_one(
             {"channel_id": channel_id, "video_id": v["video_id"]},
-            {
-                "$set": {
-                    "youtube_video_id": yt_id,
-                    "title": v.get("title", ""),
-                    "category": v.get("category", ""),
-                    "content_params": v.get("content_params"),
-                    "published_at": v.get("published_at"),
-                    "stats_snapshot": stats,
-                    "ai_insight": ai_insight,
-                    "analyzed_at": now_ist(),
-                }
-            },
+            {"$set": history_set},
             upsert=True,
         )
 
@@ -272,6 +308,7 @@ async def run_analysis(
 
         running_analysis = await gemini_service.analyze_videos(
             batch, running_analysis, content_schema=content_schema or None,
+            platform=platform,
         )
 
     updated = running_analysis or {}

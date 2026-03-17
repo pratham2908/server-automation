@@ -35,6 +35,18 @@ def _get_youtube_manager():
     return youtube_service_manager
 
 
+def _get_instagram_manager():
+    """Lazy import to avoid circular dependency."""
+    from app.main import instagram_service_manager  # type: ignore[import]
+
+    if instagram_service_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Instagram service manager not initialised",
+        )
+    return instagram_service_manager
+
+
 # ------------------------------------------------------------------
 # Request / response models
 # ------------------------------------------------------------------
@@ -43,12 +55,13 @@ def _get_youtube_manager():
 class ChannelCreate(BaseModel):
     """Payload for registering a new channel.
 
-    Only ``youtube_channel_id`` is required. The ``channel_id`` slug is
-    optional — if omitted, the YouTube custom URL or channel name is
-    used to generate one.
+    For YouTube: ``youtube_channel_id`` is required.
+    For Instagram: ``instagram_user_id`` is required.
     """
 
-    youtube_channel_id: str = Field(..., description="YouTube UC... channel ID")
+    platform: str = Field("youtube", description="'youtube' or 'instagram'")
+    youtube_channel_id: Optional[str] = Field(None, description="YouTube UC... channel ID (required for youtube)")
+    instagram_user_id: Optional[str] = Field(None, description="Instagram user ID (required for instagram)")
     channel_id: Optional[str] = Field(
         None, description="Custom internal slug. Auto-generated if omitted."
     )
@@ -73,7 +86,7 @@ async def list_channels(
 ):
     """Return all registered channels (tokens excluded)."""
     channels = await db.channels.find(
-        {}, {"youtube_tokens": 0}
+        {}, {"youtube_tokens": 0, "instagram_tokens": 0}
     ).to_list(length=None)
     for c in channels:
         c["_id"] = str(c["_id"])
@@ -92,7 +105,7 @@ async def get_channel(
 ):
     """Return a single channel by its ``channel_id`` (tokens excluded)."""
     doc = await db.channels.find_one(
-        {"channel_id": channel_id}, {"youtube_tokens": 0}
+        {"channel_id": channel_id}, {"youtube_tokens": 0, "instagram_tokens": 0}
     )
     if not doc:
         raise HTTPException(
@@ -108,30 +121,42 @@ async def get_channel(
 # ------------------------------------------------------------------
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED, response_model=Channel)
+@router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_channel(
     body: ChannelCreate,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Register a new channel by fetching its data from YouTube.
+    """Register a new channel by fetching its data from YouTube or Instagram.
 
-    Provide the ``youtube_channel_id`` (the UC... ID) and the server
-    will fetch the channel name, description, subscriber count, etc.
+    For YouTube: provide ``youtube_channel_id``.
+    For Instagram: provide ``instagram_user_id``.
     """
-    manager = _get_youtube_manager()
+    platform = body.platform.lower()
+    if platform not in ("youtube", "instagram"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported platform '{platform}'. Use 'youtube' or 'instagram'.",
+        )
 
-    # For channel registration we need any valid YouTube client (read-only).
-    # Use the new channel_id's token if it exists, otherwise any cached one.
+    if platform == "instagram":
+        return await _create_instagram_channel(body, db)
+
+    # --- YouTube flow (existing) ---
+    if not body.youtube_channel_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="youtube_channel_id is required for YouTube channels",
+        )
+
+    manager = _get_youtube_manager()
     channel_id_for_token = body.channel_id
     yt = (
         await manager.get_service(channel_id_for_token) if channel_id_for_token else None
     )
     if yt is None:
-        # Fall back to any available cached service instance.
         if manager._cache:
             yt = next(iter(manager._cache.values()))
         else:
-            # Try to find any channel with stored tokens.
             channels_with_tokens = await db.channels.find(
                 {"youtube_tokens": {"$exists": True, "$ne": None}},
                 {"channel_id": 1},
@@ -146,19 +171,13 @@ async def create_channel(
             detail="No YouTube token available. Store tokens via POST /channels/{id}/youtube-token",
         )
 
-    # Fetch channel data from YouTube.
     try:
         yt_data = yt.get_channel_info(body.youtube_channel_id)
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-    # Generate channel_id slug if not provided.
     channel_id = body.channel_id
     if not channel_id:
-        # Use custom URL or cleaned channel name as slug.
         raw = yt_data.get("custom_url", "") or yt_data.get("name", "")
         channel_id = raw.lower().lstrip("@").replace(" ", "-")
 
@@ -168,7 +187,6 @@ async def create_channel(
             detail="Could not generate channel_id — please provide one explicitly",
         )
 
-    # Check for duplicate.
     existing = await db.channels.find_one({"channel_id": channel_id})
     if existing:
         raise HTTPException(
@@ -179,6 +197,7 @@ async def create_channel(
     now = now_ist()
     doc = {
         "channel_id": channel_id,
+        "platform": "youtube",
         "youtube_channel_id": body.youtube_channel_id,
         "name": yt_data["name"],
         "description": yt_data.get("description", ""),
@@ -187,6 +206,83 @@ async def create_channel(
         "subscriber_count": yt_data.get("subscriber_count", 0),
         "video_count": yt_data.get("video_count", 0),
         "view_count": yt_data.get("view_count", 0),
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.channels.insert_one(doc)
+    doc["_id"] = str(doc["_id"])
+    return doc
+
+
+async def _create_instagram_channel(
+    body: ChannelCreate,
+    db: AsyncIOMotorDatabase,
+) -> dict:
+    """Register a new Instagram channel by fetching account info via Graph API."""
+    if not body.instagram_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="instagram_user_id is required for Instagram channels",
+        )
+
+    mgr = _get_instagram_manager()
+
+    # Find any channel with Instagram tokens to bootstrap account info fetch
+    ig_svc = (
+        await mgr.get_service(body.channel_id) if body.channel_id else None
+    )
+    if ig_svc is None:
+        channels_with_tokens = await db.channels.find(
+            {"instagram_tokens": {"$exists": True, "$ne": None}},
+            {"channel_id": 1},
+        ).to_list(length=1)
+        for ch in channels_with_tokens:
+            ig_svc = await mgr.get_service(ch["channel_id"])
+            if ig_svc:
+                break
+
+    if ig_svc is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No Instagram token available. Store tokens via POST /channels/{id}/instagram-token",
+        )
+
+    try:
+        ig_data = ig_svc.get_account_info(body.instagram_user_id)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    channel_id = body.channel_id
+    if not channel_id:
+        raw = ig_data.get("username", "")
+        channel_id = raw.lower().replace(" ", "-")
+        if channel_id:
+            channel_id = f"{channel_id}-ig"
+
+    if not channel_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not generate channel_id — please provide one explicitly",
+        )
+
+    existing = await db.channels.find_one({"channel_id": channel_id})
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Channel '{channel_id}' already exists",
+        )
+
+    now = now_ist()
+    doc = {
+        "channel_id": channel_id,
+        "platform": "instagram",
+        "instagram_user_id": body.instagram_user_id,
+        "name": ig_data.get("name") or ig_data.get("username", channel_id),
+        "description": ig_data.get("biography", ""),
+        "thumbnail_url": ig_data.get("profile_picture_url", ""),
+        "subscriber_count": ig_data.get("followers_count", 0),
+        "video_count": ig_data.get("media_count", 0),
+        "view_count": 0,
         "created_at": now,
         "updated_at": now,
     }
@@ -238,7 +334,7 @@ async def refresh_channel(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Re-fetch channel data from YouTube and update the DB."""
+    """Re-fetch channel data from the appropriate platform and update the DB."""
     doc = await db.channels.find_one({"channel_id": channel_id})
     if not doc:
         raise HTTPException(
@@ -246,6 +342,12 @@ async def refresh_channel(
             detail=f"Channel '{channel_id}' not found",
         )
 
+    platform = doc.get("platform", "youtube")
+
+    if platform == "instagram":
+        return await _refresh_instagram_channel(channel_id, doc, db)
+
+    # --- YouTube ---
     manager = _get_youtube_manager()
     yt = await manager.get_service(channel_id)
     if yt is None:
@@ -256,10 +358,7 @@ async def refresh_channel(
     try:
         yt_data = yt.get_channel_info(doc["youtube_channel_id"])
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     update = {
         "name": yt_data["name"],
@@ -271,11 +370,45 @@ async def refresh_channel(
         "view_count": yt_data.get("view_count", 0),
         "updated_at": now_ist(),
     }
+    await db.channels.update_one({"channel_id": channel_id}, {"$set": update})
+    return {"ok": True, "channel_id": channel_id, "updated": update}
 
-    await db.channels.update_one(
-        {"channel_id": channel_id},
-        {"$set": update},
-    )
+
+async def _refresh_instagram_channel(
+    channel_id: str,
+    doc: dict,
+    db: AsyncIOMotorDatabase,
+) -> dict:
+    """Re-fetch Instagram account data from Graph API."""
+    mgr = _get_instagram_manager()
+    ig_svc = await mgr.get_service(channel_id)
+    if ig_svc is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"No Instagram token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/instagram-token",
+        )
+
+    ig_user_id = doc.get("instagram_user_id")
+    if not ig_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Channel '{channel_id}' has no instagram_user_id",
+        )
+
+    try:
+        ig_data = ig_svc.get_account_info(ig_user_id)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+
+    update = {
+        "name": ig_data.get("name") or ig_data.get("username", doc.get("name", "")),
+        "description": ig_data.get("biography", ""),
+        "thumbnail_url": ig_data.get("profile_picture_url", ""),
+        "subscriber_count": ig_data.get("followers_count", 0),
+        "video_count": ig_data.get("media_count", 0),
+        "updated_at": now_ist(),
+    }
+    await db.channels.update_one({"channel_id": channel_id}, {"$set": update})
     return {"ok": True, "channel_id": channel_id, "updated": update}
 
 
@@ -712,6 +845,187 @@ async def get_youtube_token_status(
         "status": token_status,
         "has_refresh_token": has_refresh,
         "expiry": expiry,
+    }
+
+
+# ------------------------------------------------------------------
+# Instagram OAuth config  –  stored in the ``config`` collection
+# ------------------------------------------------------------------
+
+
+class InstagramOAuthConfig(BaseModel):
+    """Facebook App credentials for Instagram Graph API."""
+    app_id: str = Field(..., description="Facebook App ID")
+    app_secret: str = Field(..., description="Facebook App Secret")
+
+
+@router.put("/config/instagram-oauth", tags=["config"])
+async def set_instagram_oauth_config(
+    body: InstagramOAuthConfig,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Store or update Instagram/Facebook App credentials in the DB."""
+    await db.config.update_one(
+        {"key": "instagram_oauth"},
+        {
+            "$set": {
+                "key": "instagram_oauth",
+                "app_id": body.app_id,
+                "app_secret": body.app_secret,
+                "updated_at": now_ist(),
+            }
+        },
+        upsert=True,
+    )
+    return {"ok": True, "message": "Instagram OAuth config saved"}
+
+
+@router.get("/config/instagram-oauth", tags=["config"])
+async def get_instagram_oauth_config_endpoint(
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Check if Instagram/Facebook App credentials are configured."""
+    from app.database import get_instagram_oauth_config
+
+    doc = await get_instagram_oauth_config(db)
+    if not doc:
+        return {"configured": False}
+    return {"configured": True, "app_id": doc["app_id"]}
+
+
+# ------------------------------------------------------------------
+# Instagram token management  –  stored on the channel document
+# ------------------------------------------------------------------
+
+
+class InstagramTokenStore(BaseModel):
+    """Payload for storing an Instagram long-lived token from the frontend."""
+    access_token: str = Field(..., description="Long-lived Facebook user access token")
+    expires_at: Optional[str] = Field(None, description="ISO 8601 expiry datetime")
+
+
+@router.post("/{channel_id}/instagram-token")
+async def store_instagram_token(
+    channel_id: str,
+    body: InstagramTokenStore,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Store an Instagram long-lived token on a channel document."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    token_doc = {
+        "access_token": body.access_token,
+        "token_type": "bearer",
+        "expires_at": body.expires_at,
+    }
+
+    await db.channels.update_one(
+        {"channel_id": channel_id},
+        {"$set": {"instagram_tokens": token_doc, "updated_at": now_ist()}},
+    )
+
+    mgr = _get_instagram_manager()
+    mgr.invalidate(channel_id)
+
+    return {"ok": True, "channel_id": channel_id, "message": "Instagram token stored"}
+
+
+@router.get("/{channel_id}/instagram-token")
+async def get_instagram_token(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Return the current Instagram access token, refreshing if needed.
+
+    Unlike YouTube, Instagram uses a single long-lived token (60 days).
+    If the token is close to expiry (< 7 days left), it is automatically
+    refreshed using the Facebook token-refresh endpoint.
+    """
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    tokens = channel.get("instagram_tokens")
+    if not tokens:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No Instagram tokens stored for channel '{channel_id}'",
+        )
+
+    access_token = tokens["access_token"]
+    expires_at = tokens.get("expires_at")
+
+    # Auto-refresh if < 7 days remain
+    if expires_at:
+        from datetime import datetime as dt, timezone as tz, timedelta
+
+        try:
+            exp = dt.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if exp - dt.now(tz.utc) < timedelta(days=7):
+                from app.database import get_instagram_oauth_config
+                from app.config import get_settings
+
+                settings = get_settings()
+                cfg = await get_instagram_oauth_config(db)
+                app_id = (cfg or {}).get("app_id") or settings.INSTAGRAM_APP_ID
+                app_secret = (cfg or {}).get("app_secret") or settings.INSTAGRAM_APP_SECRET
+
+                if app_id and app_secret:
+                    from app.services.instagram import InstagramService
+
+                    svc = InstagramService(access_token, db=db, channel_id=channel_id)
+                    new_token = svc.refresh_token(app_id, app_secret)
+                    if new_token:
+                        access_token = new_token
+                        mgr = _get_instagram_manager()
+                        mgr.invalidate(channel_id)
+        except (ValueError, TypeError):
+            pass
+
+    return {"ok": True, "access_token": access_token, "expires_at": expires_at}
+
+
+@router.get("/{channel_id}/instagram-token/status")
+async def get_instagram_token_status(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Check Instagram token status without exposing the token value."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    tokens = channel.get("instagram_tokens")
+    if not tokens:
+        return {"channel_id": channel_id, "connected": False, "status": "disconnected"}
+
+    expires_at = tokens.get("expires_at")
+    is_expired = False
+    if expires_at:
+        from datetime import datetime as dt, timezone as tz
+
+        try:
+            exp = dt.fromisoformat(expires_at.replace("Z", "+00:00"))
+            is_expired = exp <= dt.now(tz.utc)
+        except (ValueError, TypeError):
+            is_expired = True
+
+    return {
+        "channel_id": channel_id,
+        "connected": True,
+        "status": "expired" if is_expired else "active",
+        "expires_at": expires_at,
     }
 
 

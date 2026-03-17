@@ -63,12 +63,23 @@ class YouTubeTokens(BaseModel):
     expiry: Optional[str] = Field(None, description="ISO 8601 expiry datetime")
 
 
+class InstagramTokens(BaseModel):
+    """Facebook/Instagram long-lived token stored on the channel doc."""
+
+    access_token: str = Field(..., description="Long-lived Facebook user access token")
+    token_type: str = Field("bearer")
+    expires_at: Optional[str] = Field(None, description="ISO 8601 expiry datetime")
+
+
 class Channel(BaseModel):
-    """Represents a YouTube channel managed by the automation system."""
+    """Represents a channel (YouTube or Instagram) managed by the automation system."""
 
     channel_id: str = Field(..., description="Internal unique identifier")
     name: str = Field(..., description="Human-readable channel name")
-    youtube_channel_id: str = Field(..., description="YouTube UC... channel ID")
+    platform: str = Field("youtube", description="'youtube' or 'instagram'")
+    youtube_channel_id: Optional[str] = Field(None, description="YouTube UC... channel ID (youtube only)")
     youtube_tokens: Optional[YouTubeTokens] = Field(None, description="YouTube OAuth tokens (excluded from API responses)")
+    instagram_user_id: Optional[str] = Field(None, description="Instagram Graph API user ID (instagram only)")
+    instagram_tokens: Optional[InstagramTokens] = Field(None, description="Instagram tokens (excluded from API responses)")
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)

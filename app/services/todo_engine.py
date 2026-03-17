@@ -257,8 +257,9 @@ async def generate_todo_videos(
 
     from app.database import get_content_schema_for_prompt
 
-    # We need the latest analysis document to get category insights
-    # so we can pass them to Gemini.
+    channel_doc = await db.channels.find_one({"channel_id": channel_id})
+    platform = (channel_doc or {}).get("platform", "youtube")
+
     latest_analysis = await db.analysis.find_one(
         {"channel_id": channel_id}, sort=[("version", -1)]
     ) or {}
@@ -339,6 +340,7 @@ async def generate_todo_videos(
                 content_param_analysis=content_param_analysis or None,
                 best_combinations=best_combinations or None,
                 existing_content_params=existing_content_params or None,
+                platform=platform,
             )
         except Exception:
             logger.exception("Failed to generate content for category '%s'", cat_name)

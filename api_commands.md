@@ -99,15 +99,27 @@ X-API-Key: <your-api-key>
 
 - **Endpoint**: `/api/v1/channels/`
 - **Method**: `POST`
-- **Request Body**:
+- **Request Body (YouTube)**:
 
 ```json
 {
+  "platform": "youtube",
   "youtube_channel_id": "UCxxxxxxxx",
   "channel_id": "optional-custom-slug"
 }
 ```
 
+- **Request Body (Instagram)**:
+
+```json
+{
+  "platform": "instagram",
+  "instagram_user_id": "17841400123456789",
+  "channel_id": "my-channel-ig"
+}
+```
+
+- **Description**: `platform` defaults to `"youtube"`. For YouTube, `youtube_channel_id` is required. For Instagram, `instagram_user_id` is required. `channel_id` is auto-generated if omitted.
 - **Response**: Created Channel object.
 
 ### Update Channel
@@ -128,7 +140,7 @@ X-API-Key: <your-api-key>
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/refresh`
 - **Method**: `POST`
-- **Description**: Re-fetches name and stats from YouTube.
+- **Description**: Re-fetches name and stats from the appropriate platform (YouTube or Instagram, based on channel's `platform` field).
 - **Response**: Updated Channel object.
 
 ### Content Params (CRUD)
@@ -312,6 +324,62 @@ Content params are custom dimensions for classifying videos. Manage them with th
 ```
 
 - **Status values**: `"disconnected"` (no tokens), `"active"` (valid), `"expired_refreshable"` (expired but has refresh token — will auto-refresh on GET), `"expired"` (expired, no refresh token — re-auth needed)
+
+### Instagram OAuth Config
+
+#### Set Instagram OAuth Credentials
+
+- **Endpoint**: `/api/v1/channels/config/instagram-oauth`
+- **Method**: `PUT`
+- **Request Body**:
+
+```json
+{
+  "app_id": "123456789012345",
+  "app_secret": "abc123def456..."
+}
+```
+
+- **Description**: Stores the Facebook App ID and secret in the DB for Instagram Graph API access.
+- **Response**: `{"ok": true, "message": "Instagram OAuth config saved"}`
+
+#### Check Instagram OAuth Config
+
+- **Endpoint**: `/api/v1/channels/config/instagram-oauth`
+- **Method**: `GET`
+- **Response**: `{"configured": true, "app_id": "123456789012345"}`
+
+### Instagram Token Management
+
+#### Store Instagram Token
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/instagram-token`
+- **Method**: `POST`
+- **Request Body**:
+
+```json
+{
+  "access_token": "EAAGm0PX4Zx...",
+  "expires_at": "2026-05-07T12:00:00Z"
+}
+```
+
+- **Description**: Called by the frontend after the user completes the Facebook Login OAuth flow. Stores the long-lived token on the channel document.
+- **Response**: `{"ok": true, "channel_id": "...", "message": "Instagram token stored"}`
+
+#### Get Instagram Access Token
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/instagram-token`
+- **Method**: `GET`
+- **Description**: Returns the current access token. Auto-refreshes if < 7 days remain.
+- **Response**: `{"ok": true, "access_token": "EAAGm0PX4Zx...", "expires_at": "2026-05-07T12:00:00Z"}`
+
+#### Check Instagram Token Status
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/instagram-token/status`
+- **Method**: `GET`
+- **Description**: Returns token connection status without exposing the token value.
+- **Response**: `{"channel_id": "...", "connected": true, "status": "active", "expires_at": "2026-05-07T12:00:00Z"}`
 
 ### Delete Channel
 
@@ -596,7 +664,7 @@ Content params are custom dimensions for classifying videos. Manage them with th
 }
 ```
 
-### Sync Videos from YouTube
+### Sync Videos from Platform
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/sync`
 - **Method**: `POST`
@@ -608,12 +676,9 @@ Content params are custom dimensions for classifying videos. Manage them with th
 }
 ```
 
-- **What it does**:
-  - Fetches all videos from the YouTube channel (including `status.publishAt` for scheduled detection)
-  - **Refreshes metadata** (views, likes, comments, engagement rates, analytics) for every existing video in the DB
-  - Reconciles scheduled videos that are actually live (public) on YouTube (marks them as `published`, sets `published_at` from YouTube's publish time)
-  - Imports new videos: **extracts content_params (including music) AND derives category** from those params via a single Gemini call. Content params saved with `verification_status: "unverified"`
-  - **Detects scheduled videos**: if a YouTube video has a future `status.publishAt`, it is imported as `scheduled` (with `scheduled_at` set) and added to the `schedule_queue`, instead of being marked as `published`
+- **What it does** (auto-detects platform from channel's `platform` field):
+  - **YouTube**: Fetches all videos from the YouTube channel, refreshes metadata, reconciles scheduled→published, imports new videos with content params + category via Gemini
+  - **Instagram**: Fetches all reels via Graph API, fetches per-reel insights (plays, reach, saves, shares), refreshes metrics for existing reels, imports new reels with content params + category via Gemini. Title is extracted from the first line of the caption, hashtags become tags
 
 - **Response**:
 

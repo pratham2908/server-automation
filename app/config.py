@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     YOUTUBE_CLIENT_ID: Optional[str] = None
     YOUTUBE_CLIENT_SECRET: Optional[str] = None
 
+    # Instagram / Facebook (optional — prefer DB config collection)
+    INSTAGRAM_APP_ID: Optional[str] = None
+    INSTAGRAM_APP_SECRET: Optional[str] = None
+
     # Scheduling
     TIMEZONE: str = "Asia/Kolkata"
 

@@ -92,6 +92,11 @@ async def get_youtube_oauth_config(db: AsyncIOMotorDatabase) -> dict | None:
     return await db.config.find_one({"key": "youtube_oauth"})
 
 
+async def get_instagram_oauth_config(db: AsyncIOMotorDatabase) -> dict | None:
+    """Return the Instagram/Facebook OAuth app credentials from the ``config`` collection."""
+    return await db.config.find_one({"key": "instagram_oauth"})
+
+
 async def get_content_schema_for_prompt(
     db: AsyncIOMotorDatabase,
     channel_id: str,

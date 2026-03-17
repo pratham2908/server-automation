@@ -27,6 +27,15 @@ async def _get_services(channel_id: str):
     return youtube_service, gemini_service
 
 
+async def _get_instagram_service(channel_id: str):
+    """Lazy import for Instagram service."""
+    from app.main import instagram_service_manager  # type: ignore[import]
+
+    if instagram_service_manager is None:
+        return None
+    return await instagram_service_manager.get_service(channel_id)
+
+
 # ------------------------------------------------------------------
 # POST /update  –  run the full analysis pipeline
 # ------------------------------------------------------------------
@@ -40,12 +49,27 @@ async def run_analysis_update(
     """Trigger a full analysis update for *channel_id*."""
     from app.services.analysis_engine import run_analysis
 
-    youtube_service, gemini_service = await _get_services(channel_id)
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
 
-    if youtube_service is None:
+    platform = channel.get("platform", "youtube")
+
+    youtube_service, gemini_service = await _get_services(channel_id)
+    instagram_service = await _get_instagram_service(channel_id)
+
+    if platform == "youtube" and youtube_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"No YouTube token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/youtube-token",
+        )
+    if platform == "instagram" and instagram_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"No Instagram token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/instagram-token",
         )
     if gemini_service is None:
         raise HTTPException(
@@ -54,7 +78,9 @@ async def run_analysis_update(
         )
 
     result = await run_analysis(
-        channel_id, db, youtube_service, gemini_service
+        channel_id, db, youtube_service, gemini_service,
+        instagram_service=instagram_service,
+        platform=platform,
     )
     return result
 

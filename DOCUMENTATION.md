@@ -1,4 +1,4 @@
-# YouTube Automation Server – Documentation
+# Video Automation Server – Documentation (YouTube + Instagram)
 
 ## Table of Contents
 
@@ -117,28 +117,44 @@ Returns the full API schema with method, path, description, request body, query 
 
 Prefix: `/api/v1/channels`
 
-Manages YouTube channel registration. Channel data is **auto-fetched from YouTube** on registration.
+Manages channel registration for **YouTube** and **Instagram**. Channel data is **auto-fetched from the respective platform** on registration. Each platform gets its own channel entry — the same brand can have separate YouTube and Instagram channels (e.g. `officialgeoranking` for YouTube and `officialgeoranking-ig` for Instagram), each with independent categories, analysis, and content params.
 
 ---
 
 #### `POST /` — Register a new channel
 
-Creates a channel by fetching its data from the YouTube API. You only need to provide the YouTube channel ID.
+Creates a channel by fetching its data from the appropriate platform API.
 
-**Request body:**
+**Request body (YouTube):**
 
 ```json
 {
-  "youtube_channel_id": "UCxxxxxxxx", // required – the UC... ID from YouTube
-  "channel_id": "my-channel" // optional – custom slug, auto-generated if omitted
+  "platform": "youtube",
+  "youtube_channel_id": "UCxxxxxxxx",
+  "channel_id": "my-channel"
 }
 ```
 
+**Request body (Instagram):**
+
+```json
+{
+  "platform": "instagram",
+  "instagram_user_id": "17841400123456789",
+  "channel_id": "my-channel-ig"
+}
+```
+
+- `platform` — `"youtube"` (default) or `"instagram"`
+- `youtube_channel_id` — required for YouTube
+- `instagram_user_id` — required for Instagram (the Instagram Graph API user ID)
+- `channel_id` — optional custom slug. Auto-generated if omitted (YouTube: from custom URL; Instagram: from username + `-ig` suffix)
+
 **What happens:**
 
-1. Server calls YouTube API to fetch channel name, description, subscriber count, video count, view count, thumbnail, and custom URL.
-2. If `channel_id` is not provided, one is auto-generated from the YouTube custom URL or channel name.
-3. All data is stored in the `channels` collection.
+1. Server calls the platform API (YouTube Data API or Instagram Graph API) to fetch account metadata (name, description, subscriber/follower count, video/media count, thumbnail).
+2. If `channel_id` is not provided, one is auto-generated.
+3. All data is stored in the `channels` collection with the `platform` field set.
 
 **Response (201):**
 
@@ -288,9 +304,9 @@ Removes the content param definition. Does not remove `content_params` from exis
 
 ---
 
-#### `POST /{channel_id}/refresh` — Re-fetch data from YouTube
+#### `POST /{channel_id}/refresh` — Re-fetch data from platform
 
-Pulls the latest stats (subscriber count, video count, etc.) from YouTube and updates the DB.
+Pulls the latest stats (subscriber/follower count, video count, etc.) from the appropriate platform (YouTube or Instagram) and updates the DB.
 
 **Response (200):**
 
@@ -466,7 +482,7 @@ The response is a wrapper with `videos` (the array) and `sync_status` (how many 
 }
 ```
 
-`sync_status` fields:
+`sync_status` fields (YouTube channels):
 
 - `youtube_total` — total videos on the YouTube channel
 - `in_database` — videos in our DB that have a `youtube_video_id`
@@ -474,11 +490,18 @@ The response is a wrapper with `videos` (the array) and `sync_status` (how many 
 - `pending_reconciliation` — videos in `scheduled` status whose YouTube video is actually live (public) on YouTube (reconciled to `published` on next sync)
 - `metadata_to_refresh` — existing videos whose stats will be refreshed on next sync
 
+`sync_status` fields (Instagram channels):
+
+- `instagram_total` — total reels on the Instagram account
+- `in_database` — reels in our DB that have an `instagram_media_id`
+- `new_reels_to_import` — reels on Instagram not yet in the DB
+- `metadata_to_refresh` — existing reels whose metrics will be refreshed on next sync
+
 ---
 
-#### `POST /sync` — Sync videos from YouTube
+#### `POST /sync` — Sync videos from platform
 
-Fetches all videos from the YouTube channel, finds any not already in the DB, categorizes them via Gemini (auto-creating categories from the channel description), and inserts them as `done`.
+Fetches all videos/reels from the channel's platform, finds any not already in the DB, categorizes them via Gemini (auto-creating categories from the channel description), and inserts them as `published`. Auto-detects whether the channel is YouTube or Instagram.
 
 **Optional request body:**
 
@@ -930,16 +953,16 @@ AI-powered channel analysis using Gemini. Analyzes video performance and generat
 
 #### `POST /update` — Run full analysis update
 
-**Two-step pipeline** — calls YouTube API + Gemini AI. May take 30+ seconds.
+**Two-step pipeline** — calls the platform API (YouTube or Instagram) + Gemini AI. May take 30+ seconds. The endpoint auto-detects the channel's `platform` and uses the appropriate service for stats fetching.
 
 **Step 1 — Per-video analysis:**
 
-1. **Fetch subscriber count** from YouTube via `get_channel_info()`
+1. **Fetch subscriber/follower count** from the platform via `get_channel_info()` (YouTube) or `get_account_info()` (Instagram)
 2. **Fetch done videos** from DB for this channel
 3. **Compute delta** — compare with `analysis_history` collection to find videos not yet individually analysed
 4. **Exclude recent videos** — skip any with `created_at` less than 3 days ago (hard limit, no exceptions)
 5. **Exclude unverified videos** — skip any with `verification_status: "unverified"`
-6. **Fetch YouTube stats** (views, likes, comments, duration, engagement rates) + **YouTube Analytics** (avg % viewed, avg view duration, est. minutes watched, **subscribers gained**) for new videos
+6. **Fetch platform stats** — YouTube: views, likes, comments, duration, engagement rates + Analytics (avg % viewed, avg view duration, est. minutes watched, **subscribers gained**). Instagram: plays, likes, comments, shares, saves, reach from Graph API insights
 7. **For each new video**: build a stats snapshot (including `views_per_subscriber`, `subscribers_gained`, `subscriber_count_at_analysis`), send to **Gemini for individual analysis** → get `performance_rating` (0-100), `what_worked`, `what_didnt`, `key_learnings`
 
    **Performance rating weightage** (used by Gemini to compute the 0-100 `performance_rating`):
@@ -1191,20 +1214,24 @@ All collections are shared across channels, with `channel_id` as a discriminator
 
 ### Collection: `channels`
 
-Stores registered YouTube channels with their metadata (auto-fetched from YouTube).
+Stores registered channels (YouTube or Instagram) with their metadata (auto-fetched from the platform).
 
 ```json
 {
   "_id": "ObjectId",
   "channel_id": "tech-tips", // unique internal slug
-  "youtube_channel_id": "UCxxxxxxxx", // YouTube UC... ID
-  "name": "Tech Tips Daily", // from YouTube
-  "description": "Channel description", // from YouTube
-  "custom_url": "@techtips", // from YouTube
-  "thumbnail_url": "https://...", // from YouTube
-  "subscriber_count": 125000, // from YouTube
-  "video_count": 342, // from YouTube
-  "view_count": 15000000, // from YouTube
+  "platform": "youtube", // "youtube" or "instagram"
+  "youtube_channel_id": "UCxxxxxxxx", // YouTube UC... ID (null for instagram)
+  "youtube_tokens": { ... }, // excluded from API responses
+  "instagram_user_id": "17841400...", // Instagram user ID (null for youtube)
+  "instagram_tokens": { ... }, // excluded from API responses
+  "name": "Tech Tips Daily", // from platform
+  "description": "Channel description", // from platform
+  "custom_url": "@techtips", // YouTube only
+  "thumbnail_url": "https://...", // from platform
+  "subscriber_count": 125000, // subscribers (YT) or followers (IG)
+  "video_count": 342, // from platform
+  "view_count": 15000000, // from platform (YouTube only)
   "created_at": "datetime",
   "updated_at": "datetime"
 }
@@ -1287,19 +1314,23 @@ Stores all video records — both manually uploaded and AI-generated to-do items
   "category": "Tutorials",
   "status": "todo", // "todo", "ready", "scheduled", or "published"
   "suggested": false, // true when marked by suggest_n
-  "youtube_video_id": null, // set after YouTube upload
+  "youtube_video_id": null, // set after YouTube upload (YouTube only)
+  "instagram_media_id": null, // Instagram media ID (Instagram only)
   "r2_object_key": "tech-tips/vid.mp4", // set when file is stored in R2
   "metadata": {
-    "views": null, // from YouTube Data API
-    "likes": null, // from YouTube Data API
-    "comments": null, // from YouTube Data API
-    "duration_seconds": null, // from YouTube Data API (contentDetails)
-    "engagement_rate": null, // (likes + comments) / views × 100
+    "views": null, // views (YT) or plays (IG)
+    "likes": null, // from platform
+    "comments": null, // from platform
+    "duration_seconds": null, // from YouTube Data API
+    "engagement_rate": null, // (likes+comments)/views (YT) or (likes+comments+shares+saves)/reach (IG)
     "like_rate": null, // likes / views × 100
     "comment_rate": null, // comments / views × 100
-    "avg_percentage_viewed": null, // from YouTube Analytics API
-    "avg_view_duration_seconds": null, // from YouTube Analytics API
-    "estimated_minutes_watched": null // from YouTube Analytics API
+    "avg_percentage_viewed": null, // YouTube only
+    "avg_view_duration_seconds": null, // YouTube only
+    "estimated_minutes_watched": null, // YouTube only
+    "shares": null, // Instagram only
+    "saves": null, // Instagram only
+    "reach": null // Instagram only
   },
   "content_params": {
     // channel-specific content dimensions
@@ -1534,7 +1565,8 @@ Per-video analysis storage — **one document per video**, created once and neve
   "_id": "ObjectId",
   "channel_id": "tech-tips",
   "video_id": "uuid-1234",
-  "youtube_video_id": "dQw4w...",
+  "youtube_video_id": "dQw4w...", // YouTube only (null for Instagram)
+  "instagram_media_id": null, // Instagram only (null for YouTube)
   "title": "Epic Battle Simulation",
   "category": "Simulations",
   "content_params": {
@@ -1542,7 +1574,7 @@ Per-video analysis storage — **one document per video**, created once and neve
     "challenge_mechanic": "1v1",
     "music": "Epic Orchestral - Two Steps From Hell"
   },
-  "published_at": "datetime", // when the video was published on YouTube (IST)
+  "published_at": "datetime", // when the video was published (IST)
   "stats_snapshot": {
     "views": 15000,
     "likes": 800,
@@ -1602,6 +1634,19 @@ Per-video analysis storage — **one document per video**, created once and neve
 - **Get video analytics**: Queries the YouTube Analytics API for `averageViewPercentage`, `averageViewDuration`, and `estimatedMinutesWatched` per video. Batches by 40 IDs. Returns empty data for videos less than ~48 hours old (YouTube Analytics processing delay)
 - **Upload video**: Resumable upload in 10MB chunks, defaults to private. Accepts an optional `publish_at` ISO 8601 UTC datetime — when provided, the video is uploaded as private with YouTube's `publishAt` field so it auto-publishes at the scheduled time
 
+### Instagram Service (`app/services/instagram.py`)
+
+- **Per-channel tokens (DB-stored)**: Each Instagram channel has its own long-lived Facebook user access token stored in the `instagram_tokens` field of its document in the `channels` collection
+- **InstagramServiceManager**: Manages per-channel `InstagramService` instances. Mirrors `YouTubeServiceManager`. Reads tokens from the DB, lazily creates and caches service instances
+- **Token provisioning**: The frontend completes the Facebook Login OAuth flow in the browser, exchanges for a long-lived token, then POSTs it to `POST /channels/{channel_id}/instagram-token`
+- **Access token serving**: `GET /channels/{channel_id}/instagram-token` returns the current token, auto-refreshing if < 7 days remain
+- **Token status**: `GET /channels/{channel_id}/instagram-token/status` returns connection status without exposing the token
+- **Client credentials**: Facebook App ID and Secret stored in the `config` collection (key: `instagram_oauth`), with `.env` fallback. Set via `PUT /channels/config/instagram-oauth`
+- **Get account info**: Fetches Instagram username, name, followers count, media count, biography, profile picture
+- **Get reels**: Paginates through `/{ig_user_id}/media`, filters for VIDEO/REEL media types
+- **Get reel insights**: Fetches per-reel insights: plays, reach, saved, shares, total_interactions
+- **Token refresh**: Exchanges a long-lived token for a new one (60-day window) via Facebook token refresh endpoint
+
 ### Timezone Helper (`app/timezone.py`)
 
 - **`IST`** — a `timezone(timedelta(hours=5, minutes=30))` constant
@@ -1633,9 +1678,9 @@ Per-video analysis storage — **one document per video**, created once and neve
 
 ### Analysis Engine (`app/services/analysis_engine.py`)
 
-Two-step pipeline:
+Platform-aware two-step pipeline (auto-detects YouTube vs Instagram):
 
-1. **Step 1 — Per-video analysis**: For each published video not yet in `analysis_history` (excluding `verification_status: "unverified"`): fetch subscriber count + subscribers gained → build stats snapshot with `views_per_subscriber` → send to Gemini individually → store in `analysis_history`
+1. **Step 1 — Per-video analysis**: For each published video not yet in `analysis_history` (excluding `verification_status: "unverified"`): fetch subscriber/follower count + platform-specific stats → build stats snapshot with `views_per_subscriber` → send to Gemini individually (with platform-appropriate persona) → store in `analysis_history` with either `youtube_video_id` or `instagram_media_id`
 2. **Step 2 — Channel summary**: Aggregate all per-video analyses → send to Gemini in batches of 5 (with AI insights) → save channel summary to `analysis` with `subscriber_count` → run to-do engine
 
 ### To-do Engine (`app/services/todo_engine.py`)
@@ -1683,6 +1728,7 @@ flowchart TB
         Scheduler["Scheduler Service"]
         GeminiSvc["Gemini Service"]
         YTSvc["YouTube Service"]
+        IGSvc["Instagram Service"]
         R2Svc["R2 Service"]
     end
 
@@ -1690,6 +1736,7 @@ flowchart TB
         MongoDB[(MongoDB Atlas)]
         R2[(Cloudflare R2)]
         YouTube["YouTube API"]
+        Instagram["Instagram Graph API"]
         Gemini["Google Gemini AI"]
     end
 
@@ -1702,12 +1749,14 @@ flowchart TB
 
     AnalysisEngine --> GeminiSvc
     AnalysisEngine --> YTSvc
+    AnalysisEngine --> IGSvc
     TodoEngine --> GeminiSvc
 
     Scheduler -->|"compute slots from\nbest_posting_times"| API
 
     GeminiSvc --> Gemini
     YTSvc --> YouTube
+    IGSvc --> Instagram
     R2Svc --> R2
     API --> MongoDB
 ```

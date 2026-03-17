@@ -189,9 +189,17 @@ def _check_youtube_live_status(yt, youtube_video_ids: list[str]) -> dict[str, di
 
 
 async def _get_sync_status(channel_id: str, db) -> dict:
-    """Compare YouTube video IDs against our DB to get accurate sync numbers."""
+    """Compare platform video IDs against our DB to get accurate sync numbers."""
     channel = await db.channels.find_one({"channel_id": channel_id})
-    if not channel or not channel.get("youtube_channel_id"):
+    if not channel:
+        return {"available": False, "reason": "Channel not found"}
+
+    platform = channel.get("platform", "youtube")
+
+    if platform == "instagram":
+        return await _get_instagram_sync_status(channel_id, channel, db)
+
+    if not channel.get("youtube_channel_id"):
         return {"available": False, "reason": "No YouTube channel linked"}
 
     youtube_service, _ = await _get_services(channel_id)
@@ -216,7 +224,6 @@ async def _get_sync_status(channel_id: str, db) -> dict:
     new_videos_to_import = yt_video_ids - db_yt_ids
     metadata_to_refresh = yt_video_ids & db_yt_ids
 
-    # Check how many scheduled videos are actually live on YouTube.
     scheduled_docs = await db.videos.find(
         {
             "channel_id": channel_id,
@@ -244,6 +251,39 @@ async def _get_sync_status(channel_id: str, db) -> dict:
         "new_videos_to_import": len(new_videos_to_import),
         "pending_reconciliation": pending_reconciliation,
         "metadata_to_refresh": len(metadata_to_refresh),
+    }
+
+
+async def _get_instagram_sync_status(channel_id: str, channel: dict, db) -> dict:
+    """Compute sync status for an Instagram channel."""
+    ig_svc = await _get_instagram_service(channel_id)
+    if ig_svc is None:
+        return {"available": False, "reason": "No Instagram token for this channel"}
+
+    ig_user_id = channel.get("instagram_user_id")
+    if not ig_user_id:
+        return {"available": False, "reason": "No instagram_user_id set"}
+
+    try:
+        reels = ig_svc.get_reels(ig_user_id)
+        ig_media_ids = {r["id"] for r in reels}
+    except Exception as exc:
+        logger.warning("Could not fetch Instagram reels for sync status: %s", exc)
+        return {"available": False, "reason": "Failed to reach Instagram API"}
+
+    db_ig_ids: set[str] = set()
+    async for doc in db.videos.find(
+        {"channel_id": channel_id, "instagram_media_id": {"$ne": None}},
+        {"instagram_media_id": 1},
+    ):
+        db_ig_ids.add(doc["instagram_media_id"])
+
+    return {
+        "available": True,
+        "instagram_total": len(ig_media_ids),
+        "in_database": len(db_ig_ids),
+        "new_reels_to_import": len(ig_media_ids - db_ig_ids),
+        "metadata_to_refresh": len(ig_media_ids & db_ig_ids),
     }
 
 
@@ -918,6 +958,15 @@ async def _get_services(channel_id: str):
     return youtube_service, gemini_service
 
 
+async def _get_instagram_service(channel_id: str):
+    """Lazy import for Instagram service manager."""
+    from app.main import instagram_service_manager  # type: ignore[import]
+
+    if instagram_service_manager is None:
+        return None
+    return await instagram_service_manager.get_service(channel_id)
+
+
 def _parse_iso8601_duration(duration: str) -> int:
     """Convert ISO 8601 duration (e.g. 'PT1H2M30S') to total seconds."""
     import re
@@ -1086,12 +1135,24 @@ async def sync_videos(
     body: Optional[SyncRequest] = None,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Sync videos from YouTube into the DB.
+    """Sync videos from the appropriate platform into the DB.
 
-    Fetches all videos from the YouTube channel, finds any that aren't
-    already in the ``videos`` collection, categorises them via Gemini,
-    and inserts them as ``done``.
+    For YouTube: fetches all videos, categorises via Gemini, inserts.
+    For Instagram: fetches all reels, fetches insights, categorises via Gemini, inserts.
     """
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    platform = channel.get("platform", "youtube")
+
+    if platform == "instagram":
+        return await _sync_instagram_reels(channel_id, channel, body, db)
+
+    # --- YouTube sync ---
     youtube_service, gemini_service = await _get_services(channel_id)
 
     if youtube_service is None:
@@ -1105,15 +1166,12 @@ async def sync_videos(
             detail="Gemini service not initialised",
         )
 
-    # Look up channel.
-    channel = await db.channels.find_one({"channel_id": channel_id})
-    if not channel:
+    youtube_channel_id = channel.get("youtube_channel_id")
+    if not youtube_channel_id:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Channel '{channel_id}' not found",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Channel has no youtube_channel_id",
         )
-
-    youtube_channel_id = channel["youtube_channel_id"]
     channel_description = channel.get("description", "")
 
     # Fetch all YouTube videos (Data API: snippet + statistics + contentDetails).
@@ -1428,6 +1486,263 @@ async def sync_videos(
         "categories_created": [
             c for c in existing_cats
         ],
+        "videos": video_summary,
+    }
+
+
+# ------------------------------------------------------------------
+# Instagram reel sync
+# ------------------------------------------------------------------
+
+
+async def _sync_instagram_reels(
+    channel_id: str,
+    channel: dict,
+    body: Optional[SyncRequest],
+    db: AsyncIOMotorDatabase,
+) -> dict:
+    """Import Instagram reels for *channel_id*, categorise via Gemini, and insert."""
+    ig_svc = await _get_instagram_service(channel_id)
+    if ig_svc is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"No Instagram token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/instagram-token",
+        )
+
+    _, gemini_service = await _get_services(channel_id)
+    if gemini_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini service not initialised",
+        )
+
+    ig_user_id = channel.get("instagram_user_id")
+    if not ig_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Channel has no instagram_user_id",
+        )
+
+    reels = ig_svc.get_reels(ig_user_id)
+    if not reels:
+        return {"ok": True, "synced": 0, "message": "No reels found on Instagram"}
+
+    media_ids = [r["id"] for r in reels]
+    insights = ig_svc.get_reel_insights(media_ids)
+
+    existing_ig_ids: set[str] = set()
+    async for doc in db.videos.find(
+        {"channel_id": channel_id, "instagram_media_id": {"$ne": None}},
+        {"instagram_media_id": 1, "_id": 1},
+    ):
+        existing_ig_ids.add(doc["instagram_media_id"])
+
+    # Refresh metrics for existing reels
+    metadata_updated = 0
+    for reel in reels:
+        mid = reel["id"]
+        if mid not in existing_ig_ids:
+            continue
+        reel_insights = insights.get(mid, {})
+        plays = reel_insights.get("plays", reel.get("like_count", 0))
+        like_count = reel.get("like_count", 0)
+        comments_count = reel.get("comments_count", 0)
+        shares = reel_insights.get("shares", 0)
+        saves = reel_insights.get("saved", 0)
+        reach_val = reel_insights.get("reach", 0)
+
+        rates = _compute_rates(plays, like_count, comments_count)
+        ig_engagement = None
+        if reach_val and reach_val > 0:
+            ig_engagement = round((like_count + comments_count + shares + saves) / reach_val * 100, 4)
+
+        await db.videos.update_one(
+            {"channel_id": channel_id, "instagram_media_id": mid},
+            {
+                "$set": {
+                    "metadata.views": plays,
+                    "metadata.likes": like_count,
+                    "metadata.comments": comments_count,
+                    "metadata.shares": shares,
+                    "metadata.saves": saves,
+                    "metadata.reach": reach_val,
+                    "metadata.engagement_rate": ig_engagement or rates.get("engagement_rate"),
+                    "metadata.like_rate": rates.get("like_rate"),
+                    "metadata.comment_rate": rates.get("comment_rate"),
+                    "updated_at": now_ist(),
+                }
+            },
+        )
+        metadata_updated += 1
+
+    if metadata_updated:
+        logger.success("Refreshed metrics for %d existing reel(s).", metadata_updated)
+
+    new_reels = [r for r in reels if r["id"] not in existing_ig_ids]
+
+    logger.info(
+        "Found %d total reels on Instagram. %d existing (metrics refreshed), %d new to process.",
+        len(reels), len(existing_ig_ids), len(new_reels),
+        extra={"color": "BLUE"},
+    )
+
+    if not new_reels:
+        return {
+            "ok": True,
+            "synced": 0,
+            "metadata_refreshed": metadata_updated,
+            "message": f"All {len(reels)} reels already in DB — metrics refreshed",
+            "videos": [],
+        }
+
+    # Categorise new reels via Gemini
+    existing_cats = [
+        c["name"]
+        async for c in db.categories.find({"channel_id": channel_id}, {"name": 1})
+    ]
+
+    from app.database import get_content_schema_for_prompt
+    content_schema = await get_content_schema_for_prompt(db, channel_id)
+
+    BATCH_SIZE = 5
+    categorizations: dict[str, dict] = {}
+
+    ig_videos_for_gemini = []
+    for reel in new_reels:
+        caption = reel.get("caption", "") or ""
+        lines = caption.strip().split("\n")
+        title = lines[0][:100] if lines else "Untitled"
+        tags = [w.strip("#") for w in caption.split() if w.startswith("#")]
+        ig_videos_for_gemini.append({
+            "youtube_video_id": reel["id"],  # reuse field name for the batch helper
+            "title": title,
+            "description": caption,
+            "tags": tags[:15],
+        })
+
+    for i in range(0, len(ig_videos_for_gemini), BATCH_SIZE):
+        batch = ig_videos_for_gemini[i : i + BATCH_SIZE]
+        logger.info(
+            "Asking Gemini to extract params & categorize reel batch (%d/%d)...",
+            (i // BATCH_SIZE) + 1,
+            (len(ig_videos_for_gemini) + BATCH_SIZE - 1) // BATCH_SIZE,
+            extra={"color": "MAGENTA"},
+        )
+        results = await _extract_params_and_categorize_batch(
+            gemini_service, content_schema, existing_cats, batch,
+            category_instructions=body.new_category_description if body else "",
+        )
+        for r in results:
+            mid = r.get("youtube_video_id", "")
+            cat = r.get("category", "Uncategorized")
+            params = r.get("content_params", {})
+            categorizations[mid] = {"category": cat, "content_params": params}
+            if cat not in existing_cats:
+                existing_cats.append(cat)
+                now = now_ist()
+                await db.categories.insert_one({
+                    "channel_id": channel_id,
+                    "name": cat,
+                    "description": "",
+                    "raw_description": "",
+                    "score": 0,
+                    "status": "active",
+                    "video_count": 0,
+                    "metadata": {"total_videos": 0},
+                    "created_at": now,
+                    "updated_at": now,
+                })
+                logger.success("Created new category: '%s'", cat)
+
+    docs = []
+    for reel in new_reels:
+        mid = reel["id"]
+        cat_info = categorizations.get(mid, {"category": "Uncategorized", "content_params": {}})
+        reel_insights = insights.get(mid, {})
+        caption = reel.get("caption", "") or ""
+        lines = caption.strip().split("\n")
+        title = lines[0][:100] if lines else "Untitled"
+        tags = [w.strip("#") for w in caption.split() if w.startswith("#")]
+
+        plays = reel_insights.get("plays", 0)
+        like_count = reel.get("like_count", 0)
+        comments_count = reel.get("comments_count", 0)
+        shares = reel_insights.get("shares", 0)
+        saves = reel_insights.get("saved", 0)
+        reach_val = reel_insights.get("reach", 0)
+
+        rates = _compute_rates(plays, like_count, comments_count)
+        ig_engagement = None
+        if reach_val and reach_val > 0:
+            ig_engagement = round((like_count + comments_count + shares + saves) / reach_val * 100, 4)
+
+        published_at = now_ist()
+        ts = reel.get("timestamp")
+        if ts:
+            try:
+                published_at = isoparse(ts)
+            except (ValueError, TypeError):
+                pass
+
+        extracted_params = cat_info.get("content_params", {})
+
+        doc = {
+            "channel_id": channel_id,
+            "video_id": str(uuid.uuid4()),
+            "title": title,
+            "description": caption,
+            "tags": tags,
+            "category": cat_info["category"],
+            "status": "published",
+            "suggested": False,
+            "youtube_video_id": None,
+            "instagram_media_id": mid,
+            "r2_object_key": None,
+            "metadata": {
+                "views": plays,
+                "likes": like_count,
+                "comments": comments_count,
+                "shares": shares,
+                "saves": saves,
+                "reach": reach_val,
+                "engagement_rate": ig_engagement or rates.get("engagement_rate"),
+                "like_rate": rates.get("like_rate"),
+                "comment_rate": rates.get("comment_rate"),
+            },
+            "content_params": extracted_params if extracted_params else None,
+            "verification_status": "unverified" if extracted_params else None,
+            "scheduled_at": None,
+            "published_at": published_at,
+            "created_at": published_at,
+            "updated_at": now_ist(),
+        }
+        docs.append(doc)
+
+    if docs:
+        await db.videos.insert_many(docs)
+        logger.success("Inserted %d new Instagram reels into database", len(docs))
+
+        from app.services.todo_engine import recompute_category
+        affected_cats = {d["category"] for d in docs}
+        for cat_name in affected_cats:
+            await recompute_category(channel_id, cat_name, db)
+
+    video_summary = [
+        {"title": d["title"], "category": d["category"], "status": d["status"]}
+        for d in docs
+    ]
+
+    logger.success(
+        "✅ Instagram Sync Complete! Synced %d new reels.",
+        len(docs),
+        extra={"color": "BRIGHT_GREEN"},
+    )
+
+    return {
+        "ok": True,
+        "synced": len(docs),
+        "metadata_refreshed": metadata_updated,
+        "categories_created": existing_cats,
         "videos": video_summary,
     }
 
