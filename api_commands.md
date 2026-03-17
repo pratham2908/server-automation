@@ -283,7 +283,7 @@ Content params are custom dimensions for classifying videos. Manage them with th
   "token": "ya29.a0ARrdaM...",
   "refresh_token": "1//0eXyz...",
   "token_uri": "https://oauth2.googleapis.com/token",
-  "scopes": ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/yt-analytics.readonly"],
+  "scopes": ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.force-ssl", "https://www.googleapis.com/auth/yt-analytics.readonly"],
   "expiry": "2026-03-07T12:00:00Z"
 }
 ```

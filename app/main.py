@@ -251,7 +251,7 @@ async def api_schema():
                     "token": "ya29.a0ARrdaM...",
                     "refresh_token": "1//0eXyz...",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "scopes": ["https://www.googleapis.com/auth/youtube.upload"],
+                    "scopes": ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.force-ssl", "https://www.googleapis.com/auth/yt-analytics.readonly"],
                     "expiry": "2026-03-07T12:00:00Z",
                 },
                 "response": {"ok": True, "channel_id": "ch1", "message": "YouTube tokens stored"},

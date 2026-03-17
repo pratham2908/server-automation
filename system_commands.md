@@ -134,7 +134,7 @@ PUT /api/v1/channels/config/youtube-oauth
 {"client_id": "...", "client_secret": "..."}
 ```
 
-Current OAuth scopes: `youtube.upload`, `youtube.readonly`, `yt-analytics.readonly`
+Current OAuth scopes: `youtube.upload`, `youtube.readonly`, `youtube.force-ssl`, `yt-analytics.readonly`
 
 ---
 

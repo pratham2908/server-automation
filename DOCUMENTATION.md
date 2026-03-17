@@ -1628,7 +1628,7 @@ Per-video analysis storage — **one document per video**, created once and neve
 - **Access token serving**: The frontend can call `GET /channels/{channel_id}/youtube-token` to get a fresh short-lived access token. If expired, the backend auto-refreshes it using the refresh token and returns the new one. The refresh token is never exposed to the frontend
 - **Token status**: `GET /channels/{channel_id}/youtube-token/status` returns connection status without exposing tokens
 - **Client credentials**: Google OAuth `client_id` and `client_secret` are stored in the `config` collection (key: `youtube_oauth`), with a fallback to `.env` for backward compatibility. Set via `PUT /channels/config/youtube-oauth`
-- **Auth**: OAuth2 with auto-refresh. Scopes: `youtube.upload`, `youtube.readonly`, `yt-analytics.readonly`
+- **Auth**: OAuth2 with auto-refresh. Scopes: `youtube.upload`, `youtube.readonly`, `youtube.force-ssl`, `yt-analytics.readonly`
 - **Get channel info**: Fetches channel metadata (name, subscribers, etc.)
 - **Get video stats**: Fetches views, likes, comments, duration (from Data API `statistics` + `contentDetails`), plus computed engagement/like/comment rates. Also merges YouTube Analytics data (avg % viewed, avg view duration, estimated minutes watched) when available
 - **Get video analytics**: Queries the YouTube Analytics API for `averageViewPercentage`, `averageViewDuration`, and `estimatedMinutesWatched` per video. Batches by 40 IDs. Returns empty data for videos less than ~48 hours old (YouTube Analytics processing delay)
