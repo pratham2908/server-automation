@@ -134,19 +134,17 @@ async def run_analysis(
 
     # Fetch platform-specific stats for new videos
     yt_stats: dict[str, Any] = {}
-    subs_gained: dict[str, int] = {}
     ig_insights: dict[str, dict] = {}
 
     if platform == "youtube" and youtube_service:
         yt_ids = [v["youtube_video_id"] for v in new_videos if v.get("youtube_video_id")]
         if yt_ids:
             logger.info(
-                "📡 Fetching YouTube stats + subscribers gained for %d videos...",
+                "📡 Fetching YouTube stats for %d videos...",
                 len(yt_ids),
                 extra={"color": "CYAN"},
             )
             yt_stats = youtube_service.get_video_stats(yt_ids)
-            subs_gained = youtube_service.get_subscribers_gained(yt_ids)
     elif platform == "instagram" and instagram_service:
         ig_ids = [v["instagram_media_id"] for v in new_videos if v.get("instagram_media_id")]
         if ig_ids:
@@ -177,7 +175,7 @@ async def run_analysis(
                     )
                     if meta.get(k) is not None
                 }
-            stats["subscribers_gained"] = subs_gained.get(yt_id, 0) if yt_id else 0
+            stats["subscribers_gained"] = (v.get("metadata") or {}).get("subscribers_gained", 0)
         else:
             ig_id = v.get("instagram_media_id")
             meta = v.get("metadata") or {}

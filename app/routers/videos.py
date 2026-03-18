@@ -1224,6 +1224,11 @@ async def sync_videos(
         extra = analytics_data.get(v["youtube_video_id"], {})
         v.update(extra)
 
+    # Fetch subscribers gained per video from YouTube Analytics API.
+    subs_gained = youtube_service.get_subscribers_gained(all_yt_ids)
+    for v in all_yt_videos:
+        v["subscribers_gained"] = subs_gained.get(v["youtube_video_id"], 0)
+
     # Build a lookup from youtube_video_id → fresh stats for quick access.
     yt_stats_lookup = {v["youtube_video_id"]: v for v in all_yt_videos}
 
@@ -1255,6 +1260,7 @@ async def sync_videos(
                     "metadata.avg_percentage_viewed": fresh.get("avg_percentage_viewed"),
                     "metadata.avg_view_duration_seconds": fresh.get("avg_view_duration_seconds"),
                     "metadata.estimated_minutes_watched": fresh.get("estimated_minutes_watched"),
+                    "metadata.subscribers_gained": fresh.get("subscribers_gained", 0),
                     "updated_at": now_ist(),
                 }
             },
@@ -1263,6 +1269,17 @@ async def sync_videos(
 
     if metadata_updated:
         logger.success(f"Refreshed metadata for {metadata_updated} existing video(s).")
+        from app.services.todo_engine import recompute_category
+        refreshed_cats: set[str] = set()
+        async for doc in db.videos.find(
+            {"channel_id": channel_id, "youtube_video_id": {"$in": list(existing_yt_ids)}, "status": "published"},
+            {"category": 1},
+        ):
+            if doc.get("category"):
+                refreshed_cats.add(doc["category"])
+        for cat_name in refreshed_cats:
+            await recompute_category(channel_id, cat_name, db)
+        logger.success(f"Recomputed metadata for {len(refreshed_cats)} category(ies).")
 
     # ------------------------------------------------------------------
     # Reconcile: find videos marked "scheduled" in the DB and check if
@@ -1456,6 +1473,7 @@ async def sync_videos(
                 "avg_percentage_viewed": v.get("avg_percentage_viewed"),
                 "avg_view_duration_seconds": v.get("avg_view_duration_seconds"),
                 "estimated_minutes_watched": v.get("estimated_minutes_watched"),
+                "subscribers_gained": v.get("subscribers_gained", 0),
             },
             "content_params": extracted_params if extracted_params else None,
             "verification_status": "unverified" if extracted_params else None,
@@ -1617,6 +1635,17 @@ async def _sync_instagram_reels(
 
     if metadata_updated:
         logger.success("Refreshed metrics for %d existing reel(s).", metadata_updated)
+        from app.services.todo_engine import recompute_category
+        refreshed_cats: set[str] = set()
+        async for doc in db.videos.find(
+            {"channel_id": channel_id, "instagram_media_id": {"$in": list(existing_ig_ids)}, "status": "published"},
+            {"category": 1},
+        ):
+            if doc.get("category"):
+                refreshed_cats.add(doc["category"])
+        for cat_name in refreshed_cats:
+            await recompute_category(channel_id, cat_name, db)
+        logger.success("Recomputed metadata for %d category(ies).", len(refreshed_cats))
 
     new_reels = [r for r in reels if r["id"] not in existing_ig_ids]
 
