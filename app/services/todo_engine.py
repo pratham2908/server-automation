@@ -109,6 +109,9 @@ async def _compute_category_metadata(
             round(sum(total_emw_vals), 1) if total_emw_vals else None
         ),
         "avg_subscribers": avg_subscribers,
+        "avg_shares": _avg("shares"),
+        "avg_saves": _avg("saves"),
+        "avg_reach": _avg("reach"),
     }
 
 
@@ -363,6 +366,7 @@ async def generate_todo_videos(
                 "status": "todo",
                 "suggested": False,
                 "youtube_video_id": None,
+                "instagram_media_id": None,
                 "r2_object_key": None,
                 "metadata": {
                     "views": None,

@@ -724,7 +724,7 @@ Uploads a video file for an existing `todo` video, streams it to Cloudflare R2, 
 
 #### `POST /{video_id}/schedule` — Schedule ready video(s)
 
-Schedules video(s) on YouTube. Computes a publish time, uploads the video file to YouTube as private with `publishAt`, and **only on success**: removes from the ready queue, adds to the scheduled queue, sets status to `scheduled`.
+Schedules video(s) on the channel's platform. Auto-detects whether the channel is YouTube or Instagram.
 
 **Path params:** `video_id` — the UUID of a single video **OR** `"all"` to schedule every video in the ready queue.
 
@@ -740,9 +740,9 @@ Schedules video(s) on YouTube. Computes a publish time, uploads the video file t
 
 - The video(s) must be in `ready` status (uploaded to R2). Returns `400` otherwise.
 - A channel analysis with `best_posting_times` must exist. Returns `400` if missing.
-- A valid YouTube token must exist for the channel. Returns `503` if missing.
+- A valid platform token must exist for the channel. Returns `503` if missing.
 
-**What happens:**
+**What happens (YouTube):**
 
 1. If `video_id` is `"all"`, fetches all entries from the ready queue; otherwise fetches the single video
 2. Loads `best_posting_times` from the latest analysis document
@@ -751,6 +751,13 @@ Schedules video(s) on YouTube. Computes a publish time, uploads the video file t
 5. For each video: downloads from R2, uploads to YouTube as private with `publishAt`. **Only on YouTube upload success**: removes from the ready queue, inserts into the scheduled queue with `scheduled_at`, sets `youtube_video_id`, updates status to `scheduled`
 
 The video remains in `scheduled` status until YouTube auto-publishes it at the `publishAt` time. The sync endpoint then reconciles it to `published`.
+
+**What happens (Instagram):**
+
+1-4. Same slot computation as YouTube.
+5. For each video: sets status to `scheduled` with `scheduled_at`, moves from ready queue to scheduled queue. **The actual upload + publish to Instagram happens via the background auto-publisher** when `scheduled_at` arrives (Instagram has no native `publishAt`).
+
+When the auto-publisher fires, it downloads the video from R2, uploads to Instagram via the resumable upload flow (create container, upload binary, wait for processing, publish), and sets `instagram_media_id`, status to `published`.
 
 **Response (200):**
 
@@ -1182,6 +1189,9 @@ Aggregates per-video analyses across two time periods for side-by-side compariso
     "avg_percentage_viewed": 68.2,
     "avg_views_per_subscriber": 2.4,
     "total_subscribers_gained": 500,
+    "avg_shares": 0,
+    "avg_saves": 0,
+    "avg_reach": 0,
     "avg_performance_rating": 72.3
   },
   "period_2": {
@@ -1195,6 +1205,9 @@ Aggregates per-video analyses across two time periods for side-by-side compariso
     "avg_percentage_viewed": 74.1,
     "avg_views_per_subscriber": 3.6,
     "total_subscribers_gained": 850,
+    "avg_shares": 0,
+    "avg_saves": 0,
+    "avg_reach": 0,
     "avg_performance_rating": 81.5
   }
 }
@@ -1477,10 +1490,13 @@ Stores content categories with their performance scores.
     "avg_engagement_rate": 1.25, // avg (likes+comments)/views × 100
     "avg_like_rate": 1.03,
     "avg_comment_rate": 0.22,
-    "avg_percentage_viewed": 72.5, // from YouTube Analytics API
-    "avg_view_duration_seconds": 20, // from YouTube Analytics API
+    "avg_percentage_viewed": 72.5, // from YouTube Analytics API (null for Instagram)
+    "avg_view_duration_seconds": 20, // from YouTube Analytics API (null for Instagram)
     "total_views": 18000,
-    "total_estimated_minutes_watched": 560.0
+    "total_estimated_minutes_watched": 560.0,
+    "avg_shares": null, // Instagram only (null for YouTube)
+    "avg_saves": null, // Instagram only (null for YouTube)
+    "avg_reach": null // Instagram only (null for YouTube)
   },
   "created_at": "datetime",
   "updated_at": "datetime"
@@ -1618,6 +1634,7 @@ Per-video analysis storage — **one document per video**, created once and neve
 - **Upload**: Streams file to R2 using `upload_fileobj` (never loads full file into memory)
 - **Download**: Streams file from R2 to a temp file, returns the temp file path
 - **Delete**: Removes an object from R2
+- **Presigned URL**: `generate_presigned_url(key, expires_in=3600)` — generates a temporary public URL for an R2 object (fallback for Instagram if resumable upload has issues)
 - **Object key format**: `{channel_id}/{video_id}.mp4`
 
 ### YouTube Service (`app/services/youtube.py`)
@@ -1645,7 +1662,21 @@ Per-video analysis storage — **one document per video**, created once and neve
 - **Get account info**: Fetches Instagram username, name, followers count, media count, biography, profile picture
 - **Get reels**: Paginates through `/{ig_user_id}/media`, filters for VIDEO/REEL media types
 - **Get reel insights**: Fetches per-reel insights: plays, reach, saved, shares, total_interactions
+- **Publish reel** (end-to-end): `publish_reel(ig_user_id, file_path, caption)` — creates a resumable upload container, uploads the video binary to `rupload.facebook.com`, polls processing status until `FINISHED`, then publishes. Returns the published `media_id`
+- **Create reel container**: `create_reel_container(ig_user_id, caption)` — POST `/{ig_user_id}/media` with `media_type=REELS` and `upload_type=resumable`, returns `container_id` and `upload_uri`
+- **Upload to container**: `upload_video_to_container(upload_uri, file_path)` — streams the video binary to the resumable upload endpoint
+- **Check container status**: `check_container_status(container_id)` — polls `status_code` (`FINISHED`, `IN_PROGRESS`, `ERROR`)
+- **Publish container**: `publish_container(ig_user_id, container_id)` — POST `/{ig_user_id}/media_publish`, returns `media_id`
 - **Token refresh**: Exchanges a long-lived token for a new one (60-day window) via Facebook token refresh endpoint
+
+### Auto-Publisher (`app/services/auto_publisher.py`)
+
+Background async task that automatically publishes scheduled Instagram reels when their `scheduled_at` time arrives. Instagram has no native `publishAt` like YouTube, so this service bridges the gap.
+
+- **Poll interval**: Every 5 minutes (300 seconds)
+- **What it does each cycle**: Queries `schedule_queue` for entries where `scheduled_at <= now`, filters for Instagram-only channels, then for each due entry: downloads the video from R2, builds a caption (title + description + hashtags), uploads and publishes via `InstagramService.publish_reel()`, sets `instagram_media_id` and status to `published`, removes from `schedule_queue`
+- **Started automatically** in `main.py` lifespan as an `asyncio.create_task`
+- **Graceful shutdown**: Task is cancelled during app shutdown
 
 ### Timezone Helper (`app/timezone.py`)
 

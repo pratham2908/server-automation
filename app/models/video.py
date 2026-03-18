@@ -69,11 +69,11 @@ class Video(BaseModel):
     )
     scheduled_at: Optional[datetime] = Field(
         None,
-        description="When the video is scheduled to go live on YouTube. Set when scheduled.",
+        description="When the video is scheduled to go live. Set when scheduled.",
     )
     published_at: Optional[datetime] = Field(
         None,
-        description="When the video was published on YouTube. Null until published.",
+        description="When the video was published on the platform. Null until published.",
     )
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)
@@ -103,7 +103,7 @@ class PostingQueue(BaseModel):
     """An entry in the ready queue (``posting_queue`` collection).
 
     Videos with status ``ready`` sit here after being uploaded to R2,
-    waiting to be scheduled on YouTube.
+    waiting to be scheduled on the target platform.
     """
 
     channel_id: str
@@ -120,8 +120,7 @@ class ScheduleQueue(BaseModel):
     """An entry in the scheduled queue (``schedule_queue`` collection).
 
     Videos with status ``scheduled`` sit here after being uploaded to
-    YouTube as private with a ``publishAt`` time, waiting for YouTube
-    to auto-publish.
+    YouTube (private with ``publishAt``) or queued for Instagram auto-publishing.
     """
 
     channel_id: str
@@ -129,7 +128,7 @@ class ScheduleQueue(BaseModel):
     position: int = Field(..., ge=1, description="1-based queue ordering")
     scheduled_at: Optional[datetime] = Field(
         None,
-        description="The exact datetime (timezone-aware) when this video should be published on YouTube",
+        description="The exact datetime (timezone-aware) when this video should be published",
     )
     added_at: datetime = Field(default_factory=now_ist)
 

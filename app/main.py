@@ -21,6 +21,7 @@ r2_service = None
 youtube_service_manager = None
 instagram_service_manager = None
 gemini_service = None
+_auto_publisher_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     gemini_service = GeminiService(api_key=settings.GEMINI_API_KEY)
     logger.info("Gemini service initialised")
 
+    # ---- Background auto-publisher (Instagram scheduled reels) ----
+    import asyncio
+    from app.services.auto_publisher import run_auto_publisher
+
+    global _auto_publisher_task
+    _auto_publisher_task = asyncio.create_task(run_auto_publisher(db, r2_service))
+    logger.info("Background auto-publisher started")
+
     yield
 
     # ---- Shutdown ----
+    if _auto_publisher_task and not _auto_publisher_task.done():
+        _auto_publisher_task.cancel()
+        try:
+            await _auto_publisher_task
+        except asyncio.CancelledError:
+            pass
     await close_db()
     logger.info("Database connection closed")
 
@@ -126,8 +141,8 @@ async def health_check():
 async def api_schema():
     """Full API schema with request/response examples for every endpoint."""
     return {
-        "service": "YouTube Automation Server",
-        "version": "1.0.0",
+        "service": "Video Automation Server",
+        "version": "2.0.0",
         "auth": {
             "header": "X-API-Key",
             "required_for": "/api/v1/*",
@@ -196,7 +211,7 @@ async def api_schema():
                 "group": "Channels",
                 "method": "POST",
                 "path": "/api/v1/channels/{channel_id}/refresh",
-                "description": "Re-fetch channel name and stats from YouTube",
+                "description": "Re-fetch channel name and stats from the channel's platform (YouTube or Instagram)",
                 "request": None,
                 "response": {"channel_id": "ch1", "name": "Refreshed Name"},
             },
@@ -361,6 +376,7 @@ async def api_schema():
                             "status": "todo",
                             "suggested": False,
                             "youtube_video_id": None,
+                            "instagram_media_id": None,
                             "r2_object_key": None,
                             "metadata": {
                                 "views": None,
@@ -382,7 +398,7 @@ async def api_schema():
                     ],
                     "sync_status": {
                         "available": True,
-                        "youtube_total": 60,
+                        "platform_total": 60,
                         "in_database": 55,
                         "new_videos_to_import": 5,
                         "pending_reconciliation": 2,
@@ -449,7 +465,7 @@ async def api_schema():
                 "group": "Videos",
                 "method": "POST",
                 "path": "/api/v1/channels/{channel_id}/videos/{video_id}/schedule",
-                "description": "Schedule video(s) on YouTube. Pass video_id='all' to schedule everything in the ready queue.",
+                "description": "Schedule video(s) on the channel's platform (YouTube upload or Instagram queue). Pass video_id='all' to schedule everything in the ready queue.",
                 "request": None,
                 "response": {
                     "ok": True,
@@ -469,7 +485,7 @@ async def api_schema():
                 "group": "Videos",
                 "method": "POST",
                 "path": "/api/v1/channels/{channel_id}/videos/sync",
-                "description": "Sync from YouTube: refresh metadata, reconcile scheduled→published, import new videos",
+                "description": "Sync from platform (YouTube or Instagram): refresh metadata, reconcile statuses, import new videos",
                 "request": {"new_category_description": "Optional Gemini instructions"},
                 "response": {
                     "ok": True,

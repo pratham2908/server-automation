@@ -569,10 +569,16 @@ async def add_competitor(
     body: CompetitorCreate,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Add a competitor to a channel."""
+    """Add a competitor to a channel (YouTube channels only)."""
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
+
+    if channel.get("platform", "youtube") != "youtube":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Competitor tracking is only supported for YouTube channels",
+        )
 
     existing = await db.competitors.find_one({
         "channel_id": channel_id,

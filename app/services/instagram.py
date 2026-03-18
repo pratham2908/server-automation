@@ -114,6 +114,118 @@ class InstagramService:
         return insights
 
     # ------------------------------------------------------------------
+    # Publishing (Reels)
+    # ------------------------------------------------------------------
+
+    def _post(self, endpoint: str, params: dict | None = None) -> dict:
+        params = params or {}
+        params["access_token"] = self._token
+        resp = requests.post(f"{_GRAPH_BASE}/{endpoint}", params=params, timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_reel_container(
+        self,
+        ig_user_id: str,
+        caption: str,
+        *,
+        upload_type: str = "resumable",
+    ) -> dict[str, str]:
+        """Create a Reel media container for resumable upload.
+
+        Returns ``{"container_id": "...", "upload_uri": "..."}``.
+        """
+        params: dict[str, str] = {
+            "media_type": "REELS",
+            "upload_type": upload_type,
+            "caption": caption,
+        }
+        data = self._post(f"{ig_user_id}/media", params)
+        container_id = data.get("id", "")
+        upload_uri = data.get("uri", "")
+        logger.info(
+            "Created reel container %s for IG user %s", container_id, ig_user_id,
+        )
+        return {"container_id": container_id, "upload_uri": upload_uri}
+
+    def upload_video_to_container(self, upload_uri: str, file_path: str) -> None:
+        """Stream a video file to the Instagram resumable upload endpoint."""
+        import os
+
+        file_size = os.path.getsize(file_path)
+        headers = {
+            "Authorization": f"OAuth {self._token}",
+            "offset": "0",
+            "file_size": str(file_size),
+        }
+        with open(file_path, "rb") as f:
+            resp = requests.post(
+                upload_uri,
+                headers=headers,
+                data=f,
+                timeout=600,
+            )
+        resp.raise_for_status()
+        logger.info("Uploaded video (%d bytes) to %s", file_size, upload_uri[:80])
+
+    def check_container_status(self, container_id: str) -> str:
+        """Poll container processing status.
+
+        Returns the ``status_code`` string (e.g. ``"FINISHED"``,
+        ``"IN_PROGRESS"``, ``"ERROR"``).
+        """
+        data = self._get(container_id, {"fields": "status_code"})
+        return data.get("status_code", "UNKNOWN")
+
+    def publish_container(self, ig_user_id: str, container_id: str) -> str:
+        """Publish a processed container as a Reel.
+
+        Returns the published ``media_id``.
+        """
+        data = self._post(
+            f"{ig_user_id}/media_publish",
+            {"creation_id": container_id},
+        )
+        media_id = data.get("id", "")
+        logger.success("Published reel %s for IG user %s", media_id, ig_user_id)
+        return media_id
+
+    def publish_reel(
+        self,
+        ig_user_id: str,
+        file_path: str,
+        caption: str,
+        *,
+        poll_interval: float = 5.0,
+        max_polls: int = 60,
+    ) -> str:
+        """End-to-end reel publish: create container, upload, wait, publish.
+
+        Returns the published ``media_id``.  Raises on timeout or error.
+        """
+        import time
+
+        container = self.create_reel_container(ig_user_id, caption)
+        cid = container["container_id"]
+        uri = container["upload_uri"]
+
+        self.upload_video_to_container(uri, file_path)
+
+        for _ in range(max_polls):
+            st = self.check_container_status(cid)
+            if st == "FINISHED":
+                break
+            if st == "ERROR":
+                raise RuntimeError(f"Instagram container {cid} processing failed")
+            time.sleep(poll_interval)
+        else:
+            raise TimeoutError(
+                f"Instagram container {cid} not ready after {max_polls * poll_interval}s"
+            )
+
+        return self.publish_container(ig_user_id, cid)
+
+    # ------------------------------------------------------------------
     # Token refresh
     # ------------------------------------------------------------------
 

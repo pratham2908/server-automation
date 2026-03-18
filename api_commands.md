@@ -639,7 +639,7 @@ Content params are custom dimensions for classifying videos. Manage them with th
 }
 ```
 
-- **Description**: Schedules video(s) on YouTube. Computes `scheduled_at` publish times from the channel's `best_posting_times` analysis (unless manually provided in the request body), downloads from R2, uploads to YouTube as private with `publishAt`. **Only on success**: removes from the ready queue, adds to the scheduled queue, status → `scheduled`. Requires an analysis with `best_posting_times` and a YouTube token.
+- **Description**: Schedules video(s) on the channel's platform. Computes `scheduled_at` publish times from the channel's `best_posting_times` analysis (unless manually provided). **YouTube**: downloads from R2, uploads to YouTube as private with `publishAt` immediately. **Instagram**: queues for the background auto-publisher (polls every 5 min) which uploads and publishes the reel when `scheduled_at` arrives. Requires an analysis with `best_posting_times` and a valid platform token.
 - **Response**:
 
 ```json

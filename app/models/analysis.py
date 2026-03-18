@@ -49,10 +49,11 @@ class VideoAnalysis(BaseModel):
     channel_id: str
     video_id: str
     youtube_video_id: Optional[str] = None
+    instagram_media_id: Optional[str] = None
     title: str = ""
     category: str = ""
     content_params: Optional[dict[str, str]] = None
-    published_at: Optional[datetime] = None  # when the video was published on YouTube
+    published_at: Optional[datetime] = None
     stats_snapshot: dict[str, Any] = Field(default_factory=dict)
     ai_insight: dict[str, Any] = Field(default_factory=dict)
     analyzed_at: datetime = Field(default_factory=now_ist)

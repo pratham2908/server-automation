@@ -521,7 +521,11 @@ async def extract_content_params(
             detail="Channel has no content params defined — add them via POST /channels/{channel_id}/content-params",
         )
 
-    prompt = f"""You are a YouTube content analyst. Extract content parameter values for this video.
+    channel_doc = await db.channels.find_one({"channel_id": channel_id})
+    platform = (channel_doc or {}).get("platform", "youtube")
+    persona = "YouTube content analyst" if platform == "youtube" else "Instagram Reels content analyst"
+
+    prompt = f"""You are a {persona}. Extract content parameter values for this video.
 
 ## Content Parameter Schema
 Each parameter below defines a dimension to classify the video by.
@@ -611,10 +615,15 @@ async def extract_all_content_params(
 
     if not videos:
         return {"ok": True, "extracted": 0, "message": "All videos already have content_params"}
+
+    channel_doc = await db.channels.find_one({"channel_id": channel_id})
+    platform = (channel_doc or {}).get("platform", "youtube")
+    persona = "YouTube content analyst" if platform == "youtube" else "Instagram Reels content analyst"
+
     extracted = 0
 
     for video in videos:
-        prompt = f"""You are a YouTube content analyst. Extract content parameter values for this video.
+        prompt = f"""You are a {persona}. Extract content parameter values for this video.
 
 ## Content Parameter Schema
 {json.dumps(schema_defs, indent=2)}
@@ -793,7 +802,7 @@ async def upload_video(
 
 
 # ------------------------------------------------------------------
-# POST /{video_id}/schedule  –  schedule video(s) on YouTube
+# POST /{video_id}/schedule  –  schedule video(s) on platform
 # ------------------------------------------------------------------
 
 
@@ -811,31 +820,53 @@ async def schedule_video(
     body: Optional[ScheduleRequest] = None,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Schedule video(s) from the **ready queue** on YouTube.
+    """Schedule video(s) from the **ready queue** on the platform.
 
     - Pass a specific ``video_id`` to schedule one video.
     - Pass ``"all"`` as ``video_id`` to schedule every video in the ready queue.
     - Optionally pass ``scheduled_at`` in the body to manually pick the time (only for single videos).
 
-    For each video the operation:
-    1. Computes a publish slot from the channel's ``best_posting_times`` (if not manually provided).
-    2. Downloads the file from R2.
-    3. Uploads to YouTube as private with ``publishAt``.
-    4. **Only on success**: removes from the ready queue, inserts into
-       the scheduled queue, sets status to ``scheduled``.
+    **YouTube**: uploads to YouTube as private with ``publishAt`` immediately.
+    **Instagram**: queues for the background auto-publisher which uploads
+    and publishes the reel when ``scheduled_at`` arrives.
     """
     from app.config import get_settings
     from app.services.scheduler import compute_schedule_slots
-    from app.services.schedule_operation import schedule_single_video
+    from app.services.schedule_operation import (
+        schedule_single_video,
+        schedule_single_video_instagram,
+    )
 
     settings = get_settings()
     r2_service = _get_r2()
-    youtube_service, _ = await _get_services(channel_id)
 
-    if youtube_service is None:
+    channel_doc = await db.channels.find_one({"channel_id": channel_id})
+    if not channel_doc:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"No YouTube token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/youtube-token",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    platform = channel_doc.get("platform", "youtube")
+
+    if platform == "youtube":
+        youtube_service, _ = await _get_services(channel_id)
+        if youtube_service is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"No YouTube token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/youtube-token",
+            )
+    elif platform == "instagram":
+        ig_service = await _get_instagram_service(channel_id)
+        if ig_service is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"No Instagram token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/instagram-token",
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported platform '{platform}'",
         )
 
     # ---- Collect the videos to schedule ----
@@ -884,10 +915,8 @@ async def schedule_video(
     manual_dt = body.scheduled_at if (body and not is_all) else None
 
     if manual_dt:
-        # Use the provided manual time.
         slots = [manual_dt]
     else:
-        # ---- Fetch best_posting_times from the latest analysis ----
         analysis = await db.analysis.find_one({"channel_id": channel_id})
         if not analysis or not analysis.get("best_posting_times"):
             raise HTTPException(
@@ -895,13 +924,11 @@ async def schedule_video(
                 detail="No analysis with best_posting_times found — run analysis first",
             )
 
-        # ---- Gather already-occupied slots from existing scheduled queue ----
         existing_scheduled = await db.schedule_queue.find(
             {"channel_id": channel_id}
         ).to_list(length=None)
         occupied_datetimes = [e.get("scheduled_at") for e in existing_scheduled]
 
-        # Compute slots using the scheduler logic.
         slots = compute_schedule_slots(
             best_posting_times=analysis["best_posting_times"],
             occupied_datetimes=occupied_datetimes,
@@ -915,27 +942,36 @@ async def schedule_video(
             detail=f"Could only find {len(slots)} available slots for {len(videos_to_schedule)} videos — not enough posting slots in analysis",
         )
 
-    # ---- Schedule each video (upload to YouTube) ----
+    # ---- Schedule each video ----
     results = []
     scheduled = 0
     failed = 0
 
     for video_doc, slot_dt in zip(videos_to_schedule, slots):
-        result = await schedule_single_video(
-            db=db,
-            r2_service=r2_service,
-            youtube_service=youtube_service,
-            channel_id=channel_id,
-            video_doc=video_doc,
-            scheduled_at=slot_dt,
-        )
+        if platform == "youtube":
+            result = await schedule_single_video(
+                db=db,
+                r2_service=r2_service,
+                youtube_service=youtube_service,
+                channel_id=channel_id,
+                video_doc=video_doc,
+                scheduled_at=slot_dt,
+            )
+        else:
+            result = await schedule_single_video_instagram(
+                db=db,
+                channel_id=channel_id,
+                video_doc=video_doc,
+                scheduled_at=slot_dt,
+            )
         results.append(result)
         if result["status"] == "scheduled":
             scheduled += 1
         else:
             failed += 1
 
-    logger.success("📅 Scheduled %d video(s) for channel '%s' (%d failed)", scheduled, channel_id, failed)
+    platform_label = "YouTube" if platform == "youtube" else "Instagram"
+    logger.success("Scheduled %d video(s) for %s channel '%s' (%d failed)", scheduled, platform_label, channel_id, failed)
 
     return {
         "ok": True,
@@ -1056,18 +1092,22 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
 
 
 async def _extract_params_and_categorize_batch(
-    gemini_service, content_schema, existing_categories, batch, category_instructions=""
+    gemini_service, content_schema, existing_categories, batch,
+    category_instructions="", platform="youtube",
 ):
     """Extract content params AND derive category for a batch of videos in one Gemini call.
 
-    Returns a list of dicts:
-    [{"youtube_video_id": "...", "content_params": {...}, "category": "..."}]
+    Returns a list of dicts with the platform-specific ID key
+    (``youtube_video_id`` or ``instagram_media_id``).
     """
     import json
 
+    id_key = "youtube_video_id" if platform == "youtube" else "instagram_media_id"
+    persona = "YouTube channel analyst" if platform == "youtube" else "Instagram Reels analyst"
+
     video_summaries = [
         {
-            "youtube_video_id": v["youtube_video_id"],
+            id_key: v.get(id_key, v.get("youtube_video_id", v.get("instagram_media_id", ""))),
             "title": v["title"],
             "description": v["description"][:500],
             "tags": v["tags"][:15],
@@ -1094,7 +1134,7 @@ async def _extract_params_and_categorize_batch(
             f"Only create a new category if NONE of the above fit."
         )
 
-    prompt = f"""You are a YouTube channel analyst. For each video below:
+    prompt = f"""You are a {persona}. For each video below:
 1. Extract content parameter values based on the schema.
 2. Derive a category from those extracted parameters (NOT from title/description/tags directly).
 
@@ -1109,7 +1149,7 @@ async def _extract_params_and_categorize_batch(
 {f"## Additional Instructions" + chr(10) + category_instructions if category_instructions else ""}
 
 Return a JSON array:
-[{{"youtube_video_id": "...", "content_params": {{"param1": "value1", "music": "..."}}, "category": "..."}}]
+[{{"{id_key}": "...", "content_params": {{"param1": "value1", "music": "..."}}, "category": "..."}}]
 
 Reuse existing categories. Only create new ones if truly needed."""
 
@@ -1614,7 +1654,7 @@ async def _sync_instagram_reels(
         title = lines[0][:100] if lines else "Untitled"
         tags = [w.strip("#") for w in caption.split() if w.startswith("#")]
         ig_videos_for_gemini.append({
-            "youtube_video_id": reel["id"],  # reuse field name for the batch helper
+            "instagram_media_id": reel["id"],
             "title": title,
             "description": caption,
             "tags": tags[:15],
@@ -1631,9 +1671,10 @@ async def _sync_instagram_reels(
         results = await _extract_params_and_categorize_batch(
             gemini_service, content_schema, existing_cats, batch,
             category_instructions=body.new_category_description if body else "",
+            platform="instagram",
         )
         for r in results:
-            mid = r.get("youtube_video_id", "")
+            mid = r.get("instagram_media_id", "")
             cat = r.get("category", "Uncategorized")
             params = r.get("content_params", {})
             categorizations[mid] = {"category": cat, "content_params": params}

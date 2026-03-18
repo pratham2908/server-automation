@@ -365,6 +365,9 @@ async def compare_periods(
                 "avg_percentage_viewed": 0,
                 "avg_views_per_subscriber": 0,
                 "total_subscribers_gained": 0,
+                "avg_shares": 0,
+                "avg_saves": 0,
+                "avg_reach": 0,
                 "avg_performance_rating": 0,
             }
 
@@ -390,6 +393,9 @@ async def compare_periods(
             "avg_percentage_viewed": _safe_avg("avg_percentage_viewed"),
             "avg_views_per_subscriber": _safe_avg("views_per_subscriber"),
             "total_subscribers_gained": total_subs,
+            "avg_shares": _safe_avg("shares"),
+            "avg_saves": _safe_avg("saves"),
+            "avg_reach": _safe_avg("reach"),
             "avg_performance_rating": avg_rating,
         }
 
