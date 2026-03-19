@@ -238,7 +238,7 @@ class GeminiService:
         if platform == "instagram":
             persona = "Instagram Reels analytics expert"
             stats_desc = (
-                "Instagram Reels performance metrics including `views` (plays), `likes`, `comments`, "
+                "Instagram Reels performance metrics including `views`, `likes`, `comments`, "
                 "`shares`, `saves`, `reach`, and `views_per_subscriber` (reach beyond existing followers)."
             )
         else:
@@ -329,7 +329,7 @@ Guidelines:
         if platform == "instagram":
             persona = "Instagram Reels performance analyst"
             metrics_section = """## What Each Metric Means
-- **views**: Total plays / views.
+- **views**: Total views of the reel.
 - **likes**, **comments**: Raw engagement counts.
 - **shares**: Number of times the reel was shared — strong viral signal.
 - **saves**: Number of times the reel was saved — indicates high-value content.

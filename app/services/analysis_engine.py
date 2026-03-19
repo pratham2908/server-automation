@@ -181,7 +181,7 @@ async def run_analysis(
             meta = v.get("metadata") or {}
             reel_insight = ig_insights.get(ig_id, {}) if ig_id else {}
             stats = {
-                "views": reel_insight.get("plays") or meta.get("views", 0),
+                "views": reel_insight.get("views") or meta.get("views", 0),
                 "likes": meta.get("likes", 0),
                 "comments": meta.get("comments", 0),
                 "shares": reel_insight.get("shares") or meta.get("shares", 0),

@@ -1602,14 +1602,14 @@ async def _sync_instagram_reels(
         if mid not in existing_ig_ids:
             continue
         reel_insights = insights.get(mid, {})
-        plays = reel_insights.get("plays", reel.get("like_count", 0))
+        views = reel_insights.get("views", reel.get("like_count", 0))
         like_count = reel.get("like_count", 0)
         comments_count = reel.get("comments_count", 0)
         shares = reel_insights.get("shares", 0)
         saves = reel_insights.get("saved", 0)
         reach_val = reel_insights.get("reach", 0)
 
-        rates = _compute_rates(plays, like_count, comments_count)
+        rates = _compute_rates(views, like_count, comments_count)
         ig_engagement = None
         if reach_val and reach_val > 0:
             ig_engagement = round((like_count + comments_count + shares + saves) / reach_val * 100, 4)
@@ -1618,7 +1618,7 @@ async def _sync_instagram_reels(
             {"channel_id": channel_id, "instagram_media_id": mid},
             {
                 "$set": {
-                    "metadata.views": plays,
+                    "metadata.views": views,
                     "metadata.likes": like_count,
                     "metadata.comments": comments_count,
                     "metadata.shares": shares,
@@ -1734,14 +1734,14 @@ async def _sync_instagram_reels(
         title = lines[0][:100] if lines else "Untitled"
         tags = [w.strip("#") for w in caption.split() if w.startswith("#")]
 
-        plays = reel_insights.get("plays", 0)
+        views = reel_insights.get("views", 0)
         like_count = reel.get("like_count", 0)
         comments_count = reel.get("comments_count", 0)
         shares = reel_insights.get("shares", 0)
         saves = reel_insights.get("saved", 0)
         reach_val = reel_insights.get("reach", 0)
 
-        rates = _compute_rates(plays, like_count, comments_count)
+        rates = _compute_rates(views, like_count, comments_count)
         ig_engagement = None
         if reach_val and reach_val > 0:
             ig_engagement = round((like_count + comments_count + shares + saves) / reach_val * 100, 4)
@@ -1769,7 +1769,7 @@ async def _sync_instagram_reels(
             "instagram_media_id": mid,
             "r2_object_key": None,
             "metadata": {
-                "views": plays,
+                "views": views,
                 "likes": like_count,
                 "comments": comments_count,
                 "shares": shares,

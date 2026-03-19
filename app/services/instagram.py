@@ -17,7 +17,7 @@ from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
-_GRAPH_BASE = "https://graph.facebook.com/v21.0"
+_GRAPH_BASE = "https://graph.facebook.com/v25.0"
 
 
 class InstagramService:
@@ -92,12 +92,12 @@ class InstagramService:
         return reels
 
     def get_reel_insights(self, media_ids: list[str]) -> dict[str, dict[str, Any]]:
-        """Fetch per-reel insights (plays, reach, saved, shares).
+        """Fetch per-reel insights (views, reach, saved, shares).
 
         Returns a dict keyed by ``media_id``.
         """
         insights: dict[str, dict[str, Any]] = {}
-        metrics = "plays,reach,saved,shares,total_interactions"
+        metrics = "views,reach,saved,shares,total_interactions"
 
         for mid in media_ids:
             try:
