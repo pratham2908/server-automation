@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field
 
 from app.database import get_db
 from app.dependencies import verify_api_key
+from app.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 router = APIRouter(
