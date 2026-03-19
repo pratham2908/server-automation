@@ -625,6 +625,21 @@ Content params are custom dimensions for classifying videos. Manage them with th
 - **Description**: Uploads the video file to R2 for an existing `todo` video, changing its status to `ready` and placing it in the ready queue.
 - **Response**: Returns the updated Video object (status becomes `ready`) and `queue_position`.
 
+### Create Ad-hoc Video
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/videos/create`
+- **Method**: `POST`
+- **Content-Type**: `multipart/form-data`
+- **Form Fields**:
+  - `file` (required): The video file.
+  - `title` (required): Video title.
+  - `description` (optional): Video description.
+  - `tags` (optional): Comma-separated string or JSON array.
+  - `category` (optional): Category name. If omitted, defaults to `"Uncategorized"`.
+  - `content_params` (optional): JSON string of key-value content parameters.
+- **Description**: Creates an ad-hoc (unplanned) video directly in `ready` status, uploads the file to R2, and adds it to the posting queue. If both `category` and `content_params` are provided, the video is marked `verified`. Otherwise it is `unverified` with `category: "Uncategorized"` and `content_params: null` — the next sync will run Gemini extraction on it.
+- **Response**: Returns the created Video object and `queue_position`.
+
 ### Schedule Ready Video(s)
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}/schedule`
@@ -677,8 +692,8 @@ Content params are custom dimensions for classifying videos. Manage them with th
 ```
 
 - **What it does** (auto-detects platform from channel's `platform` field):
-  - **YouTube**: Fetches all videos from the YouTube channel, refreshes metadata, reconciles scheduled→published, imports new videos with content params + category via Gemini
-  - **Instagram**: Fetches all reels via Graph API, fetches per-reel insights (plays, reach, saves, shares), refreshes metrics for existing reels, imports new reels with content params + category via Gemini. Title is extracted from the first line of the caption, hashtags become tags
+  - **YouTube**: Fetches all videos from the YouTube channel, refreshes metadata, reconciles scheduled→published, imports new videos with content params + category via Gemini. Also processes any existing unverified videos (e.g. ad-hoc uploads) through Gemini extraction.
+  - **Instagram**: Fetches all reels via Graph API, fetches per-reel insights (views, reach, saves, shares), refreshes metrics for existing reels, imports new reels with content params + category via Gemini. Title is extracted from the first line of the caption, hashtags become tags. Also processes any existing unverified videos through Gemini extraction.
 
 - **Response**:
 
@@ -690,6 +705,7 @@ Content params are custom dimensions for classifying videos. Manage them with th
   "synced_scheduled": 1,
   "reconciled": 2,
   "metadata_refreshed": 45,
+  "unverified_extracted": 2,
   "categories_created": ["Tutorials"],
   "videos": [{ "title": "New Video Title", "category": "Tutorials", "status": "published" }]
 }

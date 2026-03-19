@@ -522,6 +522,7 @@ Fetches all videos/reels from the channel's platform, finds any not already in t
 7. Auto-creates categories and **updates video counts** for all newly imported/reconciled videos.
 8. **Detects scheduled videos** — if a video has `status.publishAt` set to a future time, it is inserted as `scheduled` (not `published`) with `scheduled_at` set to that time, and an entry is added to the `schedule_queue`. This correctly recognises videos that were uploaded to YouTube with a future publish time.
 9. Remaining videos are inserted as `published` with full metadata.
+10. **Processes unverified videos** — finds any existing videos in the DB with `verification_status: "unverified"` and `content_params: null` (e.g. ad-hoc uploads via `POST /create`), runs them through Gemini extraction to derive their category and content parameters.
 
 **Response (200):**
 
@@ -716,6 +717,38 @@ Uploads a video file for an existing `todo` video, streams it to Cloudflare R2, 
 {
   "ok": true,
   "video": { ...full video document... },
+  "queue_position": 3
+}
+```
+
+---
+
+#### `POST /create` — Create ad-hoc video
+
+Creates an unplanned video directly in `ready` status, uploads the file to R2, and adds it to the posting queue. Bypasses the `todo` stage entirely.
+
+**Request:** `multipart/form-data`
+
+| Field            | Type          | Required | Description                                               |
+| ---------------- | ------------- | -------- | --------------------------------------------------------- |
+| `file`           | File (binary) | Yes      | The video file                                            |
+| `title`          | string        | Yes      | Video title                                               |
+| `description`    | string        | No       | Video description (default `""`)                          |
+| `tags`           | string        | No       | Comma-separated or JSON array (default `[]`)              |
+| `category`       | string        | No       | Category name (default `"Uncategorized"`)                 |
+| `content_params` | JSON string   | No       | Key-value content parameters                              |
+
+**Verification logic:**
+
+- If both `category` and `content_params` are provided → `verification_status: "verified"`
+- Otherwise → `verification_status: "unverified"`, `category: "Uncategorized"`, `content_params: null`. The next sync will run Gemini extraction on it.
+
+**Response (201):**
+
+```json
+{
+  "ok": true,
+  "video": { "...full video document..." },
   "queue_position": 3
 }
 ```
@@ -1734,12 +1767,13 @@ To-do video generation is triggered separately via the `/updateToDoList` endpoin
 ```mermaid
 stateDiagram-v2
     [*] --> todo: Gemini generates idea\n(updateToDoList)
+    [*] --> ready: Ad-hoc upload\n(POST /create)
     todo --> ready: Client uploads file\n(POST /upload)
     ready --> scheduled: Server uploads to YouTube\nwith publishAt\n(POST /schedule)
     scheduled --> published: YouTube auto-publishes\nat scheduled time\n(reconciled by /sync)
 
     note right of todo: Idea only.\nNo file exists yet.
-    note right of ready: File in R2.\nSitting in ready queue.
+    note right of ready: File in R2.\nSitting in ready queue.\nAd-hoc videos may be unverified\n(Gemini extracts on next sync).
     note right of scheduled: Private on YouTube\nwith publishAt set.\nSitting in scheduled queue.
     note right of published: Live on YouTube.\nQueue entries removed.
 ```

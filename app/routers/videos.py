@@ -9,7 +9,7 @@ from app.timezone import now_ist, to_ist_iso
 from dateutil.parser import isoparse
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, File, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
@@ -802,6 +802,112 @@ async def upload_video(
 
 
 # ------------------------------------------------------------------
+# POST /create  –  create ad-hoc video, upload to R2, mark ready
+# ------------------------------------------------------------------
+
+
+@router.post("/create", status_code=status.HTTP_201_CREATED)
+async def create_video(
+    channel_id: str,
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    description: str = Form(""),
+    tags: str = Form(""),
+    category: Optional[str] = Form(None),
+    content_params: Optional[str] = Form(None),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Create an ad-hoc video, upload its file to R2, and add to posting queue.
+
+    If ``category`` and ``content_params`` are provided the video is marked
+    ``verified``.  Otherwise it is created as ``unverified`` with category
+    ``Uncategorized`` — the next sync will run Gemini extraction on it.
+    """
+    import json as _json
+
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+
+    # Parse tags (comma-separated or JSON array)
+    parsed_tags: list[str] = []
+    if tags:
+        tags_stripped = tags.strip()
+        if tags_stripped.startswith("["):
+            try:
+                parsed_tags = _json.loads(tags_stripped)
+            except _json.JSONDecodeError:
+                parsed_tags = [t.strip() for t in tags_stripped.split(",") if t.strip()]
+        else:
+            parsed_tags = [t.strip() for t in tags_stripped.split(",") if t.strip()]
+
+    # Parse content_params (JSON string)
+    parsed_params: dict | None = None
+    if content_params:
+        try:
+            parsed_params = _json.loads(content_params)
+        except _json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="content_params must be a valid JSON object",
+            )
+
+    is_verified = bool(category and parsed_params)
+
+    vid_id = str(uuid.uuid4())
+    r2 = _get_r2()
+    r2_key = f"{channel_id}/{vid_id}.mp4"
+    r2.upload_video(file.file, r2_key)
+
+    now = now_ist()
+    doc = {
+        "channel_id": channel_id,
+        "video_id": vid_id,
+        "title": title,
+        "description": description,
+        "tags": parsed_tags,
+        "category": category or "Uncategorized",
+        "status": "ready",
+        "suggested": False,
+        "youtube_video_id": None,
+        "instagram_media_id": None,
+        "r2_object_key": r2_key,
+        "metadata": {"views": None, "engagement": None, "avg_percentage_viewed": None},
+        "content_params": parsed_params,
+        "verification_status": "verified" if is_verified else "unverified",
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.videos.insert_one(doc)
+    doc.pop("_id", None)
+
+    # Add to posting queue.
+    last = await db.posting_queue.find_one(
+        {"channel_id": channel_id},
+        sort=[("position", -1)],
+    )
+    next_pos = (last["position"] + 1) if last else 1
+    await db.posting_queue.insert_one(
+        {
+            "channel_id": channel_id,
+            "video_id": vid_id,
+            "position": next_pos,
+            "added_at": now,
+        }
+    )
+
+    logger.success(
+        "Created ad-hoc video '%s' — status=ready, verified=%s, queue position %d",
+        title[:50], is_verified, next_pos,
+    )
+
+    return {"ok": True, "video": doc, "queue_position": next_pos}
+
+
+# ------------------------------------------------------------------
 # POST /{video_id}/schedule  –  schedule video(s) on platform
 # ------------------------------------------------------------------
 
@@ -1161,6 +1267,96 @@ Reuse existing categories. Only create new ones if truly needed."""
         return []
 
 
+async def _process_unverified_videos(
+    channel_id: str,
+    gemini_service,
+    body,
+    db,
+    *,
+    existing_cats: list[str] | None = None,
+    content_schema: str | None = None,
+) -> int:
+    """Find unverified videos in DB and run Gemini extraction on them.
+
+    Returns the number of videos processed.
+    """
+    unverified_docs = await db.videos.find(
+        {"channel_id": channel_id, "verification_status": "unverified", "content_params": None},
+    ).to_list(length=None)
+
+    if not unverified_docs:
+        return 0
+
+    logger.info(
+        "Found %d unverified video(s) — running Gemini extraction...",
+        len(unverified_docs),
+        extra={"color": "MAGENTA"},
+    )
+
+    if content_schema is None:
+        from app.database import get_content_schema_for_prompt
+        content_schema = await get_content_schema_for_prompt(db, channel_id)
+
+    if existing_cats is None:
+        existing_cats = [
+            c["name"]
+            async for c in db.categories.find({"channel_id": channel_id}, {"name": 1})
+        ]
+
+    BATCH_SIZE = 5
+    uv_batch_items = [
+        {
+            "youtube_video_id": doc["video_id"],
+            "title": doc.get("title", ""),
+            "description": doc.get("description", "")[:500],
+            "tags": doc.get("tags", [])[:15],
+        }
+        for doc in unverified_docs
+    ]
+
+    updated = 0
+    for i in range(0, len(uv_batch_items), BATCH_SIZE):
+        batch = uv_batch_items[i : i + BATCH_SIZE]
+        results = await _extract_params_and_categorize_batch(
+            gemini_service, content_schema, existing_cats, batch,
+            category_instructions=body.new_category_description if body else "",
+        )
+        for r in results:
+            vid_id = r.get("youtube_video_id", "")
+            cat = r.get("category", "Uncategorized")
+            params = r.get("content_params", {})
+
+            if cat not in existing_cats:
+                existing_cats.append(cat)
+                await db.categories.insert_one({
+                    "channel_id": channel_id,
+                    "name": cat,
+                    "description": "",
+                    "raw_description": "",
+                    "score": 0,
+                    "status": "active",
+                    "video_count": 0,
+                    "metadata": {"total_videos": 0},
+                    "created_at": now_ist(),
+                    "updated_at": now_ist(),
+                })
+                logger.success("Created new category: '%s'", cat)
+
+            await db.videos.update_one(
+                {"channel_id": channel_id, "video_id": vid_id},
+                {"$set": {
+                    "category": cat,
+                    "content_params": params if params else None,
+                    "verification_status": "unverified",
+                    "updated_at": now_ist(),
+                }},
+            )
+            updated += 1
+
+    logger.success("Extracted params for %d unverified video(s).", updated)
+    return updated
+
+
 class SyncRequest(BaseModel):
     """Optional body for the sync endpoint."""
     new_category_description: Optional[str] = Field(
@@ -1349,11 +1545,16 @@ async def sync_videos(
     )
 
     if not new_videos:
+        # Still process any unverified videos in the DB.
+        uv_result = await _process_unverified_videos(
+            channel_id, gemini_service, body, db,
+        )
         return {
             "ok": True,
             "synced": 0,
             "reconciled": reconciled,
             "metadata_refreshed": metadata_updated,
+            "unverified_extracted": uv_result,
             "message": f"All {len(all_yt_videos)} videos already in DB — metadata refreshed",
             "videos": [],
         }
@@ -1519,6 +1720,13 @@ async def sync_videos(
         for cat_name in affected_cats:
             await recompute_category(channel_id, cat_name, db)
 
+    # Process unverified videos already in the DB (e.g. ad-hoc uploads).
+    unverified_updated = await _process_unverified_videos(
+        channel_id, gemini_service, body, db,
+        existing_cats=existing_cats,
+        content_schema=content_schema,
+    )
+
     # Build per-video summary.
     video_summary = [
         {"title": d["title"], "category": d["category"], "status": d["status"]}
@@ -1541,6 +1749,7 @@ async def sync_videos(
         "synced_scheduled": scheduled_count,
         "reconciled": reconciled,
         "metadata_refreshed": metadata_updated,
+        "unverified_extracted": unverified_updated,
         "categories_created": [
             c for c in existing_cats
         ],
@@ -1656,10 +1865,14 @@ async def _sync_instagram_reels(
     )
 
     if not new_reels:
+        uv_result = await _process_unverified_videos(
+            channel_id, gemini_service, body, db,
+        )
         return {
             "ok": True,
             "synced": 0,
             "metadata_refreshed": metadata_updated,
+            "unverified_extracted": uv_result,
             "message": f"All {len(reels)} reels already in DB — metrics refreshed",
             "videos": [],
         }
@@ -1797,6 +2010,13 @@ async def _sync_instagram_reels(
         for cat_name in affected_cats:
             await recompute_category(channel_id, cat_name, db)
 
+    # Process unverified videos already in the DB (e.g. ad-hoc uploads).
+    unverified_updated = await _process_unverified_videos(
+        channel_id, gemini_service, body, db,
+        existing_cats=existing_cats,
+        content_schema=content_schema,
+    )
+
     video_summary = [
         {"title": d["title"], "category": d["category"], "status": d["status"]}
         for d in docs
@@ -1812,6 +2032,7 @@ async def _sync_instagram_reels(
         "ok": True,
         "synced": len(docs),
         "metadata_refreshed": metadata_updated,
+        "unverified_extracted": unverified_updated,
         "categories_created": existing_cats,
         "videos": video_summary,
     }
