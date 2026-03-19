@@ -56,12 +56,14 @@ class ChannelCreate(BaseModel):
     """Payload for registering a new channel.
 
     For YouTube: ``youtube_channel_id`` is required.
-    For Instagram: ``instagram_user_id`` is required.
+    For Instagram: ``instagram_user_id`` and ``access_token`` are required.
     """
 
     platform: str = Field("youtube", description="'youtube' or 'instagram'")
     youtube_channel_id: Optional[str] = Field(None, description="YouTube UC... channel ID (required for youtube)")
     instagram_user_id: Optional[str] = Field(None, description="Instagram user ID (required for instagram)")
+    access_token: Optional[str] = Field(None, description="Long-lived Instagram access token (required for instagram)")
+    expires_at: Optional[str] = Field(None, description="ISO 8601 token expiry datetime (optional, for instagram)")
     channel_id: Optional[str] = Field(
         None, description="Custom internal slug. Auto-generated if omitted."
     )
@@ -218,34 +220,26 @@ async def _create_instagram_channel(
     body: ChannelCreate,
     db: AsyncIOMotorDatabase,
 ) -> dict:
-    """Register a new Instagram channel by fetching account info via Graph API."""
+    """Register a new Instagram channel.
+
+    Accepts ``access_token`` directly in the request body so there is no
+    chicken-and-egg dependency on an existing channel.  The token is stored
+    on the new channel document and used immediately to fetch account info.
+    """
     if not body.instagram_user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="instagram_user_id is required for Instagram channels",
         )
-
-    mgr = _get_instagram_manager()
-
-    # Find any channel with Instagram tokens to bootstrap account info fetch
-    ig_svc = (
-        await mgr.get_service(body.channel_id) if body.channel_id else None
-    )
-    if ig_svc is None:
-        channels_with_tokens = await db.channels.find(
-            {"instagram_tokens": {"$exists": True, "$ne": None}},
-            {"channel_id": 1},
-        ).to_list(length=1)
-        for ch in channels_with_tokens:
-            ig_svc = await mgr.get_service(ch["channel_id"])
-            if ig_svc:
-                break
-
-    if ig_svc is None:
+    if not body.access_token:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="No Instagram token available. Store tokens via POST /channels/{id}/instagram-token",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="access_token is required for Instagram channels",
         )
+
+    from app.services.instagram import InstagramService
+
+    ig_svc = InstagramService(access_token=body.access_token)
 
     try:
         ig_data = ig_svc.get_account_info(body.instagram_user_id)
@@ -272,11 +266,16 @@ async def _create_instagram_channel(
             detail=f"Channel '{channel_id}' already exists",
         )
 
+    token_doc = {"access_token": body.access_token}
+    if body.expires_at:
+        token_doc["expires_at"] = body.expires_at
+
     now = now_ist()
     doc = {
         "channel_id": channel_id,
         "platform": "instagram",
         "instagram_user_id": body.instagram_user_id,
+        "instagram_tokens": token_doc,
         "name": ig_data.get("name") or ig_data.get("username", channel_id),
         "description": ig_data.get("biography", ""),
         "thumbnail_url": ig_data.get("profile_picture_url", ""),
@@ -288,6 +287,9 @@ async def _create_instagram_channel(
     }
     await db.channels.insert_one(doc)
     doc["_id"] = str(doc["_id"])
+    doc.pop("instagram_tokens", None)
+
+    logger.success("Registered Instagram channel '%s' (user_id=%s)", channel_id, body.instagram_user_id)
     return doc
 
 
