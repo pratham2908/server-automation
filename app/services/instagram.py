@@ -229,9 +229,9 @@ class InstagramService:
     # Token refresh
     # ------------------------------------------------------------------
 
-    def refresh_token(self, app_id: str, app_secret: str) -> str | None:
+    async def refresh_token(self, app_id: str, app_secret: str) -> str | None:
         """Exchange the current long-lived token for a new one (60-day window).
-
+        
         Returns the new token string, or ``None`` on failure.
         """
         try:
@@ -269,12 +269,7 @@ class InstagramService:
                         },
                     )
 
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(_save())
-                except RuntimeError:
-                    asyncio.run(_save())
-
+                await _save()
                 self._token = new_token
                 logger.info("Refreshed Instagram token for channel '%s'", self._channel_id)
             return new_token

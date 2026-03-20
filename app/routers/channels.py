@@ -776,18 +776,17 @@ async def get_youtube_token(
         except (ValueError, TypeError):
             expiry_dt = None
 
-    creds = Credentials(
-        token=tokens["token"],
-        refresh_token=tokens["refresh_token"],
-        token_uri=tokens.get("token_uri", "https://oauth2.googleapis.com/token"),
-        client_id=client_id,
-        client_secret=client_secret,
-        scopes=tokens.get("scopes"),
-        expiry=expiry_dt.replace(tzinfo=None) if expiry_dt else None,
-    )
+        creds = Credentials(
+            token=tokens["token"],
+            refresh_token=tokens["refresh_token"],
+            token_uri=tokens.get("token_uri", "https://oauth2.googleapis.com/token"),
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=tokens.get("scopes"),
+            expiry=expiry_dt,
+        )
 
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
+        if not creds.valid and creds.refresh_token:
             from google.auth.transport.requests import Request
             creds.refresh(Request())
 
@@ -993,9 +992,13 @@ async def get_instagram_token(
                     from app.services.instagram import InstagramService
 
                     svc = InstagramService(access_token, db=db, channel_id=channel_id)
-                    new_token = svc.refresh_token(app_id, app_secret)
+                    new_token = await svc.refresh_token(app_id, app_secret)
                     if new_token:
                         access_token = new_token
+                        from app.timezone import now_ist
+                        from datetime import timedelta as td_delta
+                        # Estimate new expiry since we don't return it directly from refresh_token
+                        expires_at = (now_ist() + td_delta(days=60)).isoformat()
                         mgr = _get_instagram_manager()
                         mgr.invalidate(channel_id)
         except (ValueError, TypeError):
