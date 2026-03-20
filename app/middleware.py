@@ -30,9 +30,11 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
 
         # Pre-capture headers
         headers = dict(request.headers)
-        # Remove sensitive info
-        headers.pop("x-api-key", None)
-        headers.pop("authorization", None)
+        # Mask sensitive info
+        sensitive_headers = {"x-api-key", "authorization", "cookie", "set-cookie"}
+        for key in headers:
+            if key.lower() in sensitive_headers:
+                headers[key] = "********"
 
         try:
             response = await call_next(request)
