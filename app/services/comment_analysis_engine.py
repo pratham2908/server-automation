@@ -399,6 +399,7 @@ async def aggregate_comment_analyses(
     db: AsyncIOMotorDatabase,
     channel_id: str,
     source_filter: str | None = None,
+    competitor_channel_id: str | None = None,
 ) -> dict[str, Any]:
     """Combine insights across all analyzed videos into a channel-level summary.
 
@@ -409,6 +410,8 @@ async def aggregate_comment_analyses(
     query: dict[str, Any] = {"channel_id": channel_id}
     if source_filter:
         query["source"] = source_filter
+    if competitor_channel_id:
+        query["competitor_channel_id"] = competitor_channel_id
 
     docs = await db.comment_analysis.find(query).to_list(length=None)
     if not docs:

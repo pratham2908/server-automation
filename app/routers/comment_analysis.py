@@ -142,6 +142,7 @@ async def trigger_comment_analysis(
 async def get_comment_analysis_history(
     channel_id: str,
     source: Optional[str] = Query(None, description="Filter by 'own' or 'competitor'"),
+    competitor_channel_id: Optional[str] = Query(None, description="Filter by specific competitor ID"),
     platform: Optional[str] = Query(None, description="Filter by 'youtube' or 'instagram'"),
     limit: Optional[int] = Query(None, description="Max results"),
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -150,6 +151,8 @@ async def get_comment_analysis_history(
     query: dict[str, Any] = {"channel_id": channel_id}
     if source:
         query["source"] = source
+    if competitor_channel_id:
+        query["competitor_channel_id"] = competitor_channel_id
     if platform:
         query["platform"] = platform
 
@@ -172,12 +175,17 @@ async def get_comment_analysis_history(
 async def aggregate_comment_insights(
     channel_id: str,
     source: Optional[str] = Query(None, description="Filter by 'own' or 'competitor'"),
+    competitor_channel_id: Optional[str] = Query(None, description="Filter by specific competitor ID"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Aggregate all comment analyses into a channel-level intelligence report."""
     from app.services.comment_analysis_engine import aggregate_comment_analyses
 
-    return await aggregate_comment_analyses(db, channel_id, source_filter=source)
+    return await aggregate_comment_analyses(
+        db, channel_id, 
+        source_filter=source, 
+        competitor_channel_id=competitor_channel_id
+    )
 
 
 # ------------------------------------------------------------------
