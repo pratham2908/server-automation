@@ -436,7 +436,11 @@ async def aggregate_comment_analyses(
     key_insights: set[str] = set()
 
     for d in docs:
-        analysis = d.get("analysis", {})
+        analysis = d.get("analysis")
+        if not isinstance(analysis, dict):
+            logger.warning("Skipping analysis for video %s: 'analysis' field is not a dict (%s)", d.get("platform_video_id"), type(analysis))
+            continue
+            
         n_comments = d.get("total_comments_analyzed", 1) or 1
 
         sent = analysis.get("sentiment_summary", {})
