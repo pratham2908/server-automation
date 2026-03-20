@@ -637,7 +637,11 @@ Content params are custom dimensions for classifying videos. Manage them with th
   - `tags` (optional): Comma-separated string or JSON array.
   - `category` (optional): Category name. If omitted, defaults to `"Uncategorized"`.
   - `content_params` (optional): JSON string of key-value content parameters.
-- **Description**: Creates an ad-hoc (unplanned) video directly in `ready` status, uploads the file to R2, and adds it to the posting queue. If both `category` and `content_params` are provided, the video is marked `verified`. Otherwise it is `unverified` with `category: "Uncategorized"` and `content_params: null` — the next sync will run Gemini extraction on it.
+  - `scheduled_at` (optional): ISO 8601 string (e.g. `2026-03-20T10:00:00+05:30`). **Instagram only**: if provided, the video is created in `scheduled` status and placed in the scheduled queue.
+- **Description**: Creates an ad-hoc (unplanned) video directly in `ready` status (or `scheduled` for Instagram if `scheduled_at` is provided), uploads the file to R2, and adds it to the appropriate queue.
+- **Verification logic**:
+  - If both `category` and `content_params` are provided \u2192 `verification_status: \"verified\"`
+  - Otherwise \u2192 `verification_status: \"unverified\"`, `category: \"Uncategorized\"`, `content_params: null`. The next sync will run Gemini extraction on it.
 - **Response**: Returns the created Video object and `queue_position`.
 
 ### Schedule Ready Video(s)

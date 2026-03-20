@@ -737,11 +737,17 @@ Creates an unplanned video directly in `ready` status, uploads the file to R2, a
 | `tags`           | string        | No       | Comma-separated or JSON array (default `[]`)              |
 | `category`       | string        | No       | Category name (default `"Uncategorized"`)                 |
 | `content_params` | JSON string   | No       | Key-value content parameters                              |
+| `scheduled_at`   | ISO 8601      | No       | [Instagram Only] If provided, creates as `scheduled`      |
 
 **Verification logic:**
 
-- If both `category` and `content_params` are provided → `verification_status: "verified"`
-- Otherwise → `verification_status: "unverified"`, `category: "Uncategorized"`, `content_params: null`. The next sync will run Gemini extraction on it.
+- If both `category` and `content_params` are provided \u2192 `verification_status: \"verified\"`
+- Otherwise \u2192 `verification_status: \"unverified\"`, `category: \"Uncategorized\"`, `content_params: null`. The next sync will run Gemini extraction on it.
+
+**Scheduling logic (Instagram only):**
+
+- If `scheduled_at` is provided, the video is inserted with `status: \"scheduled\"` and added to the `schedule_queue`.
+- Otherwise, it is inserted with `status: \"ready\"` and added to the `posting_queue`.
 
 **Response (201):**
 

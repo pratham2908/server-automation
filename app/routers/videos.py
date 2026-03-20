@@ -815,6 +815,7 @@ async def create_video(
     tags: str = Form(""),
     category: Optional[str] = Form(None),
     content_params: Optional[str] = Form(None),
+    scheduled_at: Optional[str] = Form(None),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Create an ad-hoc video, upload its file to R2, and add to posting queue.
@@ -856,6 +857,22 @@ async def create_video(
             )
 
     is_verified = bool(category and parsed_params)
+    platform = channel.get("platform", "youtube")
+
+    # Handle direct scheduling if requested
+    parsed_scheduled_at: datetime | None = None
+    if scheduled_at:
+        try:
+            parsed_scheduled_at = isoparse(scheduled_at)
+            # Ensure it's timezone-aware (assume IST if naive)
+            from app.timezone import IST
+            if parsed_scheduled_at.tzinfo is None:
+                parsed_scheduled_at = parsed_scheduled_at.replace(tzinfo=IST)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid scheduled_at format: '{scheduled_at}'. Use ISO 8601 string."
+            )
 
     vid_id = str(uuid.uuid4())
     r2 = _get_r2()
@@ -870,38 +887,57 @@ async def create_video(
         "description": description,
         "tags": parsed_tags,
         "category": category or "Uncategorized",
-        "status": "ready",
+        "status": "scheduled" if (parsed_scheduled_at and platform == "instagram") else "ready",
         "suggested": False,
         "youtube_video_id": None,
         "instagram_media_id": None,
         "r2_object_key": r2_key,
-        "metadata": {"views": None, "engagement": None, "avg_percentage_viewed": None},
+        "metadata": {"views": None, "likes": None, "comments": None},
         "content_params": parsed_params,
         "verification_status": "verified" if is_verified else "unverified",
+        "scheduled_at": parsed_scheduled_at if (parsed_scheduled_at and platform == "instagram") else None,
         "created_at": now,
         "updated_at": now,
     }
     await db.videos.insert_one(doc)
     doc.pop("_id", None)
 
-    # Add to posting queue.
-    last = await db.posting_queue.find_one(
-        {"channel_id": channel_id},
-        sort=[("position", -1)],
-    )
-    next_pos = (last["position"] + 1) if last else 1
-    await db.posting_queue.insert_one(
-        {
-            "channel_id": channel_id,
-            "video_id": vid_id,
-            "position": next_pos,
-            "added_at": now,
-        }
-    )
+    if doc["status"] == "scheduled":
+        last = await db.schedule_queue.find_one(
+            {"channel_id": channel_id},
+            sort=[("position", -1)],
+        )
+        next_pos = (last["position"] + 1) if last else 1
+        await db.schedule_queue.insert_one(
+            {
+                "channel_id": channel_id,
+                "video_id": vid_id,
+                "position": next_pos,
+                "scheduled_at": doc["scheduled_at"],
+                "added_at": now,
+            }
+        )
+        queue_type = "scheduled"
+    else:
+        # Add to posting queue.
+        last = await db.posting_queue.find_one(
+            {"channel_id": channel_id},
+            sort=[("position", -1)],
+        )
+        next_pos = (last["position"] + 1) if last else 1
+        await db.posting_queue.insert_one(
+            {
+                "channel_id": channel_id,
+                "video_id": vid_id,
+                "position": next_pos,
+                "added_at": now,
+            }
+        )
+        queue_type = "ready"
 
     logger.success(
-        "Created ad-hoc video '%s' — status=ready, verified=%s, queue position %d",
-        title[:50], is_verified, next_pos,
+        "Created ad-hoc video '%s' — status=%s, verified=%s, %s queue position %d",
+        title[:50], doc["status"], is_verified, queue_type, next_pos,
     )
 
     return {"ok": True, "video": doc, "queue_position": next_pos}

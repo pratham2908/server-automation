@@ -452,13 +452,34 @@ async def api_schema():
                 "group": "Videos",
                 "method": "POST",
                 "path": "/api/v1/channels/{channel_id}/videos/{video_id}/upload",
-                "description": "Upload video file to R2 (multipart/form-data with 'file' field). Moves todo → ready.",
+                "description": "Upload video file to R2 (multipart/form-data with 'file' field). Moves todo \u2192 ready.",
                 "content_type": "multipart/form-data",
                 "request": {"file": "(binary video file)"},
                 "response": {
                     "ok": True,
                     "video": {"video_id": "uuid-1234", "status": "ready", "r2_object_key": "ch1/uuid-1234.mp4"},
                     "queue_position": 3,
+                },
+            },
+            {
+                "group": "Videos",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/videos/create",
+                "description": "Create ad-hoc video, upload to R2, and add to posting or schedule queue (Instagram only). Bypass todo stage.",
+                "content_type": "multipart/form-data",
+                "request": {
+                    "file": "(binary)",
+                    "title": "My Reel",
+                    "description": "...",
+                    "tags": "tag1, tag2",
+                    "category": "Comedy",
+                    "content_params": "{\"topic\": \"humor\"}",
+                    "scheduled_at": "2026-03-20T10:00:00+05:30 (Instagram only)"
+                },
+                "response": {
+                    "ok": True,
+                    "video": {"video_id": "uuid-1234", "status": "scheduled", "scheduled_at": "..."},
+                    "queue_position": 1
                 },
             },
             {
