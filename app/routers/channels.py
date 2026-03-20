@@ -783,7 +783,7 @@ async def get_youtube_token(
             client_id=client_id,
             client_secret=client_secret,
             scopes=tokens.get("scopes"),
-            expiry=expiry_dt,
+            expiry=expiry_dt.astimezone(timezone.utc).replace(tzinfo=None) if expiry_dt else None,
         )
 
         if not creds.valid and creds.refresh_token:

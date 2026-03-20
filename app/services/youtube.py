@@ -77,7 +77,7 @@ class YouTubeService:
             client_id=self._client_id,
             client_secret=self._client_secret,
             scopes=token_data.get("scopes"),
-            expiry=expiry_dt,
+            expiry=expiry_dt.astimezone(timezone.utc).replace(tzinfo=None) if expiry_dt else None,
         )
 
         if not creds.valid and creds.refresh_token:
