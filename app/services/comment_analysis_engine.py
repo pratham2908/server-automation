@@ -74,6 +74,7 @@ async def run_comment_analysis(
     instagram_service: InstagramService | None = None,
     channel_name: str | None = None,
     progress_label: str | None = None,
+    video_published_at: str | datetime | None = None,
 ) -> dict[str, Any] | None:
     """Analyse comments for a single video (fresh or incremental).
 
@@ -177,6 +178,7 @@ async def run_comment_analysis(
                 "version": new_version,
                 "updated_at": now,
                 "video_title": video_title,
+                "video_published_at": video_published_at,
             }},
         )
         logger.info(
@@ -193,6 +195,7 @@ async def run_comment_analysis(
             "competitor_channel_id": competitor_channel_id,
             "video_title": video_title,
             "video_url": video_url,
+            "video_published_at": video_published_at,
             "total_comments_fetched": len(raw_comments),
             "total_comments_analyzed": len(filtered),
             "last_known_comment_count": current_comment_count,
@@ -270,6 +273,7 @@ async def run_cron_cycle(
                             "source": "competitor",
                             "competitor_channel_id": comp_yt_id,
                             "video_title": v.get("title", ""),
+                            "video_published_at": v.get("published_at"),
                             "current_comment_count": v.get("comment_count", 0),
                         })
                 except Exception as exc:
@@ -300,6 +304,7 @@ async def run_cron_cycle(
                 "source": "own",
                 "competitor_channel_id": None,
                 "video_title": v.get("title", ""),
+                "video_published_at": v.get("published_at"),
                 "current_comment_count": meta.get("comments", 0) or 0,
             })
         elif platform == "instagram" and v.get("instagram_media_id"):
@@ -311,6 +316,7 @@ async def run_cron_cycle(
                 "source": "own",
                 "competitor_channel_id": None,
                 "video_title": v.get("title", ""),
+                "video_published_at": v.get("published_at"),
                 "current_comment_count": meta.get("comments", 0) or 0,
             })
 
@@ -365,6 +371,7 @@ async def run_cron_cycle(
                 instagram_service=ig_svc,
                 channel_name=channel_name,
                 progress_label=progress_label,
+                video_published_at=vp.get("video_published_at"),
             )
             if result:
                 if existing:
