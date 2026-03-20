@@ -780,11 +780,13 @@ async def get_youtube_token(
         expiry=expiry_dt.astimezone(timezone.utc).replace(tzinfo=None) if expiry_dt else None,
     )
 
+    refreshed = False
     # Refresh if token is not valid and we have a refresh token
     if not creds.valid and creds.refresh_token:
         from google.auth.transport.requests import Request
         try:
             creds.refresh(Request())
+            refreshed = True
             
             # Save the new token and expiry back to DB
             updated_expiry = None
@@ -809,10 +811,16 @@ async def get_youtube_token(
 
     # Final check: if still invalid, raise error
     if not creds.valid:
+        logger.error(f"[TOKEN] YouTube token for channel '{channel_id}' is INVALID and could not be refreshed.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="YouTube token is invalid and cannot be refreshed. Re-authenticate via the frontend.",
         )
+
+    if refreshed:
+        logger.info(f"[TOKEN] YouTube token for channel '{channel_id}' was EXPIRED/INVALID and has been REFRESHED.")
+    else:
+        logger.info(f"[TOKEN] YouTube token for channel '{channel_id}' was already VALID.")
 
     return {
         "ok": True, 
