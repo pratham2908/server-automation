@@ -22,6 +22,7 @@ youtube_service_manager = None
 instagram_service_manager = None
 gemini_service = None
 _auto_publisher_task = None
+_comment_analysis_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -83,19 +84,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     import asyncio
     from app.services.auto_publisher import run_auto_publisher
 
-    global _auto_publisher_task
+    global _auto_publisher_task, _comment_analysis_task
     _auto_publisher_task = asyncio.create_task(run_auto_publisher(db, r2_service))
     logger.info("Background auto-publisher started")
+
+    # ---- Background comment analysis cron (24-hour cycle) ----
+    from app.services.comment_analysis_cron import run_comment_analysis_cron
+
+    _comment_analysis_task = asyncio.create_task(
+        run_comment_analysis_cron(db, youtube_service_manager, instagram_service_manager, gemini_service)
+    )
+    logger.info("Background comment analysis cron started")
 
     yield
 
     # ---- Shutdown ----
-    if _auto_publisher_task and not _auto_publisher_task.done():
-        _auto_publisher_task.cancel()
-        try:
-            await _auto_publisher_task
-        except asyncio.CancelledError:
-            pass
+    for task in (_auto_publisher_task, _comment_analysis_task):
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     await close_db()
     logger.info("Database connection closed")
 
@@ -123,12 +133,14 @@ app.add_middleware(
 )
 app.add_middleware(StructuredLoggingMiddleware)
 
-from app.routers import analysis, categories, channels, system, ui, videos  # noqa: E402
+from app.routers import analysis, categories, channels, comment_analysis, system, ui, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
 app.include_router(categories.router)
 app.include_router(analysis.router)
+app.include_router(comment_analysis.router)
+app.include_router(comment_analysis.config_router)
 app.include_router(ui.router)
 app.include_router(system.router)
 
@@ -649,6 +661,132 @@ async def api_schema():
                         "avg_engagement_rate": 5.8, "total_subscribers_gained": 850,
                         "avg_performance_rating": 81.5,
                     },
+                },
+            },
+            # -- Comment Analysis --
+            {
+                "group": "Comment Analysis",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/comment-analysis/trigger",
+                "description": "Manually trigger a comment-analysis cycle for this channel (same as what the 24h cron does)",
+                "request": None,
+                "response": {
+                    "ok": True,
+                    "channel_id": "ch1",
+                    "analyzed": 3,
+                    "re_analyzed": 1,
+                    "skipped": 10,
+                    "errors": 0,
+                },
+            },
+            {
+                "group": "Comment Analysis",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/comment-analysis/history",
+                "description": "List comment analyses for a channel with optional filters",
+                "query_params": {
+                    "source": {"type": "string", "enum": ["own", "competitor"], "optional": True},
+                    "platform": {"type": "string", "enum": ["youtube", "instagram"], "optional": True},
+                    "limit": {"type": "integer", "optional": True},
+                },
+                "request": None,
+                "response": [
+                    {
+                        "_id": "60f7b2a1...",
+                        "channel_id": "ch1",
+                        "platform_video_id": "dQw4w9WgXcQ",
+                        "platform": "youtube",
+                        "source": "competitor",
+                        "competitor_channel_id": "UCxxxxxxxx",
+                        "video_title": "Competitor's Best Video",
+                        "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                        "total_comments_fetched": 450,
+                        "total_comments_analyzed": 380,
+                        "last_known_comment_count": 450,
+                        "comments_analyzed_upto": "2026-03-20T15:30:00Z",
+                        "analysis": {
+                            "sentiment_summary": {"positive_percentage": 72, "negative_percentage": 12, "neutral_percentage": 16, "overall_sentiment": "positive"},
+                            "what_audience_loves": [{"theme": "Clear explanations", "signal_strength": 8, "representative_quotes": ["..."], "count": 45}],
+                            "complaints": [{"theme": "Audio quality", "signal_strength": 4, "representative_quotes": ["..."], "count": 8}],
+                            "demands": [{"topic": "Cover advanced topics", "signal_strength": 9, "demand_type": "content_request", "representative_quotes": ["..."], "count": 67}],
+                            "content_gaps": ["No coverage of advanced workflows"],
+                            "trending_topics": ["AI integration"],
+                            "key_insights": ["Strong demand for advanced content"],
+                        },
+                        "version": 2,
+                        "analyzed_at": "2026-03-20T12:00:00+05:30",
+                    }
+                ],
+            },
+            {
+                "group": "Comment Analysis",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/comment-analysis/{analysis_id}",
+                "description": "Get a specific comment analysis by its MongoDB _id",
+                "request": None,
+                "response": {"_id": "60f7b2a1...", "channel_id": "ch1", "platform_video_id": "...", "analysis": {"...": "..."}},
+            },
+            {
+                "group": "Comment Analysis",
+                "method": "DELETE",
+                "path": "/api/v1/channels/{channel_id}/comment-analysis/{analysis_id}",
+                "description": "Delete a specific comment analysis",
+                "request": None,
+                "response": {"ok": True, "deleted": True, "analysis_id": "60f7b2a1..."},
+            },
+            {
+                "group": "Comment Analysis",
+                "method": "DELETE",
+                "path": "/api/v1/channels/{channel_id}/comment-analysis/",
+                "description": "Delete all comment analyses for a channel",
+                "request": None,
+                "response": {"ok": True, "channel_id": "ch1", "deleted_count": 15},
+            },
+            {
+                "group": "Comment Analysis",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/comment-analysis/aggregate",
+                "description": "Aggregate all comment analyses into a combined demand/sentiment report",
+                "query_params": {
+                    "source": {"type": "string", "enum": ["own", "competitor"], "optional": True},
+                },
+                "request": None,
+                "response": {
+                    "channel_id": "ch1",
+                    "total_videos_analyzed": 15,
+                    "total_comments_analyzed": 5200,
+                    "aggregate_sentiment": {"positive_percentage": 68, "negative_percentage": 14, "neutral_percentage": 18, "overall_sentiment": "positive"},
+                    "top_loves": [{"theme": "Production quality", "signal_strength": 9, "count": 320, "representative_quotes": ["..."]}],
+                    "top_complaints": [{"theme": "Upload frequency", "signal_strength": 6, "count": 85, "representative_quotes": ["..."]}],
+                    "top_demands": [{"topic": "Tutorial series", "signal_strength": 10, "demand_type": "content_request", "count": 410, "representative_quotes": ["..."]}],
+                    "all_content_gaps": ["Advanced workflows", "Mobile-first content"],
+                    "all_trending_topics": ["AI tools", "Short-form content"],
+                    "all_key_insights": ["Audience craves depth over breadth"],
+                },
+            },
+            # -- Comment Analysis Config --
+            {
+                "group": "Comment Analysis Config",
+                "method": "GET",
+                "path": "/api/v1/comment-analysis/config/",
+                "description": "Get the current comment analysis cron schedule (analysis_hour in IST)",
+                "request": None,
+                "response": {
+                    "key": "comment_analysis_config",
+                    "analysis_hour": 3,
+                    "updated_at": "2026-03-20T12:00:00+05:30",
+                },
+            },
+            {
+                "group": "Comment Analysis Config",
+                "method": "PUT",
+                "path": "/api/v1/comment-analysis/config/",
+                "description": "Update the comment analysis cron schedule. Changes take effect on the next cycle (no restart needed).",
+                "request": {"analysis_hour": 4},
+                "response": {
+                    "ok": True,
+                    "analysis_hour": 4,
+                    "message": "Comment analysis cron will run daily at 04:00 IST",
                 },
             },
         ],

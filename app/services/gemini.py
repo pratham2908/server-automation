@@ -518,3 +518,196 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 - **basis_factor**: Provide a short reasoning for why this video idea should perform well.
 - For any content param marked as unique above, you MUST NOT reuse ANY value from its "Already-Used" list. Every value for that param must be completely new and never covered before.
 - Strictly return a JSON array of objects (`[]`), even if count is 1."""
+
+    # ------------------------------------------------------------------
+    # Comment sentiment & demand analysis
+    # ------------------------------------------------------------------
+
+    async def analyze_comments(
+        self,
+        comments: list[dict[str, Any]],
+        video_title: str,
+        platform: str = "youtube",
+        previous_analysis: dict[str, Any] | None = None,
+        total_previous_comments: int = 0,
+    ) -> dict[str, Any]:
+        """Analyze a batch of comments and return structured intelligence.
+
+        Parameters
+        ----------
+        comments:
+            List of dicts with at least ``text`` and ``like_count``.
+        video_title:
+            Title of the video whose comments are being analyzed.
+        platform:
+            ``"youtube"`` or ``"instagram"``.
+        previous_analysis:
+            If provided, Gemini refines this existing analysis using
+            only the *new* comments (incremental mode).
+        total_previous_comments:
+            How many comments the previous analysis was based on.
+            Helps Gemini weight sentiment proportionally.
+
+        Returns
+        -------
+        dict matching the ``CommentAnalysisResult`` schema.
+        """
+        if previous_analysis:
+            prompt = self._build_incremental_comment_analysis_prompt(
+                comments, previous_analysis, video_title, platform,
+                total_previous_comments,
+            )
+        else:
+            prompt = self._build_comment_analysis_prompt(
+                comments, video_title, platform,
+            )
+
+        text = await self._generate(prompt)
+
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            logger.error("Failed to parse Gemini comment analysis response: %s", text)
+            raise ValueError("Failed to parse Gemini comment analysis response")
+
+    @staticmethod
+    def _build_comment_analysis_prompt(
+        comments: list[dict[str, Any]],
+        video_title: str,
+        platform: str = "youtube",
+    ) -> str:
+        """Build a fresh (first-time) comment analysis prompt."""
+
+        comments_json = json.dumps(comments, indent=2, default=str)
+
+        return f"""You are an expert audience research analyst and data extraction engine. Your job is to analyze a batch of {platform.capitalize()} comments from the video titled "{video_title}" and extract actionable intelligence.
+
+## Comments ({len(comments)} total)
+```json
+{comments_json}
+```
+
+## Rules
+
+1. **Be Objective**: Ignore spam, self-promotion, bot comments, and irrelevant noise. Focus only on signals related to content quality, missing information, and future requests.
+2. **Consolidate**: If multiple people express the same sentiment or ask for the same thing, group it into a single theme and represent its popularity with a higher `signal_strength` score (1-10). Factor in `like_count` — a comment with 50 likes carries more weight than one with 0.
+3. **Strict Output**: Respond ONLY with a valid JSON object matching the exact schema below. No markdown, no explanations.
+
+## Required Output Format
+
+Return a JSON object with exactly these keys:
+
+{{
+  "sentiment_summary": {{
+    "positive_percentage": 65.0,
+    "negative_percentage": 15.0,
+    "neutral_percentage": 20.0,
+    "overall_sentiment": "positive"
+  }},
+  "what_audience_loves": [
+    {{
+      "theme": "Clear and detailed explanations",
+      "signal_strength": 8,
+      "representative_quotes": ["Best tutorial I've ever seen!", "Finally someone explained this properly"],
+      "count": 45
+    }}
+  ],
+  "complaints": [
+    {{
+      "theme": "Audio quality issues",
+      "signal_strength": 5,
+      "representative_quotes": ["Audio is too quiet", "Hard to hear over the background music"],
+      "count": 12
+    }}
+  ],
+  "demands": [
+    {{
+      "topic": "Cover advanced techniques",
+      "signal_strength": 9,
+      "demand_type": "content_request",
+      "representative_quotes": ["Please do a video on advanced settings!", "When will you cover the pro features?"],
+      "count": 67
+    }}
+  ],
+  "content_gaps": [
+    "No coverage of advanced workflows",
+    "Missing comparison with competitor tools"
+  ],
+  "trending_topics": [
+    "AI integration requests",
+    "Mobile-first content demand"
+  ],
+  "key_insights": [
+    "Audience strongly values step-by-step depth over breadth",
+    "There is latent demand for a dedicated series on advanced features"
+  ]
+}}
+
+## Field Guidelines
+
+- **sentiment_summary**: Percentages must sum to 100. `overall_sentiment` is one of: `positive`, `negative`, `neutral`, `mixed`.
+- **what_audience_loves**: Themes the audience explicitly praises. 2-4 representative quotes per theme. `signal_strength` 1-10.
+- **complaints**: What the audience is unhappy about or criticizes. Same structure.
+- **demands**: Specific requests for new content, features, topics, or formats.
+  - `demand_type` is one of: `content_request` (new video/topic), `feature_request` (product feature), `topic_request` (specific subject), `format_request` (style/length/format change).
+- **content_gaps**: Topics or information the audience expected but didn't find.
+- **trending_topics**: Emerging themes or topics that appear to be gaining traction.
+- **key_insights**: 3-5 high-level strategic takeaways from the comment analysis.
+
+Be thorough but concise. Every theme must have real evidence from the comments."""
+
+    @staticmethod
+    def _build_incremental_comment_analysis_prompt(
+        new_comments: list[dict[str, Any]],
+        previous_analysis: dict[str, Any],
+        video_title: str,
+        platform: str = "youtube",
+        total_previous_comments: int = 0,
+    ) -> str:
+        """Build an incremental (refinement) comment analysis prompt."""
+
+        comments_json = json.dumps(new_comments, indent=2, default=str)
+        prev_json = json.dumps(previous_analysis, indent=2, default=str)
+
+        return f"""You are an expert audience research analyst. You previously analyzed {total_previous_comments} comments from the {platform.capitalize()} video titled "{video_title}" and produced the analysis below.
+
+## Previous Analysis (based on {total_previous_comments} comments)
+```json
+{prev_json}
+```
+
+## New Comments ({len(new_comments)} additional comments since last analysis)
+```json
+{comments_json}
+```
+
+## Your Task
+
+Refine the previous analysis by incorporating these {len(new_comments)} new comments. The updated analysis should reflect the FULL picture (all {total_previous_comments} previous + {len(new_comments)} new = {total_previous_comments + len(new_comments)} total comments).
+
+### How to Refine
+
+1. **Sentiment**: Adjust percentages proportionally. If previous was based on {total_previous_comments} comments and {len(new_comments)} new ones arrived, weight accordingly.
+2. **Themes (loves, complaints)**: If a new comment echoes an existing theme, bump its `signal_strength` and `count`. If it introduces a new theme, add it. Update `representative_quotes` if the new comments have more articulate examples.
+3. **Demands**: Same merging logic. If a demand already exists, increase `count` and `signal_strength`. New demands get added.
+4. **Content gaps, trending topics, key insights**: Update to reflect the broader picture.
+
+### Rules
+
+- Ignore spam, self-promotion, bot comments.
+- Factor in `like_count` for weighting.
+- Respond ONLY with a valid JSON object matching the exact schema (same as the previous analysis structure). No markdown, no explanations.
+- Return the COMPLETE updated analysis, not a diff.
+
+## Required Output Format
+
+Return a JSON object with exactly these keys:
+{{
+  "sentiment_summary": {{ "positive_percentage": ..., "negative_percentage": ..., "neutral_percentage": ..., "overall_sentiment": "..." }},
+  "what_audience_loves": [ {{ "theme": "...", "signal_strength": 1-10, "representative_quotes": ["..."], "count": N }} ],
+  "complaints": [ {{ "theme": "...", "signal_strength": 1-10, "representative_quotes": ["..."], "count": N }} ],
+  "demands": [ {{ "topic": "...", "signal_strength": 1-10, "demand_type": "content_request|feature_request|topic_request|format_request", "representative_quotes": ["..."], "count": N }} ],
+  "content_gaps": ["..."],
+  "trending_topics": ["..."],
+  "key_insights": ["..."]
+}}"""

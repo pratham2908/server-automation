@@ -91,6 +91,68 @@ class InstagramService:
         logger.info("Fetched %d reels for IG user %s", len(reels), ig_user_id)
         return reels
 
+    # ------------------------------------------------------------------
+    # Comment fetching
+    # ------------------------------------------------------------------
+
+    def get_media_comments(self, media_id: str) -> list[dict[str, Any]]:
+        """Fetch all comments on a media item owned by the authenticated account.
+
+        Returns a list of dicts with keys:
+        ``text``, ``like_count``, ``author``, ``published_at``.
+        """
+        fields = "text,timestamp,like_count,username"
+        comments: list[dict[str, Any]] = []
+        url: str | None = f"{_GRAPH_BASE}/{media_id}/comments"
+        params: dict = {"fields": fields, "limit": "100", "access_token": self._token}
+
+        while url:
+            resp = requests.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            body = resp.json()
+            for item in body.get("data", []):
+                comments.append({
+                    "text": item.get("text", ""),
+                    "like_count": int(item.get("like_count", 0)),
+                    "author": item.get("username", ""),
+                    "published_at": item.get("timestamp", ""),
+                })
+            paging = body.get("paging", {})
+            url = paging.get("next")
+            params = {}
+
+        return comments
+
+    def get_media_comments_since(
+        self, media_id: str, cutoff_timestamp: str | datetime,
+    ) -> list[dict[str, Any]]:
+        """Fetch comments newer than *cutoff_timestamp*.
+
+        The Instagram API does not support server-side time filtering,
+        so this fetches all comments and filters client-side.
+        """
+        from datetime import datetime as _dt, timezone as _tz
+
+        if isinstance(cutoff_timestamp, str):
+            cutoff = _dt.fromisoformat(cutoff_timestamp.replace("Z", "+00:00"))
+        else:
+            cutoff = cutoff_timestamp
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=_tz.utc)
+
+        all_comments = self.get_media_comments(media_id)
+        new_comments: list[dict[str, Any]] = []
+        for c in all_comments:
+            try:
+                pub = _dt.fromisoformat(c["published_at"].replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                new_comments.append(c)
+                continue
+            if pub > cutoff:
+                new_comments.append(c)
+
+        return new_comments
+
     def get_reel_insights(self, media_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Fetch per-reel insights (views, reach, saved, shares).
 

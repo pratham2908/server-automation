@@ -408,6 +408,196 @@ class YouTubeService:
 
         return response["id"]
 
+    # ------------------------------------------------------------------
+    # Comment & competitor-video fetching
+    # ------------------------------------------------------------------
+
+    def get_channel_latest_videos(
+        self,
+        youtube_channel_id: str,
+        max_results: int = 15,
+    ) -> list[dict[str, Any]]:
+        """Discover a channel's most recent uploads with comment counts.
+
+        Works on *any* public channel (own or competitor).  Derives the
+        uploads playlist from the channel ID and fetches basic stats so
+        the caller can compare ``comment_count`` against stored values.
+
+        Returns a list of dicts with keys:
+        ``video_id``, ``title``, ``published_at``, ``comment_count``.
+        """
+        uploads_playlist_id = "UU" + youtube_channel_id[2:]
+
+        response = (
+            self._youtube.playlistItems()
+            .list(
+                part="snippet,contentDetails",
+                playlistId=uploads_playlist_id,
+                maxResults=min(max_results, 50),
+            )
+            .execute()
+        )
+
+        videos: list[dict[str, Any]] = []
+        video_ids: list[str] = []
+        for item in response.get("items", []):
+            vid = item["contentDetails"]["videoId"]
+            snippet = item.get("snippet", {})
+            videos.append({
+                "video_id": vid,
+                "title": snippet.get("title", ""),
+                "published_at": snippet.get("publishedAt", ""),
+                "comment_count": 0,
+            })
+            video_ids.append(vid)
+
+        if video_ids:
+            for i in range(0, len(video_ids), 50):
+                batch = video_ids[i : i + 50]
+                stats_resp = (
+                    self._youtube.videos()
+                    .list(part="statistics", id=",".join(batch))
+                    .execute()
+                )
+                stats_map = {
+                    it["id"]: int(it.get("statistics", {}).get("commentCount", 0))
+                    for it in stats_resp.get("items", [])
+                }
+                for v in videos:
+                    if v["video_id"] in stats_map:
+                        v["comment_count"] = stats_map[v["video_id"]]
+
+        return videos
+
+    def get_video_comments(
+        self,
+        youtube_video_id: str,
+        max_comments: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Fetch comment text for a video (all comments up to *max_comments*).
+
+        Uses ``order="time"`` (newest first) so that the caller can
+        determine the newest timestamp for future incremental fetches.
+
+        Returns a list of dicts with keys:
+        ``text``, ``like_count``, ``author``, ``published_at``.
+        """
+        comments: list[dict[str, Any]] = []
+        page_token: str | None = None
+
+        while len(comments) < max_comments:
+            kwargs: dict[str, Any] = {
+                "part": "snippet",
+                "videoId": youtube_video_id,
+                "maxResults": min(100, max_comments - len(comments)),
+                "order": "time",
+                "textFormat": "plainText",
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+
+            try:
+                response = (
+                    self._youtube.commentThreads().list(**kwargs).execute()
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch comments for video %s: %s",
+                    youtube_video_id, exc,
+                )
+                break
+
+            for item in response.get("items", []):
+                snip = item["snippet"]["topLevelComment"]["snippet"]
+                comments.append({
+                    "text": snip.get("textDisplay", ""),
+                    "like_count": int(snip.get("likeCount", 0)),
+                    "author": snip.get("authorDisplayName", ""),
+                    "published_at": snip.get("publishedAt", ""),
+                })
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        return comments
+
+    def get_video_comments_since(
+        self,
+        youtube_video_id: str,
+        cutoff_timestamp: str,
+        max_comments: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Fetch only comments newer than *cutoff_timestamp*.
+
+        Parameters
+        ----------
+        cutoff_timestamp:
+            ISO 8601 string.  Comments with ``publishedAt <= cutoff``
+            are excluded and pagination stops early once we hit them.
+
+        Returns the same dict shape as ``get_video_comments``.
+        """
+        from datetime import datetime as _dt, timezone as _tz
+
+        if isinstance(cutoff_timestamp, str):
+            cutoff = _dt.fromisoformat(cutoff_timestamp.replace("Z", "+00:00"))
+        else:
+            cutoff = cutoff_timestamp
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=_tz.utc)
+
+        comments: list[dict[str, Any]] = []
+        page_token: str | None = None
+        done = False
+
+        while len(comments) < max_comments and not done:
+            kwargs: dict[str, Any] = {
+                "part": "snippet",
+                "videoId": youtube_video_id,
+                "maxResults": 100,
+                "order": "time",
+                "textFormat": "plainText",
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+
+            try:
+                response = (
+                    self._youtube.commentThreads().list(**kwargs).execute()
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch comments for video %s: %s",
+                    youtube_video_id, exc,
+                )
+                break
+
+            for item in response.get("items", []):
+                snip = item["snippet"]["topLevelComment"]["snippet"]
+                pub_raw = snip.get("publishedAt", "")
+                try:
+                    pub_dt = _dt.fromisoformat(pub_raw.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    pub_dt = None
+
+                if pub_dt and pub_dt <= cutoff:
+                    done = True
+                    break
+
+                comments.append({
+                    "text": snip.get("textDisplay", ""),
+                    "like_count": int(snip.get("likeCount", 0)),
+                    "author": snip.get("authorDisplayName", ""),
+                    "published_at": pub_raw,
+                })
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        return comments
+
 
 class YouTubeServiceManager:
     """Manages per-channel YouTubeService instances.

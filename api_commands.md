@@ -889,3 +889,187 @@ Content params are custom dimensions for classifying videos. Manage them with th
 ```
 
 > **Note:** To view scheduled videos, use `GET /api/v1/channels/{channel_id}/videos?status_filter=scheduled`. The `scheduled_at` field on each video shows the YouTube publish time. To schedule all ready videos at once, use `POST /api/v1/channels/{channel_id}/videos/all/schedule`.
+
+---
+
+## Comment Analysis
+
+Comment analysis runs automatically via a 24-hour cron job. It discovers competitor and own-channel videos, fetches comments, and extracts sentiment/demand intelligence via Gemini. The following endpoints are for reading results and manual triggering.
+
+### Manually Trigger Comment Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/comment-analysis/trigger`
+- **Method**: `POST`
+- **Description**: Runs the same analysis cycle as the 24-hour cron, but on-demand for this channel.
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "channel_id": "ch1",
+  "analyzed": 3,
+  "re_analyzed": 1,
+  "skipped": 10,
+  "errors": 0
+}
+```
+
+### List Comment Analysis History
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/comment-analysis/history`
+- **Method**: `GET`
+- **Query Params** (all optional):
+  - `source`: Filter by `"own"` or `"competitor"`
+  - `platform`: Filter by `"youtube"` or `"instagram"`
+  - `limit`: Max number of results
+- **Response**:
+
+```json
+[
+  {
+    "_id": "60f7b2a1...",
+    "channel_id": "ch1",
+    "platform_video_id": "dQw4w9WgXcQ",
+    "platform": "youtube",
+    "source": "competitor",
+    "competitor_channel_id": "UCxxxxxxxx",
+    "video_title": "Competitor's Best Video",
+    "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "total_comments_fetched": 450,
+    "total_comments_analyzed": 380,
+    "last_known_comment_count": 450,
+    "comments_analyzed_upto": "2026-03-20T15:30:00Z",
+    "analysis": {
+      "sentiment_summary": {
+        "positive_percentage": 72.0,
+        "negative_percentage": 12.0,
+        "neutral_percentage": 16.0,
+        "overall_sentiment": "positive"
+      },
+      "what_audience_loves": [
+        {"theme": "Clear explanations", "signal_strength": 8, "representative_quotes": ["Best tutorial!"], "count": 45}
+      ],
+      "complaints": [
+        {"theme": "Audio quality", "signal_strength": 4, "representative_quotes": ["Audio too quiet"], "count": 8}
+      ],
+      "demands": [
+        {"topic": "Cover advanced topics", "signal_strength": 9, "demand_type": "content_request", "representative_quotes": ["Please do advanced!"], "count": 67}
+      ],
+      "content_gaps": ["No coverage of advanced workflows"],
+      "trending_topics": ["AI integration"],
+      "key_insights": ["Strong demand for in-depth content"]
+    },
+    "version": 2,
+    "analyzed_at": "2026-03-20T12:00:00+05:30",
+    "created_at": "2026-03-18T12:00:00+05:30",
+    "updated_at": "2026-03-20T12:00:00+05:30"
+  }
+]
+```
+
+### Get Single Comment Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/comment-analysis/{analysis_id}`
+- **Method**: `GET`
+- **Response**: Single comment analysis document (same format as above).
+- **Errors**: `404` if not found. `422` if `analysis_id` is not a valid ObjectId.
+
+### Delete Single Comment Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/comment-analysis/{analysis_id}`
+- **Method**: `DELETE`
+- **Response**:
+
+```json
+{"ok": true, "deleted": true, "analysis_id": "60f7b2a1..."}
+```
+
+### Delete All Comment Analyses
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/comment-analysis/`
+- **Method**: `DELETE`
+- **Response**:
+
+```json
+{"ok": true, "channel_id": "ch1", "deleted_count": 15}
+```
+
+### Aggregate Comment Insights
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/comment-analysis/aggregate`
+- **Method**: `GET`
+- **Query Params** (optional):
+  - `source`: Filter by `"own"` or `"competitor"`
+- **Description**: Combines insights from all comment analyses into a channel-level intelligence report. Merges themes/demands by name, sums counts, recalculates signal strengths.
+- **Response**:
+
+```json
+{
+  "channel_id": "ch1",
+  "source_filter": null,
+  "total_videos_analyzed": 15,
+  "total_comments_analyzed": 5200,
+  "aggregate_sentiment": {
+    "positive_percentage": 68.0,
+    "negative_percentage": 14.0,
+    "neutral_percentage": 18.0,
+    "overall_sentiment": "positive"
+  },
+  "top_loves": [
+    {"theme": "Production quality", "signal_strength": 9, "count": 320, "representative_quotes": ["Amazing quality!"]}
+  ],
+  "top_complaints": [
+    {"theme": "Upload frequency", "signal_strength": 6, "count": 85, "representative_quotes": ["Upload more often!"]}
+  ],
+  "top_demands": [
+    {"topic": "Tutorial series", "signal_strength": 10, "demand_type": "content_request", "count": 410, "representative_quotes": ["Please do a series!"]}
+  ],
+  "all_content_gaps": ["Advanced workflows", "Mobile-first content"],
+  "all_trending_topics": ["AI tools", "Short-form content"],
+  "all_key_insights": ["Audience craves depth over breadth"]
+}
+```
+
+---
+
+## Comment Analysis Config
+
+Global configuration for the comment analysis cron schedule. Not channel-scoped.
+
+### Get Config
+
+- **Endpoint**: `/api/v1/comment-analysis/config/`
+- **Method**: `GET`
+- **Description**: Returns the current cron schedule configuration.
+- **Response**:
+
+```json
+{
+  "key": "comment_analysis_config",
+  "analysis_hour": 3,
+  "updated_at": "2026-03-20T12:00:00+05:30"
+}
+```
+
+> If never configured, returns the default (`analysis_hour: 3`, i.e. 03:00 IST).
+
+### Update Config
+
+- **Endpoint**: `/api/v1/comment-analysis/config/`
+- **Method**: `PUT`
+- **Description**: Update the hour at which the daily comment analysis cron runs. Value is 0-23 in IST. Changes take effect on the next cycle — no server restart needed.
+- **Request**:
+
+```json
+{"analysis_hour": 4}
+```
+
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "analysis_hour": 4,
+  "message": "Comment analysis cron will run daily at 04:00 IST"
+}
+```

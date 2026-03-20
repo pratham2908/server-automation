@@ -19,7 +19,9 @@
   - [categories](#collection-categories)
   - [analysis](#collection-analysis)
   - [analysis_history](#collection-analysis_history)
+  - [comment_analysis](#collection-comment_analysis)
 - [Services Architecture](#services-architecture)
+- [Comment Analysis System](#comment-analysis-system)
 - [Data Flow Diagrams](#data-flow-diagrams)
   - [Video Status Lifecycle](#video-status-lifecycle)
   - [System Architecture](#system-architecture)
@@ -1664,6 +1666,82 @@ Per-video analysis storage — **one document per video**, created once and neve
 | `(channel_id, video_id)` | Compound (unique) | One analysis per video per channel |
 | `(channel_id, analyzed_at)` | Compound (desc) | Fast reverse-chronological queries and date filtering |
 
+### Collection: `comment_analysis`
+
+Stores Gemini-generated sentiment and demand analysis of video comments. One document per analyzed video, keyed by `(channel_id, platform_video_id)`.
+
+```json
+{
+  "channel_id": "ch1",
+  "platform_video_id": "dQw4w9WgXcQ",
+  "platform": "youtube",
+  "source": "competitor",
+  "competitor_channel_id": "UCxxxxxxxx",
+  "video_title": "Competitor's Best Video",
+  "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "total_comments_fetched": 450,
+  "total_comments_analyzed": 380,
+  "last_known_comment_count": 450,
+  "comments_analyzed_upto": "datetime",
+  "analysis": {
+    "sentiment_summary": {
+      "positive_percentage": 72.0,
+      "negative_percentage": 12.0,
+      "neutral_percentage": 16.0,
+      "overall_sentiment": "positive"
+    },
+    "what_audience_loves": [
+      {
+        "theme": "Clear explanations",
+        "signal_strength": 8,
+        "representative_quotes": ["Best tutorial!", "Finally someone explained this"],
+        "count": 45
+      }
+    ],
+    "complaints": [
+      {
+        "theme": "Audio quality",
+        "signal_strength": 4,
+        "representative_quotes": ["Audio too quiet", "Hard to hear"],
+        "count": 8
+      }
+    ],
+    "demands": [
+      {
+        "topic": "Cover advanced topics",
+        "signal_strength": 9,
+        "demand_type": "content_request",
+        "representative_quotes": ["Please do a video on advanced settings!"],
+        "count": 67
+      }
+    ],
+    "content_gaps": ["No coverage of advanced workflows"],
+    "trending_topics": ["AI integration"],
+    "key_insights": ["Strong demand for in-depth content"]
+  },
+  "analyzed_at": "datetime",
+  "version": 2,
+  "created_at": "datetime",
+  "updated_at": "datetime"
+}
+```
+
+**Key fields:**
+
+| Field | Purpose |
+|---|---|
+| `source` | `"own"` for your channel's videos, `"competitor"` for competitor videos |
+| `last_known_comment_count` | Comment count at last analysis — used as cheap pre-check to detect new comments |
+| `comments_analyzed_upto` | Timestamp of newest comment analyzed — cutoff for incremental fetches |
+| `version` | Incremented on each re-analysis when new comments are found |
+
+**Indexes:**
+| Fields | Type | Purpose |
+|---|---|---|
+| `(channel_id, platform_video_id)` | Compound (unique) | One analysis per video per channel |
+| `(channel_id, analyzed_at)` | Compound (desc) | Reverse-chronological history queries |
+| `(channel_id, source)` | Compound | Filter own vs competitor analyses |
+
 ---
 
 ## Services Architecture
@@ -1690,6 +1768,12 @@ Per-video analysis storage — **one document per video**, created once and neve
 - **Get video analytics**: Queries the YouTube Analytics API for `averageViewPercentage`, `averageViewDuration`, and `estimatedMinutesWatched` per video. Batches by 40 IDs. Returns empty data for videos less than ~48 hours old (YouTube Analytics processing delay)
 - **Upload video**: Resumable upload in 10MB chunks, defaults to private. Accepts an optional `publish_at` ISO 8601 UTC datetime — when provided, the video is uploaded as private with YouTube's `publishAt` field so it auto-publishes at the scheduled time
 
+### YouTube Service — Comment & Competitor Methods
+
+- **Get channel latest videos**: `get_channel_latest_videos(youtube_channel_id, max_results=15)` — discovers a competitor's recent uploads by deriving the uploads playlist ID (`UU` prefix), fetching playlist items, and batch-fetching comment counts via `videos().list(part="statistics")`. Returns `list[dict]` with `video_id`, `title`, `published_at`, `comment_count`
+- **Get video comments**: `get_video_comments(youtube_video_id, max_comments=500)` — fetches all comments on a video using `commentThreads().list(order="time")`. Paginates up to `max_comments`. Returns `list[dict]` with `text`, `like_count`, `author`, `published_at`
+- **Get video comments since**: `get_video_comments_since(youtube_video_id, cutoff_timestamp, max_comments=500)` — fetches only comments newer than `cutoff_timestamp`. Uses `order="time"` (newest first) and stops pagination when it hits the cutoff. Used for incremental analysis
+
 ### Instagram Service (`app/services/instagram.py`)
 
 - **Per-channel tokens (DB-stored)**: Each Instagram channel has its own long-lived Facebook user access token stored in the `instagram_tokens` field of its document in the `channels` collection
@@ -1707,6 +1791,8 @@ Per-video analysis storage — **one document per video**, created once and neve
 - **Check container status**: `check_container_status(container_id)` — polls `status_code` (`FINISHED`, `IN_PROGRESS`, `ERROR`)
 - **Publish container**: `publish_container(ig_user_id, container_id)` — POST `/{ig_user_id}/media_publish`, returns `media_id`
 - **Token refresh**: Exchanges a long-lived token for a new one (60-day window) via Facebook token refresh endpoint
+- **Get media comments**: `get_media_comments(media_id)` — fetches all comments on an owned media item. Paginates through `/{media_id}/comments`. Returns `list[dict]` with `text`, `like_count`, `author`, `published_at`. Only works for own-channel media (Instagram API limitation)
+- **Get media comments since**: `get_media_comments_since(media_id, cutoff_timestamp)` — fetches all comments and filters client-side by timestamp. Used for incremental analysis
 
 ### Auto-Publisher (`app/services/auto_publisher.py`)
 
@@ -1746,6 +1832,34 @@ Background async task that automatically publishes scheduled Instagram reels whe
   3. `gemini-3-flash-preview`
 - **Output**: Forces JSON response via `response_mime_type="application/json"`
 
+### Gemini Service — Comment Analysis
+
+- **Analyze comments (fresh)**: `analyze_comments(comments, video_title, platform)` — sends a batch of comments to Gemini and returns structured intelligence: `sentiment_summary`, `what_audience_loves`, `complaints`, `demands`, `content_gaps`, `trending_topics`, `key_insights`
+- **Analyze comments (incremental)**: `analyze_comments(comments, video_title, platform, previous_analysis, total_previous_comments)` — sends only NEW comments + the previous analysis JSON to Gemini for refinement. Gemini adjusts sentiment proportionally, merges themes, and bumps signal strengths. Returns a complete updated analysis (not a diff)
+- **Prompts**: Two separate prompt builders — `_build_comment_analysis_prompt` for fresh analysis and `_build_incremental_comment_analysis_prompt` for incremental refinement. Both enforce strict JSON output matching the `CommentAnalysisResult` schema
+
+### Comment Analysis Engine (`app/services/comment_analysis_engine.py`)
+
+Orchestrates the full comment sentiment and demand extraction pipeline:
+
+- **`run_comment_analysis`**: Single-video analysis with two paths:
+  - **Path A (fresh)**: Fetches ALL comments, filters short/spam, batches to Gemini (200 per batch, chained), inserts to `comment_analysis` with `version=1`
+  - **Path B (incremental)**: Loads existing analysis, fetches only comments since `comments_analyzed_upto`, sends new comments + previous analysis to Gemini, updates with `version++`
+- **`run_cron_cycle`**: Full cron pass for one channel — discovers competitor videos via `get_channel_latest_videos()`, collects own published videos, compares comment counts against stored `last_known_comment_count`, runs fresh or incremental analysis as needed. Caps at 20 videos per run
+- **`aggregate_comment_analyses`**: Combines insights across all analyzed videos — merges themes/demands by name, sums counts, recalculates signal strengths, returns channel-level intelligence summary
+
+### Comment Analysis Cron (`app/services/comment_analysis_cron.py`)
+
+Background async task that runs the comment analysis pipeline daily at a configurable hour. Follows the same pattern as `auto_publisher.py`:
+
+- **Schedule**: Runs once daily at `analysis_hour` IST (default: **03:00 IST**). On startup, calculates seconds until the next occurrence of that hour and sleeps until then. After each run, re-reads the config and sleeps until the next day's target hour
+- **Configurable at runtime**: The `analysis_hour` is stored in the `config` collection (key: `comment_analysis_config`). Update via `PUT /api/v1/comment-analysis/config/` — changes take effect on the next cycle without a server restart
+- **Own video scope**: Only analyses comments on own-channel videos published in the **last 30 days** (older videos rarely receive meaningful new comments)
+- **Competitor video scope**: Latest 15 uploads per competitor
+- **What it does each cycle**: Iterates over all managed channels, runs `run_cron_cycle` for each
+- **Started automatically** in `main.py` lifespan as an `asyncio.create_task`
+- **Graceful shutdown**: Task is cancelled during app shutdown
+
 ### Analysis Engine (`app/services/analysis_engine.py`)
 
 Platform-aware two-step pipeline (auto-detects YouTube vs Instagram):
@@ -1763,6 +1877,63 @@ Post-analysis step:
 4. Archives underperforming categories (score < 30, ≥ 5 videos)
 
 To-do video generation is triggered separately via the `/updateToDoList` endpoint, which distributes N slots across active categories weighted by score. The engine fetches only content params whose `belongs_to` includes the current category name or `"all"` (not all params). Generated videos include `content_params` (with music recommendations) set to `verification_status: "verified"`
+
+---
+
+## Comment Analysis System
+
+The comment analysis system is a **cron-driven** automated pipeline that extracts sentiment, audience demands, and content intelligence from YouTube and Instagram comments.
+
+### How It Works
+
+1. **Every 24 hours**, the cron iterates over all managed channels
+2. For each channel, it discovers the latest videos from registered **competitors** (YouTube only) and the channel's own published videos
+3. For each video, it checks whether analysis is needed:
+   - **New video** (no existing `comment_analysis` doc): fetches all comments, runs fresh Gemini analysis
+   - **Existing video with new comments** (`current commentCount > last_known_comment_count`): fetches only comments since `comments_analyzed_upto` timestamp, sends them to Gemini alongside the previous analysis for incremental refinement
+   - **No changes**: skips
+4. Results are stored/updated in the `comment_analysis` collection
+
+### Incremental Analysis Flow
+
+```mermaid
+flowchart TD
+    CronTick[Cron discovers video] --> Lookup[Lookup in comment_analysis]
+    Lookup --> Exists{Doc exists?}
+    Exists -->|No| FreshAnalysis["Fetch ALL comments\nGemini: fresh analysis\nversion=1"]
+    Exists -->|Yes| QuickCheck{commentCount > last_known?}
+    QuickCheck -->|No| NoOp[Skip]
+    QuickCheck -->|Yes| DeltaFetch["Fetch comments since\ncomments_analyzed_upto"]
+    DeltaFetch --> HasNew{New comments?}
+    HasNew -->|No| UpdateCount["Update last_known_comment_count\nSkip analysis"]
+    HasNew -->|Yes| IncrementalAnalysis["Send to Gemini:\nnew comments + previous analysis\nversion++"]
+    FreshAnalysis --> Store[Upsert to comment_analysis]
+    IncrementalAnalysis --> Store
+```
+
+### API Endpoints
+
+**Per-channel endpoints** under `/api/v1/channels/{channel_id}/comment-analysis/`:
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/trigger` | Manually trigger a comment-analysis cycle for this channel |
+| `GET` | `/history` | List all comment analyses (filters: `source`, `platform`, `limit`) |
+| `GET` | `/{analysis_id}` | Get a specific comment analysis by MongoDB `_id` |
+| `DELETE` | `/{analysis_id}` | Delete a specific comment analysis |
+| `DELETE` | `/` | Delete all comment analyses for the channel |
+| `GET` | `/aggregate` | Aggregate all analyses into a combined demand/sentiment report |
+
+**Global config endpoints** under `/api/v1/comment-analysis/config/`:
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Get the current cron schedule config (`analysis_hour` in IST) |
+| `PUT` | `/` | Update the cron schedule. Body: `{"analysis_hour": 4}` (0-23 IST). No restart needed. |
+
+### Instagram Limitation
+
+Instagram Graph API only allows fetching comments on media owned by the authenticated account. Therefore, **Instagram comment analysis only works for own-channel videos**, not competitors. YouTube has no such restriction — competitor video comments are fully accessible via the public API.
 
 ---
 

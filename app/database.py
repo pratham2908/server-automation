@@ -64,6 +64,16 @@ async def connect_db(
         [("channel_id", 1), ("youtube_channel_id", 1)],
         unique=True,
     )
+    await _db.comment_analysis.create_index(
+        [("channel_id", 1), ("platform_video_id", 1)],
+        unique=True,
+    )
+    await _db.comment_analysis.create_index(
+        [("channel_id", 1), ("analyzed_at", -1)],
+    )
+    await _db.comment_analysis.create_index(
+        [("channel_id", 1), ("source", 1)],
+    )
 
     return _db
 
