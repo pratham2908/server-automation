@@ -59,7 +59,7 @@ class YouTubeService:
 
     def _build_credentials(self, token_data: dict[str, Any]) -> Credentials:
         """Construct ``Credentials`` from the DB token dict, refreshing if expired."""
-        expiry_raw = token_data.get("expiry")
+        expiry_raw = token_data.get("access_token_expiry")
         expiry_dt = None
         if expiry_raw:
             try:
@@ -127,7 +127,7 @@ class YouTubeService:
                 {
                     "$set": {
                         "youtube_tokens.token": creds.token,
-                        "youtube_tokens.expiry": updated_expiry,
+                        "youtube_tokens.access_token_expiry": updated_expiry,
                         "updated_at": now_ist(),
                     }
                 },

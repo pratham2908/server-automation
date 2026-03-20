@@ -686,7 +686,7 @@ class YouTubeTokenStore(BaseModel):
     refresh_token: str = Field(..., description="OAuth2 refresh token")
     token_uri: str = Field("https://oauth2.googleapis.com/token")
     scopes: list[str] = Field(default_factory=list)
-    expiry: Optional[str] = Field(None, description="ISO 8601 expiry datetime of the access token")
+    expiry: Optional[str] = Field(None, description="ISO 8601 expiry datetime of the REFRESH token (set by frontend)")
 
 
 @router.post("/{channel_id}/youtube-token")
@@ -699,6 +699,7 @@ async def store_youtube_token(
 
     Called by the frontend after the user completes the Google OAuth
     consent flow and receives tokens client-side.
+    The `expiry` field from the frontend is treated as the refresh token expiry.
     """
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
@@ -712,7 +713,8 @@ async def store_youtube_token(
         "refresh_token": body.refresh_token,
         "token_uri": body.token_uri,
         "scopes": body.scopes,
-        "expiry": body.expiry,
+        "refresh_token_expiry": body.expiry,
+        "access_token_expiry": None,
     }
 
     await db.channels.update_one(
@@ -761,14 +763,16 @@ async def get_youtube_token(
             detail="YouTube OAuth client credentials not configured",
         )
 
-    expiry = tokens.get("expiry")
-    expiry_dt = None
-    if expiry:
-        from datetime import datetime as dt
+    from datetime import datetime as dt
+
+    # Parse access_token_expiry from DB (managed by server)
+    access_expiry_raw = tokens.get("access_token_expiry")
+    access_expiry_dt = None
+    if access_expiry_raw:
         try:
-            expiry_dt = dt.fromisoformat(expiry.replace("Z", "+00:00"))
+            access_expiry_dt = dt.fromisoformat(access_expiry_raw.replace("Z", "+00:00"))
         except (ValueError, TypeError):
-            expiry_dt = None
+            access_expiry_dt = None
 
     creds = Credentials(
         token=tokens["token"],
@@ -777,37 +781,47 @@ async def get_youtube_token(
         client_id=client_id,
         client_secret=client_secret,
         scopes=tokens.get("scopes"),
-        expiry=expiry_dt.astimezone(timezone.utc).replace(tzinfo=None) if expiry_dt else None,
+        expiry=access_expiry_dt.astimezone(timezone.utc).replace(tzinfo=None) if access_expiry_dt else None,
     )
 
     refreshed = False
-    # Refresh if token is not valid and we have a refresh token
-    if not creds.valid and creds.refresh_token:
+
+    # If no access_token_expiry stored, we don't know if it's valid → must check with Google
+    needs_refresh = False
+    if access_expiry_dt is None:
+        # No stored access token expiry → call Google to validate/refresh
+        logger.info(f"[TOKEN] No access_token_expiry stored for channel '{channel_id}'. Will refresh via Google.")
+        needs_refresh = True
+    elif not creds.valid:
+        # Stored expiry says it's expired
+        logger.info(f"[TOKEN] Access token for channel '{channel_id}' is EXPIRED (expiry: {access_expiry_raw}). Will refresh.")
+        needs_refresh = True
+
+    if needs_refresh and creds.refresh_token:
         from google.auth.transport.requests import Request
         try:
             creds.refresh(Request())
             refreshed = True
-            
-            # Save the new token and expiry back to DB
-            updated_expiry = None
+
+            # Save the new access token and its expiry back to DB
+            updated_access_expiry = None
             if creds.expiry:
-                updated_expiry = creds.expiry.replace(tzinfo=timezone.utc).isoformat()
-            
+                updated_access_expiry = creds.expiry.replace(tzinfo=timezone.utc).isoformat()
+
             await db.channels.update_one(
                 {"channel_id": channel_id},
                 {
                     "$set": {
                         "youtube_tokens.token": creds.token,
-                        "youtube_tokens.expiry": updated_expiry,
+                        "youtube_tokens.access_token_expiry": updated_access_expiry,
                         "updated_at": now_ist(),
                     }
                 },
             )
             manager = _get_youtube_manager()
             manager.invalidate(channel_id)
-        except Exception:
-            # If refresh fails, it will still be invalid below
-            pass
+        except Exception as e:
+            logger.error(f"[TOKEN] Failed to refresh access token for channel '{channel_id}': {e}")
 
     # Final check: if still invalid, raise error
     if not creds.valid:
@@ -818,14 +832,15 @@ async def get_youtube_token(
         )
 
     if refreshed:
-        logger.info(f"[TOKEN] YouTube token for channel '{channel_id}' was EXPIRED/INVALID and has been REFRESHED.")
+        logger.info(f"[TOKEN] YouTube access token for channel '{channel_id}' was REFRESHED using refresh token.")
     else:
-        logger.info(f"[TOKEN] YouTube token for channel '{channel_id}' was already VALID.")
+        logger.info(f"[TOKEN] YouTube access token for channel '{channel_id}' was already VALID (expiry: {access_expiry_raw}).")
 
     return {
-        "ok": True, 
-        "access_token": creds.token, 
-        "expiry": creds.expiry.isoformat() + "Z" if creds.expiry else None
+        "ok": True,
+        "access_token": creds.token,
+        "access_token_expiry": creds.expiry.isoformat() + "Z" if creds.expiry else None,
+        "refresh_token_expiry": tokens.get("refresh_token_expiry"),
     }
 
 @router.get("/{channel_id}/youtube-token/status")
@@ -845,23 +860,36 @@ async def get_youtube_token_status(
     if not tokens:
         return {"channel_id": channel_id, "connected": False, "status": "disconnected"}
 
-    expiry = tokens.get("expiry")
-    if expiry:
-        from datetime import datetime as dt, timezone
+    from datetime import datetime as dt, timezone
+
+    # Check access token expiry
+    access_expiry = tokens.get("access_token_expiry")
+    access_expired = True
+    if access_expiry:
         try:
-            expiry_dt = dt.fromisoformat(expiry.replace("Z", "+00:00"))
-            is_expired = expiry_dt <= dt.now(timezone.utc)
+            access_dt = dt.fromisoformat(access_expiry.replace("Z", "+00:00"))
+            access_expired = access_dt <= dt.now(timezone.utc)
         except (ValueError, TypeError):
-            is_expired = True
-    else:
-        is_expired = True
+            access_expired = True
+
+    # Check refresh token expiry
+    refresh_expiry = tokens.get("refresh_token_expiry")
+    refresh_expired = True
+    if refresh_expiry:
+        try:
+            refresh_dt = dt.fromisoformat(refresh_expiry.replace("Z", "+00:00"))
+            refresh_expired = refresh_dt <= dt.now(timezone.utc)
+        except (ValueError, TypeError):
+            refresh_expired = True
 
     has_refresh = bool(tokens.get("refresh_token"))
 
-    if is_expired and has_refresh:
-        token_status = "expired_refreshable"
-    elif is_expired:
-        token_status = "expired"
+    if access_expired and has_refresh and not refresh_expired:
+        token_status = "access_expired_refreshable"
+    elif access_expired and refresh_expired:
+        token_status = "fully_expired"
+    elif access_expired:
+        token_status = "access_expired"
     else:
         token_status = "active"
 
@@ -870,7 +898,10 @@ async def get_youtube_token_status(
         "connected": True,
         "status": token_status,
         "has_refresh_token": has_refresh,
-        "expiry": expiry,
+        "access_token_expiry": access_expiry,
+        "refresh_token_expiry": refresh_expiry,
+        "access_token_expired": access_expired,
+        "refresh_token_expired": refresh_expired,
     }
 
 
