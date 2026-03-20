@@ -164,6 +164,23 @@ async def get_comment_analysis_history(
 
 
 # ------------------------------------------------------------------
+# GET /aggregate  –  combined insights across all analyses
+# ------------------------------------------------------------------
+
+
+@router.get("/aggregate")
+async def aggregate_comment_insights(
+    channel_id: str,
+    source: Optional[str] = Query(None, description="Filter by 'own' or 'competitor'"),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Aggregate all comment analyses into a channel-level intelligence report."""
+    from app.services.comment_analysis_engine import aggregate_comment_analyses
+
+    return await aggregate_comment_analyses(db, channel_id, source_filter=source)
+
+
+# ------------------------------------------------------------------
 # GET /{analysis_id}  –  single analysis by MongoDB _id
 # ------------------------------------------------------------------
 
@@ -249,18 +266,3 @@ async def delete_all_comment_analyses(
     }
 
 
-# ------------------------------------------------------------------
-# GET /aggregate  –  combined insights across all analyses
-# ------------------------------------------------------------------
-
-
-@router.get("/aggregate")
-async def aggregate_comment_insights(
-    channel_id: str,
-    source: Optional[str] = Query(None, description="Filter by 'own' or 'competitor'"),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    """Aggregate all comment analyses into a channel-level intelligence report."""
-    from app.services.comment_analysis_engine import aggregate_comment_analyses
-
-    return await aggregate_comment_analyses(db, channel_id, source_filter=source)
