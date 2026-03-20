@@ -72,6 +72,8 @@ async def run_comment_analysis(
     competitor_channel_id: str | None = None,
     youtube_service: YouTubeService | None = None,
     instagram_service: InstagramService | None = None,
+    channel_name: str | None = None,
+    progress_label: str | None = None,
 ) -> dict[str, Any] | None:
     """Analyse comments for a single video (fresh or incremental).
 
@@ -178,7 +180,8 @@ async def run_comment_analysis(
             }},
         )
         logger.info(
-            "📝 Incremental comment analysis v%d for '%s' (+%d new comments)",
+            "📝 [%s] [%s] Incremental comment analysis v%d for '%s' (+%d new comments)",
+            channel_name or channel_id, progress_label or "1/1",
             new_version, video_title[:50], len(filtered),
         )
     else:
@@ -206,7 +209,8 @@ async def run_comment_analysis(
             upsert=True,
         )
         logger.info(
-            "📝 Fresh comment analysis for '%s' (%d comments)",
+            "📝 [%s] [%s] Fresh comment analysis for '%s' (%d comments)",
+            channel_name or channel_id, progress_label or "1/1",
             video_title[:50], len(filtered),
         )
 
@@ -240,6 +244,10 @@ async def run_cron_cycle(
     """
     stats = {"analyzed": 0, "re_analyzed": 0, "skipped": 0, "errors": 0}
     videos_to_process: list[dict[str, Any]] = []
+
+    # ---- Get channel name for logging ----
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    channel_name = channel.get("name", channel_id) if channel else channel_id
 
     # ---- Competitor videos (YouTube only for now) ----
     if platform == "youtube":
@@ -317,7 +325,9 @@ async def run_cron_cycle(
 
     # ---- Decide which need analysis ----
     processed = 0
-    for vp in unique_videos:
+    total_to_process = min(len(unique_videos), _MAX_VIDEOS_PER_RUN)
+    
+    for i, vp in enumerate(unique_videos):
         if processed >= _MAX_VIDEOS_PER_RUN:
             break
 
@@ -339,6 +349,7 @@ async def run_cron_cycle(
         elif vp["platform"] == "instagram" and instagram_service_manager:
             ig_svc = await instagram_service_manager.get_service(channel_id)
 
+        progress_label = f"{processed + 1}/{total_to_process}"
         try:
             result = await run_comment_analysis(
                 db=db,
@@ -352,6 +363,8 @@ async def run_cron_cycle(
                 competitor_channel_id=vp.get("competitor_channel_id"),
                 youtube_service=yt_svc,
                 instagram_service=ig_svc,
+                channel_name=channel_name,
+                progress_label=progress_label,
             )
             if result:
                 if existing:
@@ -362,8 +375,8 @@ async def run_cron_cycle(
                 stats["skipped"] += 1
         except Exception as exc:
             logger.warning(
-                "Comment analysis failed for video %s: %s",
-                vp["platform_video_id"], exc,
+                "[%s] [%s] Comment analysis failed for video %s: %s",
+                channel_name, progress_label, vp["platform_video_id"], exc,
             )
             stats["errors"] += 1
 
