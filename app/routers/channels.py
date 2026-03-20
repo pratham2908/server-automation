@@ -731,12 +731,6 @@ async def get_youtube_token(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Return a fresh access token for the channel.
-
-    If the stored access token is expired, it is automatically refreshed
-    using the refresh token and the updated token is saved back to the DB.
-    Only the short-lived access token is returned — never the refresh token.
-    """
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(
@@ -776,21 +770,27 @@ async def get_youtube_token(
         except (ValueError, TypeError):
             expiry_dt = None
 
-        creds = Credentials(
-            token=tokens["token"],
-            refresh_token=tokens["refresh_token"],
-            token_uri=tokens.get("token_uri", "https://oauth2.googleapis.com/token"),
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=tokens.get("scopes"),
-            expiry=expiry_dt.astimezone(timezone.utc).replace(tzinfo=None) if expiry_dt else None,
-        )
+    creds = Credentials(
+        token=tokens["token"],
+        refresh_token=tokens["refresh_token"],
+        token_uri=tokens.get("token_uri", "https://oauth2.googleapis.com/token"),
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=tokens.get("scopes"),
+        expiry=expiry_dt.astimezone(timezone.utc).replace(tzinfo=None) if expiry_dt else None,
+    )
 
-        if not creds.valid and creds.refresh_token:
-            from google.auth.transport.requests import Request
+    # Refresh if token is not valid and we have a refresh token
+    if not creds.valid and creds.refresh_token:
+        from google.auth.transport.requests import Request
+        try:
             creds.refresh(Request())
-
-            updated_expiry = creds.expiry.replace(tzinfo=timezone.utc).isoformat() if creds.expiry else None
+            
+            # Save the new token and expiry back to DB
+            updated_expiry = None
+            if creds.expiry:
+                updated_expiry = creds.expiry.replace(tzinfo=timezone.utc).isoformat()
+            
             await db.channels.update_one(
                 {"channel_id": channel_id},
                 {
@@ -803,14 +803,22 @@ async def get_youtube_token(
             )
             manager = _get_youtube_manager()
             manager.invalidate(channel_id)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="YouTube token is invalid and cannot be refreshed. Re-authenticate via the frontend.",
-            )
+        except Exception:
+            # If refresh fails, it will still be invalid below
+            pass
 
-    return {"ok": True, "access_token": creds.token, "expiry": creds.expiry.isoformat() + "Z" if creds.expiry else None}
+    # Final check: if still invalid, raise error
+    if not creds.valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="YouTube token is invalid and cannot be refreshed. Re-authenticate via the frontend.",
+        )
 
+    return {
+        "ok": True, 
+        "access_token": creds.token, 
+        "expiry": creds.expiry.isoformat() + "Z" if creds.expiry else None
+    }
 
 @router.get("/{channel_id}/youtube-token/status")
 async def get_youtube_token_status(
