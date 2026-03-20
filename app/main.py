@@ -105,6 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 # ------------------------------------------------------------------
 
 from fastapi.middleware.cors import CORSMiddleware
+from app.middleware import StructuredLoggingMiddleware
 
 app = FastAPI(
     title="Video Automation Server",
@@ -120,6 +121,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(StructuredLoggingMiddleware)
 
 from app.routers import analysis, categories, channels, system, ui, videos  # noqa: E402
 

@@ -148,6 +148,68 @@ async def get_log_viewer():
 
             .btn:hover { background: #334155; border-color: var(--primary); }
             .btn.active { background: var(--primary); color: var(--bg-dark); font-weight: 600; }
+
+            /* Request Box Styles */
+            .request-box {
+                margin: 0.75rem 0;
+                background: rgba(30, 41, 59, 0.4);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 0.75rem;
+                overflow: hidden;
+                transition: all 0.2s ease;
+            }
+            .request-box[open] {
+                border-color: rgba(255, 255, 255, 0.2);
+                box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+                background: rgba(30, 41, 59, 0.6);
+            }
+            .request-box summary {
+                padding: 0.75rem 1rem;
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+                cursor: pointer;
+                list-style: none;
+                user-select: none;
+                font-weight: 500;
+            }
+            .request-box summary::-webkit-details-marker { display: none; }
+            .request-box .method {
+                font-size: 0.7rem;
+                padding: 0.15rem 0.5rem;
+                border-radius: 4px;
+                background: var(--bg-dark);
+                font-weight: 700;
+                color: var(--primary);
+                min-width: 50px;
+                text-align: center;
+            }
+            .request-box .path { flex: 1; color: var(--text-main); font-family: var(--font-mono); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; }
+            .request-box .status { font-size: 0.75rem; font-weight: 700; border-radius: 4px; padding: 0.15rem 0.4rem; }
+            .request-box .st-success { color: var(--success); background: rgba(74, 222, 128, 0.1); }
+            .request-box .st-warning { color: var(--warning); background: rgba(251, 191, 36, 0.1); }
+            .request-box .st-error { color: var(--error); background: rgba(248, 113, 113, 0.1); }
+            .request-box .duration { color: var(--text-muted); font-size: 0.7rem; font-family: var(--font-mono); }
+            .request-box .req-id { color: rgba(255,255,255,0.2); font-size: 0.65rem; }
+
+            .metadata-content {
+                padding: 1rem;
+                border-top: 1px solid rgba(255, 255, 255, 0.05);
+                font-size: 0.75rem;
+                color: var(--text-muted);
+                line-height: 1.6;
+            }
+            .metadata-content pre {
+                margin-top: 0.5rem;
+                background: rgba(0,0,0,0.2);
+                padding: 0.75rem;
+                border-radius: 0.5rem;
+                overflow-x: auto;
+                font-family: var(--font-mono);
+            }
+            .box-success { border-left: 3px solid var(--success); }
+            .box-warning { border-left: 3px solid var(--warning); }
+            .box-error { border-left: 3px solid var(--error); }
         </style>
     </head>
     <body>
@@ -192,6 +254,33 @@ async def get_log_viewer():
             function formatLogLine(line) {
                 if (!line.trim()) return '';
                 
+                // Handle Structured Request Boxes
+                if (line.includes('REQUEST_BOX:')) {
+                    try {
+                        const jsonStr = line.split('REQUEST_BOX:')[1].trim();
+                        const data = JSON.parse(jsonStr);
+                        const statusClass = data.status >= 400 ? 'error' : (data.status >= 300 ? 'warning' : 'success');
+                        
+                        return `
+                        <details class="request-box box-${statusClass}">
+                            <summary>
+                                <span class="method">${data.method}</span>
+                                <span class="path">${data.path}</span>
+                                <span class="status st-${statusClass}">${data.status}</span>
+                                <span class="duration">${data.duration_ms}ms</span>
+                                <span class="req-id">#${data.id}</span>
+                            </summary>
+                            <div class="metadata-content">
+                                <strong>Query:</strong> <span style="color:var(--text-main)">${data.query || 'None'}</span><br>
+                                <div style="margin-top:0.5rem"><strong>Headers:</strong></div>
+                                <pre>${JSON.stringify(data.headers, null, 2)}</pre>
+                            </div>
+                        </details>`;
+                    } catch (e) {
+                         console.error('Failed to parse request box:', e);
+                    }
+                }
+
                 let className = '';
                 const lowerLine = line.toLowerCase();
                 

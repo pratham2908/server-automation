@@ -1,0 +1,72 @@
+
+import time
+import json
+import uuid
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+from app.logger import get_logger
+
+logger = get_logger("http")
+
+class StructuredLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Generate a unique request ID
+        request_id = str(uuid.uuid4())[:8]
+        start_time = time.time()
+        
+        # Basic metadata
+        method = request.method
+        path = request.url.path
+        query = str(request.query_params)
+        
+        # Don't log large binary uploads or logs/stream
+        if "/logs/stream" in path or "/upload" in path or "/create" in path:
+             # Just basic info for heavy endpoints
+             response = await call_next(request)
+             duration = (time.time() - start_time) * 1000
+             status_code = response.status_code
+             logger.info(f"[REQUEST] {method} {path} | {status_code} | {duration:.2f}ms")
+             return response
+
+        # Pre-capture headers
+        headers = dict(request.headers)
+        # Remove sensitive info
+        headers.pop("x-api-key", None)
+        headers.pop("authorization", None)
+
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            # Log the crash
+            duration = (time.time() - start_time) * 1000
+            error_data = {
+                "id": request_id,
+                "method": method,
+                "path": path,
+                "status": 500,
+                "duration_ms": f"{duration:.2f}",
+                "error": str(e),
+                "headers": headers,
+                "query": query,
+            }
+            logger.error(f"REQUEST_BOX: {json.dumps(error_data)}")
+            raise e
+
+        duration = (time.time() - start_time) * 1000
+        status_code = response.status_code
+
+        # Build boxed log data
+        log_data = {
+            "id": request_id,
+            "method": method,
+            "path": path,
+            "status": status_code,
+            "duration_ms": f"{duration:.2f}",
+            "query": query,
+            "headers": headers,
+        }
+
+        # Log specialized "box" format for UI
+        logger.info(f"REQUEST_BOX: {json.dumps(log_data)}")
+        
+        return response
