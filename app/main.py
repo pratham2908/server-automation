@@ -133,7 +133,7 @@ app.add_middleware(
 )
 app.add_middleware(StructuredLoggingMiddleware)
 
-from app.routers import analysis, categories, channels, comment_analysis, system, ui, videos  # noqa: E402
+from app.routers import analysis, categories, channels, comment_analysis, retention_analysis, system, ui, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
@@ -141,6 +141,7 @@ app.include_router(categories.router)
 app.include_router(analysis.router)
 app.include_router(comment_analysis.router)
 app.include_router(comment_analysis.config_router)
+app.include_router(retention_analysis.router)
 app.include_router(ui.router)
 app.include_router(system.router)
 
@@ -763,6 +764,83 @@ async def api_schema():
                     "all_trending_topics": ["AI tools", "Short-form content"],
                     "all_key_insights": ["Audience craves depth over breadth"],
                 },
+            },
+            # -- Retention Analysis --
+            {
+                "group": "Retention Analysis",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/retention-analysis/history",
+                "description": "List retention analyses for a channel with optional status filter",
+                "query_params": {
+                    "status": {"type": "string", "enum": ["pending", "analyzing", "completed", "failed"], "optional": True},
+                    "limit": {"type": "integer", "optional": True, "default": 50},
+                },
+                "request": None,
+                "response": [
+                    {
+                        "channel_id": "ch1",
+                        "video_id": "uuid-1234",
+                        "video_title": "Epic Battle Simulation",
+                        "platform": "youtube",
+                        "status": "completed",
+                        "analysis": {
+                            "predicted_avg_retention_percent": 62.5,
+                            "hook_analysis": {"score": 78, "risk_level": "low"},
+                            "pacing_analysis": {"pacing_score": 71, "total_scene_cuts": 18},
+                        },
+                        "analyzed_at": "2026-03-20T12:00:00+05:30",
+                    }
+                ],
+            },
+            {
+                "group": "Retention Analysis",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/retention-analysis/{video_id}",
+                "description": "Get retention analysis for a video. Includes 'comparison' sub-object when actual metrics are available.",
+                "request": None,
+                "response": {
+                    "channel_id": "ch1",
+                    "video_id": "uuid-1234",
+                    "video_title": "Epic Battle Simulation",
+                    "status": "completed",
+                    "analysis": {
+                        "predicted_avg_retention_percent": 62.5,
+                        "hook_analysis": {"score": 78, "risk_level": "low"},
+                        "pacing_analysis": {"pacing_score": 71, "total_scene_cuts": 18},
+                        "strengths": ["Strong opening hook"],
+                        "weaknesses": ["Mid-section pacing drops"],
+                        "recommendations": ["Add B-roll at 45s mark"],
+                    },
+                    "actual_avg_percentage_viewed": 58.3,
+                    "actual_performance_rating": 72,
+                    "comparison": {
+                        "predicted_avg_retention_percent": 62.5,
+                        "actual_avg_percentage_viewed": 58.3,
+                        "retention_deviation": 4.2,
+                        "retention_accuracy_pct": 95.8,
+                        "prediction_quality": "accurate",
+                    },
+                },
+            },
+            {
+                "group": "Retention Analysis",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/retention-analysis/{video_id}/trigger",
+                "description": "Manually trigger retention analysis for a video (must have R2 file)",
+                "request": None,
+                "response": {
+                    "ok": True,
+                    "video_id": "uuid-1234",
+                    "message": "Retention analysis triggered — poll GET /{video_id} for status",
+                },
+            },
+            {
+                "group": "Retention Analysis",
+                "method": "DELETE",
+                "path": "/api/v1/channels/{channel_id}/retention-analysis/{video_id}",
+                "description": "Delete the retention analysis for a video",
+                "request": None,
+                "response": {"ok": True, "video_id": "uuid-1234", "deleted": True},
             },
             # -- Comment Analysis Config --
             {

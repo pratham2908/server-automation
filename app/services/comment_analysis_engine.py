@@ -74,6 +74,7 @@ async def run_comment_analysis(
     instagram_service: InstagramService | None = None,
     channel_name: str | None = None,
     progress_label: str | None = None,
+    source_label: str | None = None,
     video_published_at: str | datetime | None = None,
 ) -> dict[str, Any] | None:
     """Analyse comments for a single video (fresh or incremental).
@@ -182,8 +183,9 @@ async def run_comment_analysis(
             }},
         )
         logger.info(
-            "📝 [%s] [%s] Incremental comment analysis v%d for '%s' (+%d new comments)",
-            channel_name or channel_id, progress_label or "1/1",
+            "📝 [%s] [%s] [%s] Incremental comment analysis v%d for '%s' (+%d new comments)",
+            channel_name or channel_id, source_label or source,
+            progress_label or "1/1",
             new_version, video_title[:50], len(filtered),
         )
     else:
@@ -212,8 +214,9 @@ async def run_comment_analysis(
             upsert=True,
         )
         logger.info(
-            "📝 [%s] [%s] Fresh comment analysis for '%s' (%d comments)",
-            channel_name or channel_id, progress_label or "1/1",
+            "📝 [%s] [%s] [%s] Fresh comment analysis for '%s' (%d comments)",
+            channel_name or channel_id, source_label or source,
+            progress_label or "1/1",
             video_title[:50], len(filtered),
         )
 
@@ -264,6 +267,7 @@ async def run_cron_cycle(
                 comp_yt_id = comp.get("youtube_channel_id")
                 if not comp_yt_id:
                     continue
+                comp_name = comp.get("name") or comp.get("handle") or comp_yt_id
                 try:
                     latest = youtube_service.get_channel_latest_videos(comp_yt_id)
                     for v in latest:
@@ -271,6 +275,7 @@ async def run_cron_cycle(
                             "platform_video_id": v["video_id"],
                             "platform": "youtube",
                             "source": "competitor",
+                            "source_name": comp_name,
                             "competitor_channel_id": comp_yt_id,
                             "video_title": v.get("title", ""),
                             "video_published_at": v.get("published_at"),
@@ -302,6 +307,7 @@ async def run_cron_cycle(
                 "platform_video_id": pid,
                 "platform": "youtube",
                 "source": "own",
+                "source_name": channel_name,
                 "competitor_channel_id": None,
                 "video_title": v.get("title", ""),
                 "video_published_at": v.get("published_at"),
@@ -314,6 +320,7 @@ async def run_cron_cycle(
                 "platform_video_id": pid,
                 "platform": "instagram",
                 "source": "own",
+                "source_name": channel_name,
                 "competitor_channel_id": None,
                 "video_title": v.get("title", ""),
                 "video_published_at": v.get("published_at"),
@@ -330,13 +337,12 @@ async def run_cron_cycle(
             unique_videos.append(vp)
 
     # ---- Decide which need analysis ----
-    processed = 0
-    total_to_process = min(len(unique_videos), _MAX_VIDEOS_PER_RUN)
-    
-    for i, vp in enumerate(unique_videos):
-        if processed >= _MAX_VIDEOS_PER_RUN:
-            break
+    # The cap only applies to fresh (new) videos. Incremental re-analysis
+    # of already-analyzed videos is uncapped so we never miss comment updates.
+    fresh_count = 0
+    total_processed = 0
 
+    for vp in unique_videos:
         existing = await db.comment_analysis.find_one({
             "channel_id": channel_id,
             "platform_video_id": vp["platform_video_id"],
@@ -346,8 +352,11 @@ async def run_cron_cycle(
             if vp["current_comment_count"] <= existing.get("last_known_comment_count", 0):
                 stats["skipped"] += 1
                 continue
+        else:
+            if fresh_count >= _MAX_VIDEOS_PER_RUN:
+                stats["skipped"] += 1
+                continue
 
-        # Need analysis
         yt_svc: YouTubeService | None = None
         ig_svc: InstagramService | None = None
         if vp["platform"] == "youtube" and youtube_service_manager:
@@ -355,7 +364,9 @@ async def run_cron_cycle(
         elif vp["platform"] == "instagram" and instagram_service_manager:
             ig_svc = await instagram_service_manager.get_service(channel_id)
 
-        progress_label = f"{processed + 1}/{total_to_process}"
+        total_processed += 1
+        progress_label = f"{total_processed}"
+        source_label = vp.get("source_name") or vp.get("source", "own")
         try:
             result = await run_comment_analysis(
                 db=db,
@@ -371,6 +382,7 @@ async def run_cron_cycle(
                 instagram_service=ig_svc,
                 channel_name=channel_name,
                 progress_label=progress_label,
+                source_label=source_label,
                 video_published_at=vp.get("video_published_at"),
             )
             if result:
@@ -378,6 +390,7 @@ async def run_cron_cycle(
                     stats["re_analyzed"] += 1
                 else:
                     stats["analyzed"] += 1
+                    fresh_count += 1
             else:
                 stats["skipped"] += 1
         except Exception as exc:
@@ -386,8 +399,6 @@ async def run_cron_cycle(
                 channel_name, progress_label, vp["platform_video_id"], exc,
             )
             stats["errors"] += 1
-
-        processed += 1
 
     logger.info(
         "🔍 Comment analysis cycle for '%s': %d fresh, %d incremental, %d skipped, %d errors",

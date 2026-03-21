@@ -123,6 +123,80 @@ async def get_log_viewer():
             ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
             ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
+            .toolbar {
+                padding: 0.75rem 2rem;
+                background: rgba(30, 41, 59, 0.6);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                flex-wrap: wrap;
+                z-index: 9;
+            }
+
+            .filter-group {
+                display: flex;
+                gap: 0.35rem;
+            }
+
+            .filter-btn {
+                background: var(--bg-dark);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                color: var(--text-muted);
+                padding: 0.3rem 0.65rem;
+                border-radius: 0.4rem;
+                cursor: pointer;
+                font-size: 0.75rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                transition: all 0.15s;
+            }
+            .filter-btn:hover { border-color: var(--primary); color: var(--text-main); }
+            .filter-btn.active { background: var(--primary); color: var(--bg-dark); border-color: var(--primary); }
+            .filter-btn.active-error { background: var(--error); color: #fff; border-color: var(--error); }
+            .filter-btn.active-warning { background: var(--warning); color: var(--bg-dark); border-color: var(--warning); }
+            .filter-btn.active-success { background: var(--success); color: var(--bg-dark); border-color: var(--success); }
+            .filter-btn.active-info { background: var(--primary); color: var(--bg-dark); border-color: var(--primary); }
+
+            .search-box {
+                flex: 1;
+                min-width: 160px;
+                max-width: 320px;
+                position: relative;
+            }
+            .search-box input {
+                width: 100%;
+                background: var(--bg-dark);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                color: var(--text-main);
+                padding: 0.35rem 0.65rem 0.35rem 2rem;
+                border-radius: 0.4rem;
+                font-size: 0.8rem;
+                font-family: 'Fira Code', monospace;
+                outline: none;
+                transition: border-color 0.15s;
+            }
+            .search-box input:focus { border-color: var(--primary); }
+            .search-box input::placeholder { color: rgba(148, 163, 184, 0.5); }
+            .search-box svg {
+                position: absolute;
+                left: 0.55rem;
+                top: 50%;
+                transform: translateY(-50%);
+                color: var(--text-muted);
+                pointer-events: none;
+            }
+
+            .match-count {
+                font-size: 0.7rem;
+                color: var(--text-muted);
+                padding: 0.25rem 0.5rem;
+                background: var(--bg-dark);
+                border-radius: 0.3rem;
+                white-space: nowrap;
+            }
+
             .controls {
                 position: fixed;
                 bottom: 2rem;
@@ -148,6 +222,8 @@ async def get_log_viewer():
 
             .btn:hover { background: #334155; border-color: var(--primary); }
             .btn.active { background: var(--primary); color: var(--bg-dark); font-weight: 600; }
+
+            .log-line.hidden, .request-box.hidden { display: none; }
 
             /* Request Box Styles */
             .request-box {
@@ -224,6 +300,21 @@ async def get_log_viewer():
             </div>
         </header>
 
+        <div class="toolbar">
+            <div class="filter-group">
+                <button class="filter-btn active" data-level="all">ALL</button>
+                <button class="filter-btn" data-level="error">ERROR</button>
+                <button class="filter-btn" data-level="warning">WARNING</button>
+                <button class="filter-btn" data-level="success">SUCCESS</button>
+                <button class="filter-btn" data-level="info">INFO</button>
+            </div>
+            <div class="search-box">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input id="search-input" type="text" placeholder="Search logs..." />
+            </div>
+            <span id="match-count" class="match-count" style="display:none"></span>
+        </div>
+
         <main id="log-container"></main>
 
         <div class="controls">
@@ -247,22 +338,95 @@ async def get_log_viewer():
             const autoscrollBtn = document.getElementById('autoscroll-btn');
             const connectionStatus = document.getElementById('connection-status');
             const statusDot = document.getElementById('status-dot');
+            const searchInput = document.getElementById('search-input');
+            const matchCountEl = document.getElementById('match-count');
+            const filterBtns = document.querySelectorAll('.filter-btn');
             
             let autoscroll = true;
             let eventSource = null;
+            let activeLevel = 'all';
+            let searchTerm = '';
+
+            function classifyLevel(line) {
+                const lower = line.toLowerCase();
+                if (lower.includes('[error]') || lower.includes('[critical]') || lower.includes('error') || lower.includes('failed') || lower.includes('exception'))
+                    return 'error';
+                if (lower.includes('[warning]') || lower.includes('warning'))
+                    return 'warning';
+                if (lower.includes('[success]') || lower.includes('success') || lower.includes('successfully') ||
+                    lower.includes('started') || lower.includes('analyzed') || lower.includes('completed') ||
+                    line.includes('\\u2705') || line.includes('\\u2728') || line.includes('\\ud83d'))
+                    return 'success';
+                return 'info';
+            }
+
+            function shouldShow(el) {
+                const level = el.getAttribute('data-level') || 'info';
+                const rawText = (el.getAttribute('data-raw') || el.innerText).toLowerCase();
+
+                if (activeLevel !== 'all' && level !== activeLevel) return false;
+                if (searchTerm && !rawText.includes(searchTerm.toLowerCase())) return false;
+                return true;
+            }
+
+            function applyFilters() {
+                const allLines = logContainer.querySelectorAll('.log-line, .request-box');
+                let visible = 0;
+                allLines.forEach(el => {
+                    const show = shouldShow(el);
+                    el.classList.toggle('hidden', !show);
+                    if (show) visible++;
+                });
+                if (searchTerm || activeLevel !== 'all') {
+                    matchCountEl.textContent = `${visible} match${visible !== 1 ? 'es' : ''}`;
+                    matchCountEl.style.display = '';
+                } else {
+                    matchCountEl.style.display = 'none';
+                }
+            }
+
+            filterBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const level = btn.getAttribute('data-level');
+                    if (activeLevel === level && level !== 'all') {
+                        activeLevel = 'all';
+                    } else {
+                        activeLevel = level;
+                    }
+                    filterBtns.forEach(b => {
+                        b.classList.remove('active', 'active-error', 'active-warning', 'active-success', 'active-info');
+                    });
+                    const activeBtn = document.querySelector(`.filter-btn[data-level="${activeLevel}"]`);
+                    if (activeLevel === 'all') {
+                        activeBtn.classList.add('active');
+                    } else {
+                        activeBtn.classList.add('active-' + activeLevel);
+                    }
+                    applyFilters();
+                });
+            });
+
+            let searchDebounce = null;
+            searchInput.addEventListener('input', () => {
+                clearTimeout(searchDebounce);
+                searchDebounce = setTimeout(() => {
+                    searchTerm = searchInput.value.trim();
+                    applyFilters();
+                }, 200);
+            });
 
             function formatLogLine(line) {
                 if (!line.trim()) return '';
                 
-                // Handle Structured Request Boxes
                 if (line.includes('REQUEST_BOX:')) {
                     try {
                         const jsonStr = line.split('REQUEST_BOX:')[1].trim();
                         const data = JSON.parse(jsonStr);
                         const statusClass = data.status >= 400 ? 'error' : (data.status >= 300 ? 'warning' : 'success');
+                        const level = data.status >= 400 ? 'error' : (data.status >= 300 ? 'warning' : 'success');
                         
                         return `
-                        <details class="request-box box-${statusClass}">
+                        <details class="request-box box-${statusClass}" data-level="${level}" data-raw="${data.method} ${data.path} ${data.status} ${data.query || ''}">
                             <summary>
                                 <span class="method">${data.method}</span>
                                 <span class="path">${data.path}</span>
@@ -281,35 +445,22 @@ async def get_log_viewer():
                     }
                 }
 
+                const level = classifyLevel(line);
                 let className = '';
-                const lowerLine = line.toLowerCase();
-                
-                if (lowerLine.includes('error') || lowerLine.includes('failed') || lowerLine.includes('exception')) {
-                    className = 'line-error';
-                } else if (lowerLine.includes('warning')) {
-                    className = 'line-warning';
-                } else if (
-                    lowerLine.includes('success') || 
-                    lowerLine.includes('successfully') ||
-                    lowerLine.includes('started') || 
-                    lowerLine.includes('analyzed') || 
-                    lowerLine.includes('completed') ||
-                    line.includes('🔍') || 
-                    line.includes('✅') || 
-                    line.includes('✨') ||
-                    line.includes('💥')
-                ) {
-                    className = 'line-success';
-                } else if (lowerLine.includes('info')) {
-                    className = 'line-info';
-                }
+                if (level === 'error') className = 'line-error';
+                else if (level === 'warning') className = 'line-warning';
+                else if (level === 'success') className = 'line-success';
+                else className = 'line-info';
 
                 let formattedLine = line
                     .replace(/INFO:/g, '<span class="keyword-info">INFO:</span>')
                     .replace(/ERROR:/g, '<span class="keyword-error">ERROR:</span>')
                     .replace(/WARNING:/g, '<span class="keyword-warning">WARNING:</span>');
 
-                return `<div class="log-line ${className}">${formattedLine}</div>`;
+                const hidden = (activeLevel !== 'all' && level !== activeLevel) ||
+                               (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase()));
+
+                return `<div class="log-line ${className}${hidden ? ' hidden' : ''}" data-level="${level}" data-raw="${line.replace(/"/g, '&quot;')}">${formattedLine}</div>`;
             }
 
             function connect() {
@@ -340,10 +491,13 @@ async def get_log_viewer():
                 };
             }
 
-            clearBtn.onclick = () => { logContainer.innerHTML = ''; };
+            clearBtn.onclick = () => {
+                logContainer.innerHTML = '';
+                matchCountEl.style.display = 'none';
+            };
 
             copyBtn.onclick = () => {
-                const text = Array.from(logContainer.querySelectorAll('.log-line'))
+                const text = Array.from(logContainer.querySelectorAll('.log-line:not(.hidden)'))
                     .map(el => el.innerText)
                     .join('\\n');
                 navigator.clipboard.writeText(text).then(() => {

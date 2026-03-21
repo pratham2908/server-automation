@@ -520,6 +520,210 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 - Strictly return a JSON array of objects (`[]`), even if count is 1."""
 
     # ------------------------------------------------------------------
+    # Multimodal video retention analysis
+    # ------------------------------------------------------------------
+
+    async def _generate_with_video(self, video_path: str, prompt: str) -> str:
+        """Upload a video file to Gemini, wait for processing, then generate.
+
+        Tries each model in the fallback chain. Cleans up the uploaded
+        file from Gemini storage after generation (or on failure).
+        """
+        import asyncio
+
+        uploaded_file = await self._client.aio.files.upload(file=video_path)
+        logger.info("Uploaded video to Gemini (name=%s, state=%s)", uploaded_file.name, uploaded_file.state)
+
+        try:
+            # Poll until the file is ACTIVE (processing complete)
+            poll_count = 0
+            while uploaded_file.state.name == "PROCESSING":
+                poll_count += 1
+                if poll_count > 60:
+                    raise TimeoutError("Gemini file processing exceeded 5-minute timeout")
+                await asyncio.sleep(5)
+                uploaded_file = await self._client.aio.files.get(name=uploaded_file.name)
+
+            if uploaded_file.state.name == "FAILED":
+                raise RuntimeError(f"Gemini file processing failed: {uploaded_file.state}")
+
+            logger.info("Gemini file ready (state=%s)", uploaded_file.state.name)
+
+            last_error: Exception | None = None
+            for model in self._MODEL_CHAIN:
+                try:
+                    response = await asyncio.wait_for(
+                        self._client.aio.models.generate_content(
+                            model=model,
+                            contents=[uploaded_file, prompt],
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                            ),
+                        ),
+                        timeout=180.0,
+                    )
+                    logger.info("Gemini video analysis response from model '%s'", model, extra={"color": "CYAN"})
+                    return response.text
+                except Exception as exc:
+                    last_error = exc
+                    is_last = model == self._MODEL_CHAIN[-1]
+                    if is_last:
+                        logger.error("All Gemini models failed for video analysis: %s", exc)
+                    else:
+                        logger.warning("Model '%s' failed for video analysis: %s — trying next", model, exc)
+
+            raise last_error  # type: ignore[misc]
+        finally:
+            try:
+                await self._client.aio.files.delete(name=uploaded_file.name)
+                logger.info("Deleted Gemini uploaded file %s", uploaded_file.name)
+            except Exception as exc:
+                logger.warning("Failed to delete Gemini file %s: %s", uploaded_file.name, exc)
+
+    async def analyze_video_retention(
+        self,
+        video_path: str,
+        video_title: str,
+        platform: str = "youtube",
+    ) -> dict[str, Any]:
+        """Analyze a video file for retention prediction.
+
+        Parameters
+        ----------
+        video_path:
+            Local filesystem path to the video file.
+        video_title:
+            Title of the video (provides context to the model).
+        platform:
+            ``"youtube"`` or ``"instagram"``.
+
+        Returns
+        -------
+        dict matching the ``RetentionPrediction`` schema.
+        """
+        prompt = self._build_retention_analysis_prompt(video_title, platform)
+        text = await self._generate_with_video(video_path, prompt)
+
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            logger.error("Failed to parse Gemini video retention response: %s", text)
+            raise ValueError("Failed to parse Gemini video retention analysis response")
+
+    @staticmethod
+    def _build_retention_analysis_prompt(video_title: str, platform: str = "youtube") -> str:
+        if platform == "instagram":
+            platform_context = (
+                "This is an Instagram Reel. Reels are short-form vertical videos (typically 15-90 seconds). "
+                "The first 1-3 seconds are critical — users scroll past instantly if not hooked. "
+                "Pacing should be fast with frequent visual changes."
+            )
+        else:
+            platform_context = (
+                "This is a YouTube video. Audience retention is the single most important metric for the algorithm. "
+                "The first 5 seconds determine whether viewers stay or bounce. "
+                "Average retention above 50% is good; above 70% is excellent."
+            )
+
+        return f"""You are an elite Video Retention Analyst and AI Content Auditor. Your objective is to analyze this video file to reverse-engineer its engagement structure and predict audience retention.
+
+## Video Context
+- **Title**: "{video_title}"
+- **Platform**: {platform.capitalize()}
+- {platform_context}
+
+## Analysis Task
+
+Perform a deep-dive analysis on the pacing, visual hooks, and overall narrative or structural flow of this video. Extract exact timestamps of significant visual changes, score the hook, and predict audience retention.
+
+## Rules
+
+1. **The 5-Second Rule**: Be hyper-critical of the first 5 seconds. If there is no significant visual change, motion, or compelling audio hook in this window, flag it as HIGH RISK. Score the hook ruthlessly.
+
+2. **Visual Pacing**: Measure the frequency of scene cuts, major on-screen motion, or prominent visual transitions. Note every significant visual change with its exact timestamp.
+
+3. **Objective Extraction**: Do NOT provide subjective praise. Focus on structural data: what happens, when it happens, and how long it takes. Be specific with timestamps.
+
+4. **Drop-Off Prediction**: Identify moments where viewers are most likely to leave. Common causes: slow pacing, repetitive content, confusing narrative, long static shots, weak payoff after buildup.
+
+5. **Retention Prediction**: Based on the video's structure, pacing, hook quality, and content flow, predict the average percentage of the video that viewers will watch.
+
+## Required Output Format
+
+Return a JSON object with exactly these keys:
+
+{{
+  "predicted_avg_retention_percent": 65.0,
+  "predicted_drop_off_points": [
+    {{
+      "timestamp_seconds": 8.5,
+      "reason": "Static talking head with no visual change for 6 seconds after hook",
+      "severity": 7
+    }}
+  ],
+  "hook_analysis": {{
+    "score": 72,
+    "risk_level": "medium",
+    "first_frame_description": "Close-up of product on white background with bold text overlay",
+    "visual_change_within_5s": true,
+    "audio_hook_present": true,
+    "text_overlay_present": true,
+    "notes": [
+      "Strong opening visual but audio hook could be sharper",
+      "Text overlay appears at 1.2s — good for grabbing scanning viewers"
+    ]
+  }},
+  "pacing_analysis": {{
+    "total_scene_cuts": 24,
+    "avg_cut_interval_seconds": 3.2,
+    "longest_static_segment_seconds": 8.5,
+    "pacing_score": 68,
+    "visual_change_timestamps": [
+      {{
+        "timestamp_seconds": 0.0,
+        "description": "Opening frame — product reveal with zoom-in",
+        "transition_type": "zoom"
+      }},
+      {{
+        "timestamp_seconds": 2.8,
+        "description": "Cut to presenter speaking to camera",
+        "transition_type": "hard_cut"
+      }}
+    ]
+  }},
+  "narrative_structure": "problem-solution",
+  "strengths": [
+    "Strong opening hook with immediate visual interest",
+    "Good pacing in first 30 seconds with frequent cuts"
+  ],
+  "weaknesses": [
+    "Middle section (45s-70s) has extended talking head with no B-roll",
+    "No clear payoff or callback to the hook's promise"
+  ],
+  "recommendations": [
+    "Add B-roll or visual overlays during the explanation section (45s-70s)",
+    "Insert a pattern interrupt around the 60-second mark to recapture attention",
+    "Tighten the ending — current outro drags and will cause late drop-offs"
+  ]
+}}
+
+## Field Guidelines
+
+- **predicted_avg_retention_percent**: Your best estimate (0-100) of what percentage of the video the average viewer will watch. Be realistic — most YouTube videos average 40-60%. Only exceptional videos hit 70%+.
+- **predicted_drop_off_points**: List specific timestamps where significant viewer loss is predicted. Include the reason and severity (1-10). Focus on the 3-5 most impactful points.
+- **hook_analysis**: Deep analysis of the first 5 seconds.
+  - `score`: 0-100. Below 50 = high risk of immediate bounce. Above 80 = excellent hook.
+  - `risk_level`: "low" (score >= 70), "medium" (40-69), "high" (< 40).
+  - Include every observable element: what's on screen, audio, text overlays.
+- **pacing_analysis**: Every significant visual change gets a timestamp entry.
+  - `transition_type`: one of hard_cut, fade, dissolve, zoom, pan, whip, slide, motion_change, other.
+  - `pacing_score`: 0-100 based on variety, rhythm, and appropriateness for the content type.
+- **narrative_structure**: One of: linear, problem-solution, listicle, tutorial, montage, story-arc, vlog, comparison, reveal, other.
+- **strengths / weaknesses / recommendations**: 2-5 items each. Be specific with timestamps. No generic advice.
+
+Be thorough, objective, and data-driven. Every claim must reference a specific moment in the video."""
+
+    # ------------------------------------------------------------------
     # Comment sentiment & demand analysis
     # ------------------------------------------------------------------
 

@@ -894,7 +894,7 @@ Content params are custom dimensions for classifying videos. Manage them with th
 
 ## Comment Analysis
 
-Comment analysis runs automatically via a 24-hour cron job. It discovers competitor and own-channel videos, fetches comments, and extracts sentiment/demand intelligence via Gemini. The following endpoints are for reading results and manual triggering.
+Comment analysis runs automatically via a 24-hour cron job. It discovers competitor and own-channel videos, fetches comments, and extracts sentiment/demand intelligence via Gemini. The 20-video cap applies only to **fresh** (never-analyzed) videos; incremental re-analysis of already-analyzed videos is uncapped so comment updates are never missed. Logs include the source channel name (own channel or competitor name) for each video. The following endpoints are for reading results and manual triggering.
 
 ### Manually Trigger Comment Analysis
 
@@ -1027,6 +1027,129 @@ Comment analysis runs automatically via a 24-hour cron job. It discovers competi
   "all_content_gaps": ["Advanced workflows", "Mobile-first content"],
   "all_trending_topics": ["AI tools", "Short-form content"],
   "all_key_insights": ["Audience craves depth over breadth"]
+}
+```
+
+---
+
+## Retention Analysis
+
+Video retention prediction using Gemini's multimodal analysis. Automatically triggered when a video reaches `ready` status. Actual metrics are backfilled when the regular analysis pipeline processes the published video.
+
+### List Retention Analyses
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/retention-analysis/history`
+- **Method**: `GET`
+- **Query Params**:
+  - `status` (optional): Filter by `pending`, `analyzing`, `completed`, or `failed`
+  - `limit` (optional): Max results (default 50, max 200)
+- **Response**:
+
+```json
+[
+  {
+    "_id": "60f7b2a1...",
+    "channel_id": "ch1",
+    "video_id": "uuid-1234",
+    "video_title": "Epic Battle Simulation",
+    "platform": "youtube",
+    "status": "completed",
+    "analysis": {
+      "predicted_avg_retention_percent": 62.5,
+      "hook_analysis": {"score": 78, "risk_level": "low"},
+      "pacing_analysis": {"pacing_score": 71, "total_scene_cuts": 18}
+    },
+    "analyzed_at": "2026-03-20T12:00:00+05:30",
+    "created_at": "2026-03-20T11:55:00+05:30"
+  }
+]
+```
+
+### Get Retention Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/retention-analysis/{video_id}`
+- **Method**: `GET`
+- **Description**: Get the full retention analysis for a video. If actual metrics have been backfilled (video is published and analyzed), includes a computed `comparison` sub-object.
+- **Response** (with actuals):
+
+```json
+{
+  "_id": "60f7b2a1...",
+  "channel_id": "ch1",
+  "video_id": "uuid-1234",
+  "video_title": "Epic Battle Simulation",
+  "status": "completed",
+  "analysis": {
+    "predicted_avg_retention_percent": 62.5,
+    "predicted_drop_off_points": [
+      {"timestamp_seconds": 45.0, "reason": "Extended static shot", "severity": 7}
+    ],
+    "hook_analysis": {
+      "score": 78,
+      "risk_level": "low",
+      "first_frame_description": "Zoom-in on battlefield with bold text",
+      "visual_change_within_5s": true,
+      "audio_hook_present": true,
+      "text_overlay_present": true,
+      "notes": ["Strong opening with immediate motion"]
+    },
+    "pacing_analysis": {
+      "total_scene_cuts": 18,
+      "avg_cut_interval_seconds": 4.2,
+      "pacing_score": 71,
+      "visual_change_timestamps": [
+        {"timestamp_seconds": 0.0, "description": "Opening zoom", "transition_type": "zoom"}
+      ]
+    },
+    "narrative_structure": "montage",
+    "strengths": ["Strong opening hook"],
+    "weaknesses": ["Mid-section pacing drops"],
+    "recommendations": ["Add B-roll at 45s mark"]
+  },
+  "actual_avg_percentage_viewed": 58.3,
+  "actual_engagement_rate": 5.2,
+  "actual_performance_rating": 72,
+  "comparison": {
+    "predicted_avg_retention_percent": 62.5,
+    "actual_avg_percentage_viewed": 58.3,
+    "retention_deviation": 4.2,
+    "retention_accuracy_pct": 95.8,
+    "prediction_quality": "accurate",
+    "actual_performance_rating": 72,
+    "hook_score": 78,
+    "pacing_score": 71
+  }
+}
+```
+
+> `comparison` is `null` if actual metrics have not been backfilled yet (video not published or not yet processed by the analysis pipeline).
+
+### Trigger Retention Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/retention-analysis/{video_id}/trigger`
+- **Method**: `POST`
+- **Description**: Manually trigger (or re-trigger) retention analysis. The video must be in `ready`, `scheduled`, or `published` status and have an R2 file. Analysis runs in the background -- poll `GET /{video_id}` for status.
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "video_id": "uuid-1234",
+  "message": "Retention analysis triggered — poll GET /{video_id} for status"
+}
+```
+
+### Delete Retention Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/retention-analysis/{video_id}`
+- **Method**: `DELETE`
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "video_id": "uuid-1234",
+  "deleted": true
 }
 ```
 

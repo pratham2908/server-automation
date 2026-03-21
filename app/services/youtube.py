@@ -311,12 +311,13 @@ class YouTubeService:
             response = (
                 self._youtube.videos()
                 .list(
-                    part="statistics,contentDetails",
+                    part="snippet,statistics,contentDetails",
                     id=",".join(batch),
                 )
                 .execute()
             )
             for item in response.get("items", []):
+                snippet = item.get("snippet", {})
                 s = item["statistics"]
                 content = item.get("contentDetails", {})
 
@@ -342,6 +343,7 @@ class YouTubeService:
                     "engagement_rate": engagement_rate,
                     "like_rate": like_rate,
                     "comment_rate": comment_rate,
+                    "published_at": snippet.get("publishedAt"),
                 }
 
         # Merge analytics data (avg_percentage_viewed, avg_view_duration, etc.)

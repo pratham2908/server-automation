@@ -40,6 +40,25 @@ def _get_r2() -> R2Service:
     return r2_service
 
 
+def _trigger_retention_analysis(
+    channel_id: str,
+    video_id: str,
+    db: "AsyncIOMotorDatabase",
+) -> None:
+    """Fire a background task for video retention analysis."""
+    import asyncio
+    from app.main import r2_service, gemini_service  # type: ignore[import]
+    from app.services.retention_analysis import run_retention_analysis
+
+    if not r2_service or not gemini_service:
+        logger.warning("Cannot run retention analysis — services not initialised")
+        return
+
+    asyncio.create_task(
+        run_retention_analysis(channel_id, video_id, db, r2_service, gemini_service)
+    )
+
+
 # ------------------------------------------------------------------
 # GET /  –  video list (with optional suggest_n)
 # ------------------------------------------------------------------
@@ -798,6 +817,9 @@ async def upload_video(
         
     logger.success("📤 Uploaded video '%s' to R2 — queue position %d", video.get("title", video_id)[:50], next_pos)
 
+    # Fire background retention analysis
+    _trigger_retention_analysis(channel_id, video_id, db)
+
     return {"ok": True, "video": updated_video, "queue_position": next_pos}
 
 
@@ -939,6 +961,10 @@ async def create_video(
         "Created ad-hoc video '%s' — status=%s, verified=%s, %s queue position %d",
         title[:50], doc["status"], is_verified, queue_type, next_pos,
     )
+
+    # Fire background retention analysis if the video is ready (has R2 file)
+    if doc["status"] == "ready":
+        _trigger_retention_analysis(channel_id, vid_id, db)
 
     return {"ok": True, "video": doc, "queue_position": next_pos}
 
@@ -2149,9 +2175,10 @@ async def delete_video(
     await db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
     await db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
 
-    # 3. Delete the video document and its analysis history
+    # 3. Delete the video document, analysis history, and retention analysis
     await db.videos.delete_one({"_id": video["_id"]})
     await db.analysis_history.delete_many({"channel_id": channel_id, "video_id": video_id})
+    await db.retention_analysis.delete_one({"channel_id": channel_id, "video_id": video_id})
 
     # 4. Recompute category after deletion
     if was_published and category_name:

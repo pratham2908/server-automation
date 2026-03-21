@@ -246,6 +246,31 @@ async def run_analysis(
             upsert=True,
         )
 
+        # Backfill actual metrics into retention_analysis (if a prediction exists)
+        retention_doc = await db.retention_analysis.find_one(
+            {"channel_id": channel_id, "video_id": v["video_id"]}
+        )
+        if retention_doc and not retention_doc.get("actuals_populated_at"):
+            await db.retention_analysis.update_one(
+                {"channel_id": channel_id, "video_id": v["video_id"]},
+                {"$set": {
+                    "actual_avg_percentage_viewed": stats.get("avg_percentage_viewed"),
+                    "actual_engagement_rate": stats.get("engagement_rate"),
+                    "actual_views": stats.get("views"),
+                    "actual_like_rate": stats.get("like_rate"),
+                    "actual_comment_rate": stats.get("comment_rate"),
+                    "actual_views_per_subscriber": stats.get("views_per_subscriber"),
+                    "actual_performance_rating": (ai_insight or {}).get("performance_rating"),
+                    "actual_stats_snapshot": stats,
+                    "actuals_populated_at": now_ist(),
+                    "updated_at": now_ist(),
+                }},
+            )
+            logger.info(
+                "Backfilled actual metrics into retention_analysis for '%s'",
+                v.get("title", v["video_id"])[:50],
+            )
+
     if per_video_count:
         logger.success(f"✅ Completed per-video analysis for {per_video_count} videos.")
 

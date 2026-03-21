@@ -20,8 +20,10 @@
   - [analysis](#collection-analysis)
   - [analysis_history](#collection-analysis_history)
   - [comment_analysis](#collection-comment_analysis)
+  - [retention_analysis](#collection-retention_analysis)
 - [Services Architecture](#services-architecture)
 - [Comment Analysis System](#comment-analysis-system)
+- [Retention Analysis System](#retention-analysis-system)
 - [Data Flow Diagrams](#data-flow-diagrams)
   - [Video Status Lifecycle](#video-status-lifecycle)
   - [System Architecture](#system-architecture)
@@ -1742,6 +1744,78 @@ Stores Gemini-generated sentiment and demand analysis of video comments. One doc
 | `(channel_id, analyzed_at)` | Compound (desc) | Reverse-chronological history queries |
 | `(channel_id, source)` | Compound | Filter own vs competitor analyses |
 
+### Collection: `retention_analysis`
+
+Stores Gemini's multimodal video retention predictions and, once available, actual performance metrics for comparison. One document per video, keyed by `(channel_id, video_id)`.
+
+```json
+{
+  "channel_id": "ch1",
+  "video_id": "uuid-1234",
+  "video_title": "Epic Battle Simulation",
+  "platform": "youtube",
+  "duration_seconds": 78.5,
+  "status": "completed",
+  "error_message": null,
+  "analysis": {
+    "predicted_avg_retention_percent": 62.5,
+    "predicted_drop_off_points": [
+      {"timestamp_seconds": 45.0, "reason": "Extended static shot", "severity": 7}
+    ],
+    "hook_analysis": {
+      "score": 78,
+      "risk_level": "low",
+      "first_frame_description": "Zoom-in on battlefield with bold title text",
+      "visual_change_within_5s": true,
+      "audio_hook_present": true,
+      "text_overlay_present": true,
+      "notes": ["Strong opening with immediate motion"]
+    },
+    "pacing_analysis": {
+      "total_scene_cuts": 18,
+      "avg_cut_interval_seconds": 4.2,
+      "longest_static_segment_seconds": 8.5,
+      "pacing_score": 71,
+      "visual_change_timestamps": [
+        {"timestamp_seconds": 0.0, "description": "Opening zoom", "transition_type": "zoom"},
+        {"timestamp_seconds": 2.8, "description": "Cut to action", "transition_type": "hard_cut"}
+      ]
+    },
+    "narrative_structure": "montage",
+    "strengths": ["Strong opening hook with immediate visual interest"],
+    "weaknesses": ["Mid-section pacing drops around 45s"],
+    "recommendations": ["Add B-roll at 45s mark to maintain engagement"]
+  },
+  "analyzed_at": "datetime",
+  "actual_avg_percentage_viewed": 58.3,
+  "actual_engagement_rate": 5.2,
+  "actual_views": 15000,
+  "actual_like_rate": 1.03,
+  "actual_comment_rate": 0.22,
+  "actual_views_per_subscriber": 3.0,
+  "actual_performance_rating": 72,
+  "actual_stats_snapshot": {"views": 15000, "likes": 800, "...": "..."},
+  "actuals_populated_at": "datetime",
+  "created_at": "datetime",
+  "updated_at": "datetime"
+}
+```
+
+**Key fields:**
+
+| Field | Purpose |
+|---|---|
+| `status` | `"pending"` -> `"analyzing"` -> `"completed"` or `"failed"`. Frontend can poll for completion |
+| `analysis` | Full Gemini retention prediction (hook score, pacing, drop-off points, strengths, weaknesses) |
+| `actual_*` fields | Backfilled from `analysis_history` when the regular analysis pipeline processes the published video |
+| `actuals_populated_at` | Non-null when actual metrics have been backfilled -- indicates comparison data is available |
+
+**Indexes:**
+| Fields | Type | Purpose |
+|---|---|---|
+| `(channel_id, video_id)` | Compound (unique) | One analysis per video per channel |
+| `(channel_id, analyzed_at)` | Compound (desc) | Reverse-chronological history queries |
+
 ---
 
 ## Services Architecture
@@ -1838,6 +1912,21 @@ Background async task that automatically publishes scheduled Instagram reels whe
 - **Analyze comments (incremental)**: `analyze_comments(comments, video_title, platform, previous_analysis, total_previous_comments)` — sends only NEW comments + the previous analysis JSON to Gemini for refinement. Gemini adjusts sentiment proportionally, merges themes, and bumps signal strengths. Returns a complete updated analysis (not a diff)
 - **Prompts**: Two separate prompt builders — `_build_comment_analysis_prompt` for fresh analysis and `_build_incremental_comment_analysis_prompt` for incremental refinement. Both enforce strict JSON output matching the `CommentAnalysisResult` schema
 
+### Gemini Service — Video Retention Analysis
+
+- **Multimodal video analysis**: `analyze_video_retention(video_path, video_title, platform)` — uploads an actual video file to Gemini for multimodal analysis, then prompts the model to reverse-engineer the video's engagement structure and predict audience retention
+- **File upload flow**: `_generate_with_video(video_path, prompt)` — uploads the video via `client.aio.files.upload()`, polls for `ACTIVE` state (5s intervals, 5-minute timeout), generates with the video + text prompt, then deletes the uploaded file from Gemini storage
+- **180s generation timeout**: Video analysis uses a longer timeout than text-only generation (180s vs 90s) due to the complexity of multimodal processing
+- **Prompt**: Implements the 5-Second Rule (hyper-critical hook analysis), visual pacing measurement (scene cut timestamps + transition types), drop-off prediction, and overall retention scoring. Returns structured JSON matching the `RetentionPrediction` schema
+
+### Retention Analysis Service (`app/services/retention_analysis.py`)
+
+Orchestrates the video retention analysis pipeline:
+
+- **`run_retention_analysis(channel_id, video_id, db, r2_service, gemini_service)`**: Downloads video from R2 to temp file, uploads to Gemini for multimodal analysis, stores the prediction in `retention_analysis` collection. Updates `status` through `pending` -> `analyzing` -> `completed`/`failed`. Always cleans up temp file
+- **`compute_comparison(doc)`**: Pure helper that computes predicted-vs-actual deviation from a single `retention_analysis` document. Returns `retention_deviation`, `retention_accuracy_pct`, and `prediction_quality` ("accurate"/"close"/"off"). Returns `None` if actuals haven't been backfilled yet
+- **Background task trigger**: Automatically fired as `asyncio.create_task` when a video moves to `ready` status (via `POST /upload` or `POST /create`). Non-blocking — the upload response returns immediately
+
 ### Comment Analysis Engine (`app/services/comment_analysis_engine.py`)
 
 Orchestrates the full comment sentiment and demand extraction pipeline:
@@ -1845,7 +1934,7 @@ Orchestrates the full comment sentiment and demand extraction pipeline:
 - **`run_comment_analysis`**: Single-video analysis with two paths:
   - **Path A (fresh)**: Fetches ALL comments, filters short/spam, batches to Gemini (200 per batch, chained), inserts to `comment_analysis` with `version=1`
   - **Path B (incremental)**: Loads existing analysis, fetches only comments since `comments_analyzed_upto`, sends new comments + previous analysis to Gemini, updates with `version++`
-- **`run_cron_cycle`**: Full cron pass for one channel — discovers competitor videos via `get_channel_latest_videos()`, collects own published videos, compares comment counts against stored `last_known_comment_count`, runs fresh or incremental analysis as needed. Caps at 20 videos per run
+- **`run_cron_cycle`**: Full cron pass for one channel — discovers competitor videos via `get_channel_latest_videos()`, collects own published videos, compares comment counts against stored `last_known_comment_count`, runs fresh or incremental analysis as needed. The 20-video cap applies only to **fresh** (new) videos; incremental re-analysis of already-analyzed videos is uncapped. Logs include the source channel name (own channel name or competitor name) for each video analyzed
 - **`aggregate_comment_analyses`**: Combines insights across all analyzed videos — merges themes/demands by name, sums counts, recalculates signal strengths, returns channel-level intelligence summary
 
 ### Comment Analysis Cron (`app/services/comment_analysis_cron.py`)
@@ -1864,8 +1953,8 @@ Background async task that runs the comment analysis pipeline daily at a configu
 
 Platform-aware two-step pipeline (auto-detects YouTube vs Instagram):
 
-1. **Step 1 — Per-video analysis**: For each published video not yet in `analysis_history` (excluding `verification_status: "unverified"`): fetch subscriber/follower count + platform-specific stats → build stats snapshot with `views_per_subscriber` → send to Gemini individually (with platform-appropriate persona) → store in `analysis_history` with either `youtube_video_id` or `instagram_media_id`
-2. **Step 2 — Channel summary**: Aggregate all per-video analyses → send to Gemini in batches of 5 (with AI insights) → save channel summary to `analysis` with `subscriber_count` → run to-do engine
+1. **Step 1 -- Per-video analysis**: For each published video not yet in `analysis_history` (excluding `verification_status: "unverified"`): fetch subscriber/follower count + platform-specific stats -> build stats snapshot with `views_per_subscriber` -> send to Gemini individually (with platform-appropriate persona) -> store in `analysis_history` with either `youtube_video_id` or `instagram_media_id`. After each upsert, checks if a `retention_analysis` prediction exists for the video and **backfills actual metrics** if `actuals_populated_at` is null
+2. **Step 2 -- Channel summary**: Aggregate all per-video analyses -> send to Gemini in batches of 5 (with AI insights) -> save channel summary to `analysis` with `subscriber_count` -> run to-do engine
 
 ### To-do Engine (`app/services/todo_engine.py`)
 
@@ -1934,6 +2023,80 @@ flowchart TD
 ### Instagram Limitation
 
 Instagram Graph API only allows fetching comments on media owned by the authenticated account. Therefore, **Instagram comment analysis only works for own-channel videos**, not competitors. YouTube has no such restriction — competitor video comments are fully accessible via the public API.
+
+---
+
+## Retention Analysis System
+
+The retention analysis system uses **Gemini's multimodal capabilities** to analyze actual video files and predict audience retention before a video is published. Once the video is live and has real metrics, predictions are compared against actual performance.
+
+### How It Works
+
+1. When a video moves to **`ready`** status (via `POST /upload` or `POST /create`), a background task is automatically fired
+2. The task downloads the video from R2, uploads it to Gemini for multimodal analysis
+3. Gemini analyzes the video's visual pacing, hook quality, scene cuts, and narrative structure
+4. A structured retention prediction is stored in the `retention_analysis` collection
+5. Later, when `POST /analysis/update` processes the published video, actual metrics are **backfilled** into the same document
+
+### Prediction Pipeline
+
+```mermaid
+flowchart TD
+    Upload["POST /upload or /create"] -->|"status = ready"| BgTask["Background Task"]
+    BgTask --> Download["Download from R2\n(temp .mp4 file)"]
+    Download --> GeminiUpload["Upload to Gemini\nFiles API"]
+    GeminiUpload --> Poll["Poll until ACTIVE\n(5s intervals, 5min timeout)"]
+    Poll --> Analyze["Multimodal Generation\n(video + prompt)"]
+    Analyze --> Store["Store prediction\nstatus = completed"]
+    Store --> Cleanup["Delete temp file\n+ Gemini file"]
+    Analyze -->|"error"| Failed["Store error\nstatus = failed"]
+    Failed --> Cleanup
+```
+
+### Actual Metrics Backfill
+
+When the existing analysis pipeline (`POST /analysis/update`) processes a published video that has a retention prediction, it automatically copies the actual metrics into the `retention_analysis` document:
+
+- `actual_avg_percentage_viewed` -- from YouTube Analytics
+- `actual_engagement_rate`, `actual_views`, `actual_like_rate`, `actual_comment_rate`
+- `actual_views_per_subscriber`
+- `actual_performance_rating` -- from Gemini's `ai_insight.performance_rating`
+- `actual_stats_snapshot` -- full raw stats for completeness
+
+### Comparison
+
+The `GET /{video_id}` endpoint automatically includes a `comparison` sub-object when actuals are available:
+
+```json
+{
+  "comparison": {
+    "predicted_avg_retention_percent": 62.5,
+    "actual_avg_percentage_viewed": 58.3,
+    "retention_deviation": 4.2,
+    "retention_accuracy_pct": 95.8,
+    "prediction_quality": "accurate"
+  }
+}
+```
+
+`prediction_quality` is `"accurate"` (accuracy >= 85%), `"close"` (70-84%), or `"off"` (< 70%).
+
+### API Endpoints
+
+**Per-channel endpoints** under `/api/v1/channels/{channel_id}/retention-analysis/`:
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/history` | List retention analyses (filters: `status`, `limit`) |
+| `GET` | `/{video_id}` | Get retention analysis with computed `comparison` if actuals exist |
+| `POST` | `/{video_id}/trigger` | Manually trigger (re-)analysis for a video in ready/scheduled/published status with R2 file |
+| `DELETE` | `/{video_id}` | Delete a retention analysis |
+
+### Scope
+
+- **Only own-channel videos with R2 files** are eligible (the system needs the actual video file)
+- Automatically triggered when a video reaches `ready` status
+- Can also be manually triggered via `POST /{video_id}/trigger`
 
 ---
 
