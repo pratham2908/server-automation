@@ -526,6 +526,65 @@ async def update_content_param(
     return updated
 
 
+@router.post("/{channel_id}/content-params/sync", status_code=status.HTTP_200_OK)
+async def sync_content_params_on_videos(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Strip orphaned keys from ``videos.content_params`` after param definitions are removed.
+
+    For each video on the channel, keeps only keys that still exist in the
+    ``content_params`` collection. Empty objects become ``null``.
+    """
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
+
+    valid_names = {
+        d["name"]
+        async for d in db.content_params.find({"channel_id": channel_id}, {"name": 1})
+    }
+
+    videos = await db.videos.find(
+        {"channel_id": channel_id, "content_params": {"$ne": None}},
+    ).to_list(length=None)
+
+    updated_count = 0
+    keys_removed_total = 0
+
+    for v in videos:
+        cp = v.get("content_params")
+        if not isinstance(cp, dict):
+            continue
+        filtered = {k: val for k, val in cp.items() if k in valid_names}
+        removed = len(cp) - len(filtered)
+        if removed == 0 and filtered == cp:
+            continue
+        keys_removed_total += removed
+        new_cp = filtered if filtered else None
+        await db.videos.update_one(
+            {"_id": v["_id"]},
+            {"$set": {"content_params": new_cp, "updated_at": now_ist()}},
+        )
+        updated_count += 1
+
+    logger.success(
+        "Synced content params on videos for channel '%s': %d video(s) updated, %d key(s) removed",
+        channel_id,
+        updated_count,
+        keys_removed_total,
+    )
+
+    return {
+        "ok": True,
+        "channel_id": channel_id,
+        "valid_param_names": sorted(valid_names),
+        "videos_scanned": len(videos),
+        "videos_updated": updated_count,
+        "orphan_keys_removed": keys_removed_total,
+    }
+
+
 @router.delete("/{channel_id}/content-params/{param_name}")
 async def delete_content_param(
     channel_id: str,

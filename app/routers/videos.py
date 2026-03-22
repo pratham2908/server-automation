@@ -549,7 +549,6 @@ async def extract_content_params(
 ## Content Parameter Schema
 Each parameter below defines a dimension to classify the video by.
 If the parameter has `values`, pick ONE of them. If `values` is empty, infer a concise free-form value.
-ALWAYS include a "music" parameter — identify the background music, song, or audio track used.
 
 ```json
 {json.dumps(schema_defs, indent=2)}
@@ -561,10 +560,9 @@ ALWAYS include a "music" parameter — identify the background music, song, or a
 - **Tags**: {json.dumps(video.get("tags", [])[:20])}
 
 ## Required Output
-Return a single JSON object mapping parameter names to their extracted values.
-Include a "music" key with the identified music/audio track (or "unknown" if not identifiable).
+Return a single JSON object mapping each schema parameter name to its extracted value.
 
-Example: {{"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "Epic Orchestral - Two Steps From Hell"}}
+Example: {{"simulation_type": "battle", "challenge_mechanic": "1v1"}}
 """
 
     text = await gemini_service._generate(prompt)
@@ -647,15 +645,12 @@ async def extract_all_content_params(
 ## Content Parameter Schema
 {json.dumps(schema_defs, indent=2)}
 
-ALWAYS include a "music" parameter — identify the background music, song, or audio track used.
-
 ## Video
 - **Title**: {video.get("title", "")}
 - **Description**: {video.get("description", "")[:1000]}
 - **Tags**: {json.dumps(video.get("tags", [])[:20])}
 
-Return a single JSON object mapping parameter names to values.
-Include a "music" key."""
+Return a single JSON object mapping each schema parameter name to its extracted value."""
 
         try:
             text = await gemini_service._generate(prompt)
@@ -1289,7 +1284,6 @@ async def _extract_params_and_categorize_batch(
             f"\n\n## Content Parameter Schema\n"
             f"Extract values for each of these dimensions. If `values` is non-empty, pick one. "
             f"If empty, infer a concise free-form value.\n"
-            f"ALWAYS include a 'music' key — identify the background music, song, or audio track.\n"
             f"```json\n{json.dumps(content_schema, indent=2)}\n```"
         )
 
@@ -1317,7 +1311,7 @@ async def _extract_params_and_categorize_batch(
 {f"## Additional Instructions" + chr(10) + category_instructions if category_instructions else ""}
 
 Return a JSON array:
-[{{"{id_key}": "...", "content_params": {{"param1": "value1", "music": "..."}}, "category": "..."}}]
+[{{"{id_key}": "...", "content_params": {{"param1": "value1", "param2": "value2"}}, "category": "..."}}]
 
 Reuse existing categories. Only create new ones if truly needed."""
 

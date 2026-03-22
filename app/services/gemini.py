@@ -294,7 +294,7 @@ Return a JSON object with exactly these keys:
   ],
   "best_combinations": [
     {{
-      "params": {{"simulation_type": "battle", "challenge_mechanic": "1v1", "music": "Epic Orchestral"}},
+      "params": {{"simulation_type": "battle", "challenge_mechanic": "1v1"}},
       "reasoning": "This combination yields the highest avg_percentage_viewed at 72%"
     }}
   ]
@@ -311,7 +311,7 @@ Guidelines:
   - `best_values`: which parameter values correlate with highest performance.
   - `worst_values`: which values underperform.
   - `insight`: a concise explanation of the trend.
-- **best_combinations**: The top 3-5 combinations of content_params values that yield the best results. Include music recommendations.
+- **best_combinations**: The top 3-5 combinations of content_params values that yield the best results.
 - **Follower/subscriber-aware analysis**:
   - {"For YouTube: `subscribers_gained` shows how many new subscribers each video brought." if platform == "youtube" else "For Instagram: `reach` and `shares` indicate how far each reel spreads beyond followers."}
   - `views_per_subscriber` above 1.0 means the video reached beyond the existing audience — a strong viral signal.
@@ -485,7 +485,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
     "title": "Catchy, scroll-stopping title",
     "description": "Compelling description optimized for search and engagement",
     "tags": ["tag1", "tag2", "tag3"],
-    "content_params": {{"simulation_type": "battle", "music": "Epic Orchestral - Two Steps From Hell"}},
+    "content_params": {{"simulation_type": "battle", "challenge_mechanic": "1v1"}},
     "basis_factor": "Reasoning or comparison basis"
   }}
 ]
@@ -514,7 +514,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 
 ## Other Rules
 - Generate exactly {count} completely distinct video ideas. DO NOT repeat titles or topics.
-- **content_params**: MUST include values for every parameter in the content schema. ALWAYS include a "music" key with a specific music/audio track recommendation that fits the video's theme and mood.
+- **content_params**: MUST include values for every parameter in the content schema.
 - **basis_factor**: Provide a short reasoning for why this video idea should perform well.
 - For any content param marked as unique above, you MUST NOT reuse ANY value from its "Already-Used" list. Every value for that param must be completely new and never covered before.
 - Strictly return a JSON array of objects (`[]`), even if count is 1."""

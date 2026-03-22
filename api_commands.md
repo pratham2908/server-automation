@@ -190,6 +190,24 @@ Content params are custom dimensions for classifying videos. Manage them with th
 
 - **Response**: Updated param object.
 
+#### Sync Content Params on Videos
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/content-params/sync`
+- **Method**: `POST`
+- **Description**: After content param definitions are removed or renamed, existing videos may still carry orphaned keys in `content_params`. This endpoint scans all videos for the channel that have `content_params` set and keeps only keys that still exist in the `content_params` collection. If nothing remains, `content_params` is set to `null`.
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "channel_id": "my_channel",
+  "valid_param_names": ["simulation_type", "challenge_mechanic"],
+  "videos_scanned": 120,
+  "videos_updated": 15,
+  "orphan_keys_removed": 18
+}
+```
+
 #### Delete Content Param
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/content-params/{param_name}`

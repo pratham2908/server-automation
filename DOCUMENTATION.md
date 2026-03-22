@@ -300,11 +300,30 @@ Updates `description`, `values`, `belongs_to`, and/or `unique` for an existing p
 
 #### `DELETE /{channel_id}/content-params/{param_name}` — Delete a content param
 
-Removes the content param definition. Does not remove `content_params` from existing videos.
+Removes the content param definition. Existing videos may still have that key in `content_params` until you run **`POST /{channel_id}/content-params/sync`** to strip orphaned keys.
 
 **Path params:** `param_name` — the param's `name` field
 
 **Response (200):** `{"ok": true, "channel_id": "...", "deleted": true}`
+
+---
+
+#### `POST /{channel_id}/content-params/sync` — Strip orphaned keys from videos
+
+For every video on the channel with `content_params` set, keeps only keys that still exist in the `content_params` collection. If no keys remain, sets `content_params` to `null`. Call this after deleting or renaming param definitions so stored video metadata matches the current schema.
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "channel_id": "my_channel",
+  "valid_param_names": ["simulation_type", "challenge_mechanic"],
+  "videos_scanned": 120,
+  "videos_updated": 15,
+  "orphan_keys_removed": 18
+}
+```
 
 ---
 
