@@ -1279,31 +1279,51 @@ async def _extract_params_and_categorize_batch(
 
     cats_section = ""
     if existing_categories:
+        # existing_categories is now a list of {name, description}
+        cats_json = json.dumps(existing_categories, indent=2)
         cats_section = (
             f"\n\n## Existing Categories\n"
-            f"Derive the category from the extracted content_params. "
-            f"Reuse these when a video fits: {json.dumps(existing_categories)}\n"
-            f"Only create a new category if NONE of the above fit."
+            f"Review these existing categories (name and description) and pick the MOST relevant one for each video:\n"
+            f"```json\n{cats_json}\n```\n"
+            f"Only create a NEW category if NONE of the above truly fit."
         )
 
-    prompt = f"""You are a {persona}. For each video below:
-1. Extract content parameter values based on the schema.
-2. Derive a category from those extracted parameters (NOT from title/description/tags directly).
+    prompt = f"""You are a {persona}. Your goal is to accurately categorize and extract metadata for the following videos.
+    
+FOLLOW THIS TWO-STEP PROCESS FOR EACH VIDEO:
+    
+1. **Pick Category**: Review the video's title/description/tags and pick the most appropriate category from the 'Existing Categories' list. 
+   - If a video perfectly fits an existing category, you MUST use its exact name. 
+   - Only if no existing category fits, derive a new concise category name.
+
+2. **Extract Parameters**: For the chosen category (either existing or new), extract the relevant content parameter values based on the 'Content Parameter Schema'.
+   - IMPORTANT: Only extract parameters that 'belong' to the chosen category. 
+   - A parameter belongs to a category if its `belongs_to` list contains that category's name OR contains "all". 
+   - If a parameter does NOT belong to the chosen category, do NOT include it in the response for that video.
 
 {schema_section}
 {cats_section}
 
-## Videos
+## Videos to Process
 ```json
 {json.dumps(video_summaries, indent=2)}
 ```
 
 {f"## Additional Instructions" + chr(10) + category_instructions if category_instructions else ""}
 
-Return a JSON array:
-[{{"{id_key}": "...", "content_params": {{"param1": "value1", "param2": "value2"}}, "category": "..."}}]
+## Output Requirement
+Return a JSON array of objects, one per video, matching this exact schema:
+[
+  {{
+    "{id_key}": "...", 
+    "category": "The chosen category name",
+    "content_params": {{
+       "param_name": "extracted_value" (Only for params that belong to this category)
+    }}
+  }}
+]
 
-Reuse existing categories. Only create new ones if truly needed."""
+Be precise. Do not invent parameters not in the schema. Do not include parameters that don't belong to the chosen category."""
 
     response_text = await gemini_service._generate(prompt)
 
@@ -1319,7 +1339,7 @@ async def _process_unverified_videos(
     body,
     db,
     *,
-    existing_cats: list[str] | None = None,
+    existing_cats: list[dict] | None = None,
     content_schema: str | None = None,
 ) -> int:
     """Find unverified videos in DB and run Gemini extraction on them.
@@ -1341,66 +1361,38 @@ async def _process_unverified_videos(
 
     if content_schema is None:
         from app.database import get_content_schema_for_prompt
-        content_schema = await get_content_schema_for_prompt(db, channel_id)
+        content_schema = await get_content_schema_for_prompt(db, channel_id, include_belongs_to=True)
 
     if existing_cats is None:
         existing_cats = [
-            c["name"]
-            async for c in db.categories.find({"channel_id": channel_id}, {"name": 1})
+            {"name": c["name"], "description": c.get("description", "")}
+            async for c in db.categories.find({"channel_id": channel_id}, {"name": 1, "description": 1})
         ]
 
-    BATCH_SIZE = 5
-    uv_batch_items = [
-        {
-            "youtube_video_id": doc["video_id"],
-            "title": doc.get("title", ""),
-            "description": doc.get("description", "")[:500],
-            "tags": doc.get("tags", [])[:15],
-        }
-        for doc in unverified_docs
-    ]
+    # Batch process all unverified videos.
+    results = await _extract_params_and_categorize_batch(
+        gemini_service, content_schema, existing_cats, unverified_docs,
+        category_instructions=body.new_category_description if body else "",
+    )
+
+    id_key = "youtube_video_id" if (await db.channels.find_one({"channel_id": channel_id})).get("platform") == "youtube" else "instagram_media_id"
 
     updated = 0
-    for i in range(0, len(uv_batch_items), BATCH_SIZE):
-        batch = uv_batch_items[i : i + BATCH_SIZE]
-        results = await _extract_params_and_categorize_batch(
-            gemini_service, content_schema, existing_cats, batch,
-            category_instructions=body.new_category_description if body else "",
+    for res in results:
+        vid_id = res.get(id_key)
+        if not vid_id: continue
+        
+        await db.videos.update_one(
+            {"channel_id": channel_id, id_key: vid_id},
+            {"$set": {
+                "category": res.get("category"),
+                "content_params": res.get("content_params"),
+                "verification_status": "unverified",
+                "updated_at": now_ist()
+            }}
         )
-        for r in results:
-            vid_id = r.get("youtube_video_id", "")
-            cat = r.get("category", "Uncategorized")
-            params = r.get("content_params", {})
+        updated += 1
 
-            if cat not in existing_cats:
-                existing_cats.append(cat)
-                await db.categories.insert_one({
-                    "id": str(uuid.uuid4()),
-                    "channel_id": channel_id,
-                    "name": cat,
-                    "description": "",
-                    "raw_description": "",
-                    "score": 0,
-                    "status": "active",
-                    "video_count": 0,
-                    "metadata": {"total_videos": 0},
-                    "created_at": now_ist(),
-                    "updated_at": now_ist(),
-                })
-                logger.success("Created new category: '%s'", cat)
-
-            await db.videos.update_one(
-                {"channel_id": channel_id, "video_id": vid_id},
-                {"$set": {
-                    "category": cat,
-                    "content_params": params if params else None,
-                    "verification_status": "unverified",
-                    "updated_at": now_ist(),
-                }},
-            )
-            updated += 1
-
-    logger.success("Extracted params for %d unverified video(s).", updated)
     return updated
 
 
@@ -1606,16 +1598,16 @@ async def sync_videos(
             "videos": [],
         }
 
-    # Build running category list.
+    # Build running category list with descriptions.
     existing_cats = [
-        c["name"]
+        {"name": c["name"], "description": c.get("description", "")}
         async for c in db.categories.find(
-            {"channel_id": channel_id}, {"name": 1}
+            {"channel_id": channel_id, "status": "active"}, {"name": 1, "description": 1}
         )
     ]
 
     from app.database import get_content_schema_for_prompt
-    content_schema = await get_content_schema_for_prompt(db, channel_id)
+    content_schema = await get_content_schema_for_prompt(db, channel_id, include_belongs_to=True)
 
     # Extract content params AND derive category in batches of 5.
     BATCH_SIZE = 5
@@ -1645,14 +1637,21 @@ async def sync_videos(
                 "content_params": params,
             }
 
-            if cat not in existing_cats:
-                existing_cats.append(cat)
+            extracted_cat_name = cat
+            is_new = True
+            for ecat in existing_cats:
+                if ecat["name"] == extracted_cat_name:
+                    is_new = False
+                    break
+            
+            if is_new:
+                existing_cats.append({"name": extracted_cat_name, "description": ""})
                 now = now_ist()
                 await db.categories.insert_one(
                     {
                         "id": str(uuid.uuid4()),
                         "channel_id": channel_id,
-                        "name": cat,
+                        "name": extracted_cat_name,
                         "description": "",
                         "raw_description": "",
                         "score": 0,
@@ -1663,7 +1662,7 @@ async def sync_videos(
                         "updated_at": now,
                     }
                 )
-                logger.success(f"Created new category: '{cat}'")
+                logger.success(f"Created new category: '{extracted_cat_name}'")
 
     # ------------------------------------------------------------------
     # Insert newly discovered videos.

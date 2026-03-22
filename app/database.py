@@ -119,6 +119,7 @@ async def get_content_schema_for_prompt(
     db: AsyncIOMotorDatabase,
     channel_id: str,
     category: str | None = None,
+    include_belongs_to: bool = False,
 ) -> list[dict]:
     """Fetch content param definitions from the ``content_params`` collection
     and return them in the list-of-dicts format that Gemini prompts expect.
@@ -134,12 +135,18 @@ async def get_content_schema_for_prompt(
         ]
 
     docs = await db.content_params.find(query).to_list(length=None)
-    return [
-        {
+    
+    result = []
+    for d in docs:
+        param = {
             "name": d["name"],
             "description": d.get("description", ""),
             "values": [v["value"] for v in d.get("values", [])],
             "unique": d.get("unique", False),
         }
-        for d in docs
-    ]
+        if include_belongs_to:
+            param["belongs_to"] = d.get("belongs_to", ["all"])
+        result.append(param)
+        
+    return result
+
