@@ -50,6 +50,14 @@ class R2Service:
         """Delete *key* from R2."""
         self._client.delete_object(Bucket=self._bucket, Key=key)
 
+    def copy_video(self, source_key: str, dest_key: str) -> None:
+        """Copy *source_key* to *dest_key* directly inside the bucket."""
+        self._client.copy_object(
+            CopySource={"Bucket": self._bucket, "Key": source_key},
+            Bucket=self._bucket,
+            Key=dest_key,
+        )
+
     def generate_presigned_url(self, key: str, expires_in: int = 3600) -> str:
         """Generate a temporary public URL for *key* (default 1 hour)."""
         return self._client.generate_presigned_url(

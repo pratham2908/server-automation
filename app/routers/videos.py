@@ -591,14 +591,37 @@ async def repost_video(
         )
 
     youtube_video_id = original_video.get("youtube_video_id")
-    if not youtube_video_id:
+    r2_key = original_video.get("r2_object_key")
+
+    if not r2_key and not youtube_video_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only YouTube videos can be reposted currently via auto-download",
+            detail="Cannot repost: video lacks both an R2 file and a YouTube ID.",
         )
 
     new_video_id = str(uuid.uuid4())
     now = now_ist()
+    
+    # 1. Setup default state (assuming background download)
+    final_status = "todo"
+    new_r2_key = None
+    is_instant = False
+
+    # 2. Check if we can instant repost via R2 Copy
+    if r2_key:
+        is_instant = True
+        new_r2_key = f"{channel_id}/{new_video_id}.mp4"
+        try:
+            r2 = _get_r2()
+            logger.info("Instant Repost: copying R2 object...")
+            r2.copy_video(r2_key, new_r2_key)
+            final_status = "scheduled" if body.scheduled_at else "ready"
+        except Exception as exc:
+            logger.error(f"Failed to copy R2 object for video {video_id}: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to duplicate R2 file for instant repost. Please try again.",
+            )
 
     new_video_doc = {
         "channel_id": channel_id,
@@ -607,12 +630,11 @@ async def repost_video(
         "description": body.description,
         "tags": body.tags,
         "category": original_video.get("category", ""),
-        # Starts in 'todo', the background task changes to 'ready'/'scheduled'
-        "status": "todo",
+        "status": final_status,
         "suggested": False,
-        "youtube_video_id": None,  # Brand new video record
+        "youtube_video_id": None,
         "instagram_media_id": None,
-        "r2_object_key": None,  # Will be populated by the background task
+        "r2_object_key": new_r2_key,
         "metadata": {
             "views": None, "likes": None, "comments": None,
             "duration_seconds": original_video.get("metadata", {}).get("duration_seconds", None),
@@ -629,17 +651,46 @@ async def repost_video(
     }
 
     await db.videos.insert_one(new_video_doc)
-    
-    # Launch background task to download the .mp4 from YouTube
-    _trigger_repost_download(channel_id, youtube_video_id, new_video_id, db)
-    
-    logger.success("🔄 Initiated repost for '%s' → new ID: %s. Background downloading...", original_video.get("title", video_id)[:50], new_video_id)
 
-    return {
-        "ok": True,
-        "new_video_id": new_video_id,
-        "message": "Repost initiated. Background task is fetching the video from YouTube."
-    }
+    # 3. Handle Queueing or Background Processing
+    if is_instant:
+        if body.scheduled_at:
+            last = await db.schedule_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+            next_pos = (last["position"] + 1) if last else 1
+            await db.schedule_queue.insert_one({
+                "channel_id": channel_id,
+                "video_id": new_video_id,
+                "position": next_pos,
+                "scheduled_at": body.scheduled_at,
+                "added_at": now,
+            })
+            logger.success("🔄 Instant Repost: Queued to schedule_queue (%s)", new_video_id)
+        else:
+            last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+            next_pos = (last["position"] + 1) if last else 1
+            await db.posting_queue.insert_one({
+                "channel_id": channel_id,
+                "video_id": new_video_id,
+                "position": next_pos,
+                "added_at": now,
+            })
+            logger.success("🔄 Instant Repost: Queued to posting_queue (%s)", new_video_id)
+            
+        return {
+            "ok": True,
+            "new_video_id": new_video_id,
+            "message": "Instant repost completed strictly using R2."
+        }
+    else:
+        # Launch background task to download the .mp4 from YouTube
+        _trigger_repost_download(channel_id, youtube_video_id, new_video_id, db)
+        logger.success("🔄 Initiated background auto-download repost → %s", new_video_id)
+
+        return {
+            "ok": True,
+            "new_video_id": new_video_id,
+            "message": "Repost initiated. Background task is downloading the video from YouTube."
+        }
 
 
 
