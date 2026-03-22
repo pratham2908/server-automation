@@ -12,3 +12,4 @@ certifi>=2024.2.2
 python-multipart>=0.0.6
 pytz>=2024.1
 python-dateutil>=2.9.0
+yt-dlp>=2024.0.0

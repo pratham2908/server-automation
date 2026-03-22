@@ -58,6 +58,69 @@ def _trigger_retention_analysis(
     )
 
 
+def _trigger_repost_download(
+    channel_id: str,
+    youtube_video_id: str,
+    new_video_id: str,
+    db: "AsyncIOMotorDatabase",
+) -> None:
+    """Fire a background task to download a YouTube video and upload it to R2."""
+    import asyncio
+    from app.main import r2_service  # type: ignore[import]
+    from app.services.downloader import download_youtube_video_to_r2
+
+    if not r2_service:
+        logger.warning("Cannot run repost download — R2 service not initialised")
+        return
+
+    async def _download_job():
+        try:
+            r2_key = await download_youtube_video_to_r2(youtube_video_id, channel_id, r2_service)
+            
+            # Re-fetch document to get current scheduled time
+            video = await db.videos.find_one({"channel_id": channel_id, "video_id": new_video_id})
+            if not video:
+                return
+
+            now = now_ist()
+            update_fields = {"r2_object_key": r2_key, "updated_at": now}
+
+            # If it has a scheduled time in the future, put it in schedule_queue
+            if video.get("scheduled_at") and video["scheduled_at"] > now:
+                update_fields["status"] = "scheduled"
+                await db.videos.update_one({"_id": video["_id"]}, {"$set": update_fields})
+
+                last = await db.schedule_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+                next_pos = (last["position"] + 1) if last else 1
+                await db.schedule_queue.insert_one({
+                    "channel_id": channel_id,
+                    "video_id": new_video_id,
+                    "position": next_pos,
+                    "scheduled_at": video["scheduled_at"],
+                    "added_at": now,
+                })
+                logger.success(f"Downloaded repost and queued to schedule_queue: {new_video_id}")
+            else:
+                update_fields["status"] = "ready"
+                await db.videos.update_one({"_id": video["_id"]}, {"$set": update_fields})
+
+                last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+                next_pos = (last["position"] + 1) if last else 1
+                await db.posting_queue.insert_one({
+                    "channel_id": channel_id,
+                    "video_id": new_video_id,
+                    "position": next_pos,
+                    "added_at": now,
+                })
+                logger.success(f"Downloaded repost and queued to posting_queue: {new_video_id}")
+
+        except Exception as exc:
+            logger.error(f"Failed to download and repost video {youtube_video_id}: {exc}")
+
+    asyncio.create_task(_download_job())
+
+
+
 # ------------------------------------------------------------------
 # GET /  –  video list (with optional suggest_n)
 # ------------------------------------------------------------------
@@ -486,6 +549,98 @@ async def change_video_category(
         "old_category": old_name,
         "new_category": new_name,
     }
+
+
+# ------------------------------------------------------------------
+# POST /{video_id}/repost  –  Repost a published synced video
+# ------------------------------------------------------------------
+
+
+class RepostRequest(BaseModel):
+    """Body for reposting an existing video."""
+    title: str = Field(..., description="New title for the reposted video")
+    description: str = Field("", description="New description")
+    tags: list[str] = Field(default_factory=list, description="New tags")
+    scheduled_at: Optional[datetime] = Field(None, description="Optional future publish time for the reposted video")
+
+
+@router.post("/{video_id}/repost")
+async def repost_video(
+    channel_id: str,
+    video_id: str,
+    body: RepostRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Repost a published video with new metadata.
+    
+    Duplicates the original database entry but copies the content params.
+    Since synced videos lack R2 file copies, this fires a background task using
+    yt-dlp to download the video from YouTube and automatically queues it for scheduling/posting.
+    """
+    original_video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if not original_video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+        
+    if original_video.get("status") != "published":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You can only repost videos that are already in 'published' status",
+        )
+
+    youtube_video_id = original_video.get("youtube_video_id")
+    if not youtube_video_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only YouTube videos can be reposted currently via auto-download",
+        )
+
+    new_video_id = str(uuid.uuid4())
+    now = now_ist()
+
+    new_video_doc = {
+        "channel_id": channel_id,
+        "video_id": new_video_id,
+        "title": body.title,
+        "description": body.description,
+        "tags": body.tags,
+        "category": original_video.get("category", ""),
+        # Starts in 'todo', the background task changes to 'ready'/'scheduled'
+        "status": "todo",
+        "suggested": False,
+        "youtube_video_id": None,  # Brand new video record
+        "instagram_media_id": None,
+        "r2_object_key": None,  # Will be populated by the background task
+        "metadata": {
+            "views": None, "likes": None, "comments": None,
+            "duration_seconds": original_video.get("metadata", {}).get("duration_seconds", None),
+            "engagement_rate": None, "like_rate": None, "comment_rate": None,
+        },
+        "content_params": original_video.get("content_params", {}),
+        "verification_status": original_video.get("verification_status"),
+        "scheduled_at": body.scheduled_at,
+        "published_at": None,
+        "created_at": now,
+        "updated_at": now,
+        "is_repost": True,
+        "original_video_id": video_id,
+    }
+
+    await db.videos.insert_one(new_video_doc)
+    
+    # Launch background task to download the .mp4 from YouTube
+    _trigger_repost_download(channel_id, youtube_video_id, new_video_id, db)
+    
+    logger.success("🔄 Initiated repost for '%s' → new ID: %s. Background downloading...", original_video.get("title", video_id)[:50], new_video_id)
+
+    return {
+        "ok": True,
+        "new_video_id": new_video_id,
+        "message": "Repost initiated. Background task is fetching the video from YouTube."
+    }
+
 
 
 # ------------------------------------------------------------------
