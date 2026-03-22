@@ -1,11 +1,10 @@
 """Categories router – CRUD operations for content categories."""
 
-from datetime import datetime
+import uuid
 from typing import List, Optional, Union
 
 from app.timezone import now_ist
 
-from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -46,7 +45,7 @@ async def list_categories(
         await db.categories.find(query).sort("score", -1).to_list(length=None)
     )
     for c in categories:
-        c["_id"] = str(c["_id"])
+        c.pop("_id", None)
 
     return categories
 
@@ -71,6 +70,7 @@ async def add_categories(
     now = now_ist()
     docs = [
         {
+            "id": str(uuid.uuid4()),
             "channel_id": channel_id,
             "name": item.name,
             "description": item.description,
@@ -85,13 +85,13 @@ async def add_categories(
         for item in items
     ]
 
-    result = await db.categories.insert_many(docs)
+    await db.categories.insert_many(docs)
     names = [item.name for item in items]
     logger.success("✅ Created %d category(ies) for channel '%s': %s", len(names), channel_id, ", ".join(names))
     return {
         "ok": True,
-        "inserted_count": len(result.inserted_ids),
-        "ids": [str(i) for i in result.inserted_ids],
+        "inserted_count": len(docs),
+        "ids": [d["id"] for d in docs],
     }
 
 
@@ -115,16 +115,7 @@ async def update_category(
             detail="No fields to update",
         )
 
-    try:
-        oid = ObjectId(category_id)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid category_id format",
-        )
-
-    # Fetch existing category to check for name change
-    existing = await db.categories.find_one({"_id": oid, "channel_id": channel_id})
+    existing = await db.categories.find_one({"id": category_id, "channel_id": channel_id})
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -136,13 +127,11 @@ async def update_category(
 
     update_data["updated_at"] = now_ist()
 
-    # Perform category update
     await db.categories.update_one(
-        {"_id": oid},
+        {"id": category_id, "channel_id": channel_id},
         {"$set": update_data},
     )
 
-    # If the name changed, propagate to all videos, analysis history, and analysis summary
     if new_name and new_name != old_name:
         await db.videos.update_many(
             {"channel_id": channel_id, "category": old_name},
@@ -152,13 +141,11 @@ async def update_category(
             {"channel_id": channel_id, "category": old_name},
             {"$set": {"category": new_name}}
         )
-        # Rename inside analysis.category_analysis array entries
         await db.analysis.update_one(
             {"channel_id": channel_id, "category_analysis.category": old_name},
             {"$set": {"category_analysis.$.category": new_name}},
         )
 
-    # Warn if archiving a category that still has non-todo videos
     if update_data.get("status") == "archived":
         active_count = await db.videos.count_documents(
             {"channel_id": channel_id, "category": new_name or old_name, "status": {"$ne": "todo"}}
@@ -192,15 +179,7 @@ async def delete_category(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Remove a category and move its videos to 'Uncategorized'."""
-    try:
-        oid = ObjectId(category_id)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid category_id format",
-        )
-
-    category = await db.categories.find_one({"_id": oid, "channel_id": channel_id})
+    category = await db.categories.find_one({"id": category_id, "channel_id": channel_id})
     if not category:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -209,28 +188,23 @@ async def delete_category(
 
     cat_name = category["name"]
 
-    # 1. Update all videos belonging to this category to 'Uncategorized'
     await db.videos.update_many(
         {"channel_id": channel_id, "category": cat_name},
         {"$set": {"category": "Uncategorized", "updated_at": now_ist()}}
     )
 
-    # 2. Update all analysis history records
     await db.analysis_history.update_many(
         {"channel_id": channel_id, "category": cat_name},
         {"$set": {"category": "Uncategorized"}}
     )
 
-    # 3. Update analysis summary
     await db.analysis.update_one(
         {"channel_id": channel_id, "category_analysis.category": cat_name},
         {"$set": {"category_analysis.$.category": "Uncategorized"}},
     )
 
-    # 4. Delete the category document
-    await db.categories.delete_one({"_id": oid})
+    await db.categories.delete_one({"id": category_id, "channel_id": channel_id})
 
-    # 5. Recompute Uncategorized category if it exists
     from app.services.todo_engine import recompute_category
     uncat = await db.categories.find_one(
         {"channel_id": channel_id, "name": "Uncategorized"}

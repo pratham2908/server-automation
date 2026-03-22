@@ -48,6 +48,7 @@ async def connect_db(
     await _db.categories.create_index(
         [("channel_id", 1), ("status", 1), ("score", -1)],
     )
+    await _db.categories.create_index("id", unique=True)
     await _db.analysis.create_index("channel_id", unique=True)
     await _db.analysis_history.create_index(
         [("channel_id", 1), ("created_at", -1)],

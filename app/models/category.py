@@ -1,5 +1,6 @@
 """Category Pydantic models."""
 
+import uuid
 from datetime import datetime
 from enum import Enum
 from typing import Optional
@@ -7,6 +8,10 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from app.timezone import now_ist
+
+
+def _new_cat_id() -> str:
+    return str(uuid.uuid4())
 
 
 class CategoryStatus(str, Enum):
@@ -31,12 +36,13 @@ class CategoryMetadata(BaseModel):
     avg_view_duration_seconds: Optional[float] = None
     total_views: Optional[int] = None
     total_estimated_minutes_watched: Optional[float] = None
-    avg_subscribers: Optional[float] = None  # average subscribers gained per video in this category
+    avg_subscribers: Optional[float] = None
 
 
 class Category(BaseModel):
     """Full category document in the ``categories`` collection."""
 
+    id: str = Field(default_factory=_new_cat_id, description="Unique category identifier (UUID)")
     channel_id: str
     name: str
     description: str = ""

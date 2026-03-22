@@ -416,6 +416,8 @@ Content params are custom dimensions for classifying videos. Manage them with th
 
 ## Categories
 
+Each category has a unique `id` (UUID string) used for all update/delete operations.
+
 ### List Categories
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/categories/`
@@ -426,7 +428,7 @@ Content params are custom dimensions for classifying videos. Manage them with th
 ```json
 [
   {
-    "_id": "651f8a8...",
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "channel_id": "ch1",
     "name": "Tutorials",
     "description": "How-to guides",
@@ -465,12 +467,13 @@ Content params are custom dimensions for classifying videos. Manage them with th
 }
 ```
 
-- **Response**: Array of inserted `_id` strings.
+- **Response**: `{"ok": true, "inserted_count": 1, "ids": ["a1b2c3d4-..."]}`
 
 ### Update Category
 
-- **Endpoint**: `/api/v1/channels/{channel_id}/categories/{category_object_id}`
+- **Endpoint**: `/api/v1/channels/{channel_id}/categories/{category_id}`
 - **Method**: `PATCH`
+- **Path params**: `category_id` — the UUID `id` of the category.
 - **Description**: Partially update a category. If the `name` is changed, all videos and analysis history records in that category are automatically updated to the new name.
 - **Request Body**: (All fields optional)
 
@@ -483,14 +486,15 @@ Content params are custom dimensions for classifying videos. Manage them with th
 }
 ```
 
-- **Response**: Updated Category object.
+- **Response**: `{"ok": true, "category_id": "a1b2c3d4-..."}`
 
 ### Delete Category
 
-- **Endpoint**: `/api/v1/channels/{channel_id}/categories/{category_object_id}`
+- **Endpoint**: `/api/v1/channels/{channel_id}/categories/{category_id}`
 - **Method**: `DELETE`
+- **Path params**: `category_id` — the UUID `id` of the category.
 - **Description**: Deletes a category. All videos belonging to this category are moved to "Uncategorized" to maintain data integrity.
-- **Response**: `{"ok": true, "category_id": "...", "deleted": true}`
+- **Response**: `{"ok": true, "category_id": "a1b2c3d4-...", "deleted": true}`
 
 ---
 
@@ -579,12 +583,12 @@ Content params are custom dimensions for classifying videos. Manage them with th
 
 ```json
 {
-  "old_category_id": "65f...",
-  "new_category_id": "65f..."
+  "old_category_id": "a1b2c3d4-...",
+  "new_category_id": "e5f67890-..."
 }
 ```
 
-- **Description**: Moves a video from one category to another. Updates the video document and the per-video record in `analysis_history`; recomputes metadata, `video_count`, and `video_ids` for both categories. Category IDs are MongoDB `_id` values.
+- **Description**: Moves a video from one category to another. Updates the video document and the per-video record in `analysis_history`; recomputes metadata, `video_count`, and `video_ids` for both categories. Category IDs are the UUID `id` values from the category objects.
 - **Response**: `{"ok": true, "video_id": "...", "old_category": "Tutorials", "new_category": "Reviews"}`
 
 ### Delete Video

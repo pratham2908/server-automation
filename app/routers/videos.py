@@ -8,7 +8,6 @@ from app.timezone import now_ist, to_ist_iso
 
 from dateutil.parser import isoparse
 
-from bson import ObjectId
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, File, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
@@ -400,8 +399,8 @@ async def update_video_status(
 class VideoCategoryChange(BaseModel):
     """Body for changing a video's category."""
 
-    old_category_id: str = Field(..., description="MongoDB _id of the current category")
-    new_category_id: str = Field(..., description="MongoDB _id of the target category")
+    old_category_id: str = Field(..., description="UUID of the current category")
+    new_category_id: str = Field(..., description="UUID of the target category")
 
 
 @router.patch("/{video_id}/category")
@@ -425,20 +424,11 @@ async def change_video_category(
             detail=f"Video {video_id} not found",
         )
 
-    try:
-        old_oid = ObjectId(body.old_category_id)
-        new_oid = ObjectId(body.new_category_id)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid category_id format",
-        )
-
     old_cat = await db.categories.find_one(
-        {"_id": old_oid, "channel_id": channel_id}
+        {"id": body.old_category_id, "channel_id": channel_id}
     )
     new_cat = await db.categories.find_one(
-        {"_id": new_oid, "channel_id": channel_id}
+        {"id": body.new_category_id, "channel_id": channel_id}
     )
     if not old_cat:
         raise HTTPException(
@@ -1385,6 +1375,7 @@ async def _process_unverified_videos(
             if cat not in existing_cats:
                 existing_cats.append(cat)
                 await db.categories.insert_one({
+                    "id": str(uuid.uuid4()),
                     "channel_id": channel_id,
                     "name": cat,
                     "description": "",
@@ -1659,6 +1650,7 @@ async def sync_videos(
                 now = now_ist()
                 await db.categories.insert_one(
                     {
+                        "id": str(uuid.uuid4()),
                         "channel_id": channel_id,
                         "name": cat,
                         "description": "",
@@ -1980,6 +1972,7 @@ async def _sync_instagram_reels(
                 existing_cats.append(cat)
                 now = now_ist()
                 await db.categories.insert_one({
+                    "id": str(uuid.uuid4()),
                     "channel_id": channel_id,
                     "name": cat,
                     "description": "",

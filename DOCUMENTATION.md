@@ -617,8 +617,8 @@ Moves a video from one category to another. Updates the video document, the per-
 
 ```json
 {
-  "old_category_id": "65f...", // MongoDB _id of current category
-  "new_category_id": "65f..." // MongoDB _id of target category
+  "old_category_id": "a1b2c3d4-...",
+  "new_category_id": "e5f67890-..."
 }
 ```
 
@@ -890,7 +890,7 @@ Generates completely distinct new video ideas based on the latest analysis.
 
 Prefix: `/api/v1/channels/{channel_id}/categories`
 
-Manages content categories (e.g. "Tutorials", "Reviews"). Categories drive the analysis engine and to-do video generation.
+Manages content categories (e.g. "Tutorials", "Reviews"). Categories drive the analysis engine and to-do video generation. Each category has a unique `id` (UUID string) used for update/delete operations.
 
 ---
 
@@ -909,7 +909,7 @@ Returns all categories sorted by score (highest first).
 ```json
 [
   {
-    "_id": "65f...",
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "channel_id": "tech-tips",
     "name": "Tutorials",
     "description": "How-to videos and walkthroughs",
@@ -941,7 +941,7 @@ Returns all categories sorted by score (highest first).
 
 #### `POST /` — Add categories
 
-Accepts a **single category** or a **list of categories**.
+Accepts a **single category** or a **list of categories**. Each created category is assigned a UUID `id`.
 
 **Request body (single):**
 
@@ -969,7 +969,7 @@ Accepts a **single category** or a **list of categories**.
 {
   "ok": true,
   "inserted_count": 2,
-  "ids": ["65f...", "65f..."]
+  "ids": ["a1b2c3d4-...", "e5f67890-..."]
 }
 ```
 
@@ -977,7 +977,7 @@ Accepts a **single category** or a **list of categories**.
 
 #### `PATCH /{category_id}` — Update a category
 
-**Path params:** `category_id` — the MongoDB `_id` of the category
+**Path params:** `category_id` — the UUID `id` of the category
 
 **Request body (all fields optional):**
 
@@ -991,13 +991,15 @@ Accepts a **single category** or a **list of categories**.
 }
 ```
 
-**Response (200):** `{"ok": true, "category_id": "65f..."}`
+**Response (200):** `{"ok": true, "category_id": "a1b2c3d4-..."}`
 
 **Name Propagation**: If the category name is updated, the server automatically updates the `category` field on all associated `videos` and `analysis_history` records to prevent broken metadata.
 
 ---
 
 #### `DELETE /{category_id}` — Delete a category
+
+**Path params:** `category_id` — the UUID `id` of the category
 
 Removes a category and re-allocates its videos.
 
@@ -1008,7 +1010,7 @@ Removes a category and re-allocates its videos.
 3. Updates `analysis_history` records to `"Uncategorized"`.
 4. Deletes the category document from the `categories` collection.
 
-**Response (200):** `{"ok": true, "category_id": "...", "deleted": true}`
+**Response (200):** `{"ok": true, "category_id": "a1b2c3d4-...", "deleted": true}`
 
 ---
 
@@ -1535,6 +1537,7 @@ Stores content categories with their performance scores.
 ```json
 {
   "_id": "ObjectId",
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "channel_id": "tech-tips",
   "name": "Tutorials",
   "description": "How-to videos and walkthroughs",
@@ -1568,6 +1571,7 @@ Stores content categories with their performance scores.
 **Indexes:**
 | Fields | Type | Purpose |
 |---|---|---|
+| `id` | Unique | Primary lookup for update/delete |
 | `(channel_id, status, score)` | Compound | Fast sorted queries by active/score |
 
 **Auto-archiving:** The to-do engine archives categories when:

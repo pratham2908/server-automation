@@ -320,6 +320,7 @@ async def api_schema():
                 "request": None,
                 "response": [
                     {
+                        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                         "channel_id": "ch1",
                         "name": "Tutorials",
                         "description": "How-to guides",
@@ -354,18 +355,18 @@ async def api_schema():
             {
                 "group": "Categories",
                 "method": "PATCH",
-                "path": "/api/v1/channels/{channel_id}/categories/{category_object_id}",
+                "path": "/api/v1/channels/{channel_id}/categories/{category_id}",
                 "description": "Update a category. Name changes propagate to videos.",
                 "request": {"name": "New Name", "description": "Updated", "score": 90, "status": "archived"},
-                "response": {"ok": True, "category_id": "inserted_id_1"},
+                "response": {"ok": True, "category_id": "a1b2c3d4-..."},
             },
             {
                 "group": "Categories",
                 "method": "DELETE",
-                "path": "/api/v1/channels/{channel_id}/categories/{category_object_id}",
+                "path": "/api/v1/channels/{channel_id}/categories/{category_id}",
                 "description": "Delete a category and move its videos to 'Uncategorized'",
                 "request": None,
-                "response": {"ok": True, "category_id": "inserted_id_1", "deleted": True},
+                "response": {"ok": True, "category_id": "a1b2c3d4-...", "deleted": True},
             },
             # -- Videos --
             {

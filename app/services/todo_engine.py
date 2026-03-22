@@ -153,7 +153,7 @@ async def update_categories_from_analysis(
         cat_name = cat_doc["name"]
         meta = await _compute_category_metadata(channel_id, cat_name, db)
         await db.categories.update_one(
-            {"_id": cat_doc["_id"]},
+            {"channel_id": channel_id, "name": cat_name},
             {
                 "$set": {
                     "metadata": meta,
@@ -178,7 +178,7 @@ async def update_categories_from_analysis(
         )
         if cat_doc and cat_doc.get("video_count", 0) >= _ARCHIVE_MIN_VIDEOS:
             await db.categories.update_one(
-                {"_id": cat_doc["_id"]},
+                {"channel_id": channel_id, "name": cat_name},
                 {
                     "$set": {
                         "status": "archived",
