@@ -404,9 +404,24 @@ class YouTubeService:
             media_body=media,
         )
 
+        from googleapiclient.errors import ResumableUploadError
+        import json
+
         response = None
-        while response is None:
-            _, response = request.next_chunk()
+        try:
+            while response is None:
+                _, response = request.next_chunk()
+        except ResumableUploadError as exc:
+            error_msg = str(exc)
+            try:
+                # Try to extract detailed error from the JSON body
+                detail = json.loads(exc.content.decode())
+                error_msg = detail.get("error", {}).get("message", error_msg)
+            except Exception:
+                pass
+            
+            logger.error(f"YouTube Resumable Upload Failed: {error_msg}")
+            raise
 
         return response["id"]
 
