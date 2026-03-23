@@ -381,11 +381,24 @@ class YouTubeService:
         if publish_at:
             video_status["publishAt"] = publish_at
 
+        # Sanitize tags: YouTube allows up to 500 characters total for all tags.
+        # It also disallows certain characters like '<' or '>'.
+        clean_tags = []
+        total_len = 0
+        for tag in tags:
+            tag = tag.strip().replace("<", "").replace(">", "")
+            if not tag:
+                continue
+            if total_len + len(tag) + 1 > 500:
+                break
+            clean_tags.append(tag)
+            total_len += len(tag) + 1
+
         body = {
             "snippet": {
                 "title": title,
                 "description": description,
-                "tags": tags,
+                "tags": clean_tags,
                 "categoryId": category_id,
             },
             "status": video_status,
