@@ -210,10 +210,13 @@ async def run_comment_reply_cycle(
             await db.comment_replies.insert_one({
                 "channel_id": channel_id,
                 "video_id": video.get("video_id", ""),
+                "video_title": video.get("title", ""),
+                "video_url": c.get("video_url", ""),
                 "platform": platform,
                 "comment_id": c["comment_id"],
                 "comment_text": c.get("text", ""),
                 "comment_author": c.get("author", ""),
+                "comment_url": c.get("comment_url", ""),
                 "sentiment": "positive",
                 "reply_text": reply_text,
                 "reply_id": reply_id,

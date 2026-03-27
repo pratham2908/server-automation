@@ -549,6 +549,8 @@ class YouTubeService:
                     "author": snip.get("authorDisplayName", ""),
                     "author_channel_id": author_ch.get("value", ""),
                     "published_at": snip.get("publishedAt", ""),
+                    "video_url": f"https://www.youtube.com/watch?v={youtube_video_id}",
+                    "comment_url": f"https://www.youtube.com/watch?v={youtube_video_id}&lc={top.get('id', '')}",
                 })
 
             page_token = response.get("nextPageToken")
@@ -629,6 +631,8 @@ class YouTubeService:
                     "author": snip.get("authorDisplayName", ""),
                     "author_channel_id": author_ch.get("value", ""),
                     "published_at": pub_raw,
+                    "video_url": f"https://www.youtube.com/watch?v={youtube_video_id}",
+                    "comment_url": f"https://www.youtube.com/watch?v={youtube_video_id}&lc={top.get('id', '')}",
                 })
 
             page_token = response.get("nextPageToken")

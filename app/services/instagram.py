@@ -117,6 +117,8 @@ class InstagramService:
                     "like_count": int(item.get("like_count", 0)),
                     "author": item.get("username", ""),
                     "published_at": item.get("timestamp", ""),
+                    "video_url": f"https://www.instagram.com/reels/{media_id}/",
+                    "comment_url": f"https://www.instagram.com/reels/comments/{item.get('id', '')}/",
                 })
             paging = body.get("paging", {})
             url = paging.get("next")
