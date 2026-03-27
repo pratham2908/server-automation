@@ -97,6 +97,8 @@ async def run_comment_reply_cycle(
         "published_at": {"$gte": cutoff},
     }).sort("published_at", -1).limit(max_videos).to_list(length=max_videos)
 
+    logger.info("Found %d videos for comment-reply cycle on channel '%s'", len(videos), channel_id)
+
     own_yt_channel_id = channel.get("youtube_channel_id", "")
     own_ig_username = channel.get("name", "").lower()
 
@@ -159,6 +161,8 @@ async def run_comment_reply_cycle(
 
         # Classify sentiment in batches
         positive_comments: list[dict[str, Any]] = []
+        sentiment_counts = {"positive": 0, "negative": 0, "neutral": 0, "spam": 0}
+
         for i in range(0, len(candidates), _SENTIMENT_BATCH_SIZE):
             batch = candidates[i:i + _SENTIMENT_BATCH_SIZE]
             try:
@@ -170,8 +174,20 @@ async def run_comment_reply_cycle(
 
             sentiment_map = {r["comment_id"]: r.get("sentiment", "") for r in results if isinstance(r, dict)}
             for c in batch:
-                if sentiment_map.get(c["comment_id"]) == "positive":
+                sent = sentiment_map.get(c["comment_id"], "neutral")
+                sentiment_counts[sent] = sentiment_counts.get(sent, 0) + 1
+                if sent == "positive":
                     positive_comments.append(c)
+
+        logger.info(
+            "Video '%s': %d total comments, %d positive, %d negative, %d neutral, %d spam",
+            video.get("title", platform_vid_id)[:50],
+            len(candidates),
+            sentiment_counts["positive"],
+            sentiment_counts["negative"],
+            sentiment_counts["neutral"],
+            sentiment_counts["spam"]
+        )
 
         # Reply to positive comments
         for c in positive_comments:

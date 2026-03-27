@@ -35,8 +35,10 @@ class GeminiService:
     # Internal — model fallback
     # ------------------------------------------------------------------
 
-    async def _generate(self, prompt: str) -> str:
+    async def _generate(self, prompt: str, specific_model: str | None = None) -> str:
         """Try each model in the fallback chain until one succeeds.
+        
+        If `specific_model` is provided, it attempts only that model.
 
         Returns the raw response text. Raises the last exception if
         every model fails.
@@ -44,7 +46,9 @@ class GeminiService:
         import asyncio
         last_error: Exception | None = None
 
-        for model in self._MODEL_CHAIN:
+        models_to_try = [specific_model] if specific_model else self._MODEL_CHAIN
+
+        for model in models_to_try:
             try:
                 # Use the async client and enforce a 90s timeout
                 response = await asyncio.wait_for(
@@ -758,7 +762,7 @@ Return a JSON array with one entry per comment:
 
 Classify every comment. Do not skip any."""
 
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, specific_model="gemini-3-flash-preview")
         try:
             return json.loads(text)
         except (json.JSONDecodeError, TypeError):
