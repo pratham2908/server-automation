@@ -1960,6 +1960,25 @@ Orchestrates the full comment sentiment and demand extraction pipeline:
 - **`run_cron_cycle`**: Full cron pass for one channel — discovers competitor videos via `get_channel_latest_videos()`, collects own published videos, compares comment counts against stored `last_known_comment_count`, runs fresh or incremental analysis as needed. The 20-video cap applies only to **fresh** (new) videos; incremental re-analysis of already-analyzed videos is uncapped. Logs include the source channel name (own channel name or competitor name) for each video analyzed
 - **`aggregate_comment_analyses`**: Combines insights across all analyzed videos — merges themes/demands by name, sums counts, recalculates signal strengths, returns channel-level intelligence summary
 
+### Comment Reply Engine (`app/services/comment_reply_engine.py`)
+
+Orchestrates the auto-reply workflow for a single channel:
+
+1. Loads `comment_reply_config` from the `config` collection (checks `enabled` flag)
+2. Fetches recent published videos (last N days, up to `max_videos_per_run`)
+3. For each video: fetches comments, filters own comments and already-replied ones, classifies sentiment via Gemini in batches of 50, replies to positive comments with a randomly-selected template
+4. Records each reply in the `comment_replies` collection (prevents duplicates via unique index)
+5. Respects `max_replies_per_run` cap across all videos
+
+### Comment Reply Cron (`app/services/comment_reply_cron.py`)
+
+Background async task (same pattern as `auto_publisher.py` and `comment_analysis_cron.py`):
+
+- **Schedule**: Runs every `interval_hours` (default: **6 hours**). Re-reads config each cycle.
+- **What it does**: Iterates over all managed channels, runs `run_comment_reply_cycle` for each
+- **Started automatically** in `main.py` lifespan as an `asyncio.create_task`
+- **Graceful shutdown**: Task is cancelled during app shutdown
+
 ### Comment Analysis Cron (`app/services/comment_analysis_cron.py`)
 
 Background async task that runs the comment analysis pipeline daily at a configurable hour. Follows the same pattern as `auto_publisher.py`:
@@ -2046,6 +2065,91 @@ flowchart TD
 ### Instagram Limitation
 
 Instagram Graph API only allows fetching comments on media owned by the authenticated account. Therefore, **Instagram comment analysis only works for own-channel videos**, not competitors. YouTube has no such restriction — competitor video comments are fully accessible via the public API.
+
+---
+
+## Automated Comment Reply System
+
+The comment reply system automatically replies to positive comments on published videos with a subscribe-nudge message. It runs as a background cron job (default every 6 hours) and works on both YouTube and Instagram.
+
+### How It Works
+
+```mermaid
+flowchart TD
+    Cron["Comment Reply Cron (every 6h)"] --> Channels["Load all channels"]
+    Channels --> Videos["Get recent published videos (last 30 days)"]
+    Videos --> Fetch["Fetch comments from platform"]
+    Fetch --> FilterOwn["Exclude channel's own comments"]
+    FilterOwn --> FilterReplied["Exclude already-replied (from comment_replies collection)"]
+    FilterReplied --> Gemini["Gemini: classify sentiment (batch of 50)"]
+    Gemini --> Positive{"Positive?"}
+    Positive -->|Yes| Reply["Post reply via platform API"]
+    Positive -->|No| Skip["Skip"]
+    Reply --> Record["Store in comment_replies collection"]
+```
+
+### Sentiment Classification
+
+Gemini classifies each comment into one of four categories:
+- **positive**: Genuine appreciation, excitement, praise, or love for the content
+- **negative**: Complaints, criticism, or dissatisfaction
+- **neutral**: Questions, factual statements, or remarks with no clear sentiment
+- **spam**: Self-promotion, gibberish, irrelevant links, or bot-like content
+
+Only **positive** comments receive auto-replies.
+
+### Duplicate Prevention
+
+The `comment_replies` collection has a unique index on `(channel_id, comment_id)`. Before replying, the engine checks this collection to skip comments that have already been replied to. This prevents double-replies even if the cron runs frequently.
+
+### Own-Comment Filtering
+
+- **YouTube**: Comments are filtered by `author_channel_id` — comments from the channel's own `youtube_channel_id` are excluded
+- **Instagram**: Comments are filtered by `author` (username) — comments from the channel's own username are excluded
+
+### Configuration
+
+Stored in the `config` collection under key `comment_reply_config`:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable/disable the auto-reply system |
+| `reply_templates` | string[] | 3 templates | Messages to randomly pick from when replying |
+| `max_replies_per_run` | int | `50` | Cap on total replies per cron cycle per channel |
+| `max_videos_per_run` | int | `10` | Max videos to process per cycle |
+| `video_recency_days` | int | `30` | Only process videos published within this many days |
+| `interval_hours` | int | `6` | Hours between cron cycles |
+
+### API Endpoints
+
+**Per-channel endpoints** under `/api/v1/channels/{channel_id}/comment-replies/`:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/trigger` | Manually trigger a reply cycle for this channel |
+| `GET` | `/history` | List replied comments (filters: `video_id`, `limit`) |
+
+**Global config endpoints** under `/api/v1/comment-replies/config/`:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Get the current reply configuration |
+| `PUT` | `/` | Update configuration (all fields optional). No restart needed. |
+
+### Liking/Hearting Limitation
+
+Neither YouTube nor Instagram exposes an API method to like or heart a comment as the channel owner. YouTube's `comments` resource has no `rate` or `heart` endpoint. Instagram only supports `hide`, `delete`, and `replies` on comments. Therefore, **only replying is supported**.
+
+### Files
+
+| File | Description |
+|------|-------------|
+| `app/services/comment_reply_engine.py` | Core orchestration logic (`run_comment_reply_cycle`) |
+| `app/services/comment_reply_cron.py` | Background cron loop |
+| `app/routers/comment_replies.py` | API endpoints (trigger, history, config) |
+| `app/services/gemini.py` | `classify_comment_sentiment()` method |
+| `app/services/youtube.py` | `reply_to_comment()` method |
+| `app/services/instagram.py` | `reply_to_comment()` method |
 
 ---
 

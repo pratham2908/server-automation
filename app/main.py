@@ -23,6 +23,7 @@ instagram_service_manager = None
 gemini_service = None
 _auto_publisher_task = None
 _comment_analysis_task = None
+_comment_reply_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     import asyncio
     from app.services.auto_publisher import run_auto_publisher
 
-    global _auto_publisher_task, _comment_analysis_task
+    global _auto_publisher_task, _comment_analysis_task, _comment_reply_task
     _auto_publisher_task = asyncio.create_task(run_auto_publisher(db, r2_service))
     logger.info("Background auto-publisher started")
 
@@ -96,10 +97,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background comment analysis cron started")
 
+    # ---- Background comment reply cron (every 6 hours) ----
+    from app.services.comment_reply_cron import run_comment_reply_cron
+
+    _comment_reply_task = asyncio.create_task(
+        run_comment_reply_cron(db, youtube_service_manager, instagram_service_manager, gemini_service)
+    )
+    logger.info("Background comment reply cron started")
+
     yield
 
     # ---- Shutdown ----
-    for task in (_auto_publisher_task, _comment_analysis_task):
+    for task in (_auto_publisher_task, _comment_analysis_task, _comment_reply_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -133,7 +142,7 @@ app.add_middleware(
 )
 app.add_middleware(StructuredLoggingMiddleware)
 
-from app.routers import analysis, categories, channels, comment_analysis, retention_analysis, system, ui, videos  # noqa: E402
+from app.routers import analysis, categories, channels, comment_analysis, comment_replies, retention_analysis, system, ui, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
@@ -141,6 +150,8 @@ app.include_router(categories.router)
 app.include_router(analysis.router)
 app.include_router(comment_analysis.router)
 app.include_router(comment_analysis.config_router)
+app.include_router(comment_replies.router)
+app.include_router(comment_replies.config_router)
 app.include_router(retention_analysis.router)
 app.include_router(ui.router)
 app.include_router(system.router)
@@ -764,6 +775,85 @@ async def api_schema():
                     "all_content_gaps": ["Advanced workflows", "Mobile-first content"],
                     "all_trending_topics": ["AI tools", "Short-form content"],
                     "all_key_insights": ["Audience craves depth over breadth"],
+                },
+            },
+            # -- Comment Replies --
+            {
+                "group": "Comment Replies",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/comment-replies/trigger",
+                "description": "Manually trigger a comment reply cycle for this channel",
+                "request": None,
+                "response": {
+                    "ok": True,
+                    "channel_id": "ch1",
+                    "replied": 5,
+                    "skipped": 12,
+                    "errors": 0,
+                    "videos_processed": 3,
+                },
+            },
+            {
+                "group": "Comment Replies",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/comment-replies/history",
+                "description": "List auto-replied comments for this channel",
+                "query_params": {
+                    "video_id": {"type": "string", "optional": True},
+                    "limit": {"type": "integer", "optional": True, "default": 50},
+                },
+                "request": None,
+                "response": [
+                    {
+                        "channel_id": "ch1",
+                        "video_id": "uuid-1234",
+                        "platform": "youtube",
+                        "comment_id": "Ugx...",
+                        "comment_text": "Great video!",
+                        "comment_author": "FanUser",
+                        "sentiment": "positive",
+                        "reply_text": "Thanks so much! Subscribe so you don't miss more content like this!",
+                        "reply_id": "Ugx...reply",
+                        "replied_at": "2026-03-07T12:00:00+05:30",
+                    }
+                ],
+            },
+            {
+                "group": "Comment Replies Config",
+                "method": "GET",
+                "path": "/api/v1/comment-replies/config/",
+                "description": "Get the current comment reply configuration",
+                "request": None,
+                "response": {
+                    "key": "comment_reply_config",
+                    "enabled": True,
+                    "reply_templates": [
+                        "Thanks so much! Subscribe so you don't miss more content like this!",
+                    ],
+                    "max_replies_per_run": 50,
+                    "max_videos_per_run": 10,
+                    "video_recency_days": 30,
+                    "interval_hours": 6,
+                },
+            },
+            {
+                "group": "Comment Replies Config",
+                "method": "PUT",
+                "path": "/api/v1/comment-replies/config/",
+                "description": "Update comment reply configuration (enable/disable, templates, limits, interval)",
+                "request": {
+                    "enabled": True,
+                    "reply_templates": ["Thanks! Subscribe for more!"],
+                    "max_replies_per_run": 30,
+                    "interval_hours": 12,
+                },
+                "response": {
+                    "ok": True,
+                    "key": "comment_reply_config",
+                    "enabled": True,
+                    "reply_templates": ["Thanks! Subscribe for more!"],
+                    "max_replies_per_run": 30,
+                    "interval_hours": 12,
                 },
             },
             # -- Retention Analysis --

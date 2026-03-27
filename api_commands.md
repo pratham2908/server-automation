@@ -1177,6 +1177,114 @@ Video retention prediction using Gemini's multimodal analysis. Automatically tri
 
 ---
 
+## Comment Replies
+
+Automated comment reply system. A background cron (default every 6 hours) fetches unreplied comments from recent published videos, classifies sentiment via Gemini, and auto-replies to positive comments with a subscribe-nudge message. Works on both YouTube and Instagram. Liking/hearting comments is **not** supported by either platform's API.
+
+### Manually Trigger Reply Cycle
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/comment-replies/trigger`
+- **Method**: `POST`
+- **Description**: Runs the same reply cycle as the background cron, but on-demand for this channel.
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "channel_id": "ch1",
+  "replied": 5,
+  "skipped": 12,
+  "errors": 0,
+  "videos_processed": 3
+}
+```
+
+### List Reply History
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/comment-replies/history`
+- **Method**: `GET`
+- **Query Params** (all optional):
+  - `video_id`: Filter by a specific video
+  - `limit`: Max results (default 50, max 500)
+- **Response**:
+
+```json
+[
+  {
+    "channel_id": "ch1",
+    "video_id": "uuid-1234",
+    "platform": "youtube",
+    "comment_id": "Ugx...",
+    "comment_text": "Great video!",
+    "comment_author": "FanUser",
+    "sentiment": "positive",
+    "reply_text": "Thanks so much! Subscribe so you don't miss more content like this!",
+    "reply_id": "Ugx...reply",
+    "replied_at": "2026-03-07T12:00:00+05:30"
+  }
+]
+```
+
+---
+
+## Comment Reply Config
+
+Global configuration for the comment reply system. Not channel-scoped.
+
+### Get Config
+
+- **Endpoint**: `/api/v1/comment-replies/config/`
+- **Method**: `GET`
+- **Description**: Returns the current reply configuration.
+- **Response**:
+
+```json
+{
+  "key": "comment_reply_config",
+  "enabled": true,
+  "reply_templates": [
+    "Thanks so much! Subscribe so you don't miss more content like this!",
+    "Glad you enjoyed it! Hit subscribe for more!",
+    "Thank you! Don't forget to subscribe for more!"
+  ],
+  "max_replies_per_run": 50,
+  "max_videos_per_run": 10,
+  "video_recency_days": 30,
+  "interval_hours": 6
+}
+```
+
+### Update Config
+
+- **Endpoint**: `/api/v1/comment-replies/config/`
+- **Method**: `PUT`
+- **Description**: Update reply configuration. All fields are optional — only provided fields are changed. Changes take effect on the next cron cycle.
+- **Request**:
+
+```json
+{
+  "enabled": true,
+  "reply_templates": ["Thanks! Subscribe for more!"],
+  "max_replies_per_run": 30,
+  "interval_hours": 12
+}
+```
+
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "key": "comment_reply_config",
+  "enabled": true,
+  "reply_templates": ["Thanks! Subscribe for more!"],
+  "max_replies_per_run": 30,
+  "interval_hours": 12
+}
+```
+
+---
+
 ## Comment Analysis Config
 
 Global configuration for the comment analysis cron schedule. Not channel-scoped.

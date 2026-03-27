@@ -724,6 +724,47 @@ Return a JSON object with exactly these keys:
 Be thorough, objective, and data-driven. Every claim must reference a specific moment in the video."""
 
     # ------------------------------------------------------------------
+    # Comment sentiment classification (for auto-reply)
+    # ------------------------------------------------------------------
+
+    async def classify_comment_sentiment(
+        self,
+        comments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Classify each comment's sentiment for the auto-reply system.
+
+        Returns a list of ``{"comment_id": "...", "sentiment": "positive|negative|neutral|spam"}``.
+        """
+        batch = [
+            {"comment_id": c["comment_id"], "text": c["text"], "author": c.get("author", "")}
+            for c in comments
+        ]
+
+        prompt = f"""Classify the sentiment of each comment below.
+
+Categories:
+- **positive**: Genuine appreciation, excitement, praise, compliments, or love for the content.
+- **negative**: Complaints, criticism, dislike, or dissatisfaction.
+- **neutral**: Questions, factual statements, or remarks with no clear sentiment.
+- **spam**: Self-promotion, gibberish, irrelevant links, or bot-like content.
+
+Comments:
+```json
+{json.dumps(batch, indent=2)}
+```
+
+Return a JSON array with one entry per comment:
+[{{"comment_id": "...", "sentiment": "positive|negative|neutral|spam"}}]
+
+Classify every comment. Do not skip any."""
+
+        text = await self._generate(prompt)
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    # ------------------------------------------------------------------
     # Comment sentiment & demand analysis
     # ------------------------------------------------------------------
 

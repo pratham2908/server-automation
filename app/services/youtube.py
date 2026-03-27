@@ -510,7 +510,8 @@ class YouTubeService:
         determine the newest timestamp for future incremental fetches.
 
         Returns a list of dicts with keys:
-        ``text``, ``like_count``, ``author``, ``published_at``.
+        ``comment_id``, ``text``, ``like_count``, ``author``,
+        ``author_channel_id``, ``published_at``.
         """
         comments: list[dict[str, Any]] = []
         page_token: str | None = None
@@ -538,11 +539,15 @@ class YouTubeService:
                 break
 
             for item in response.get("items", []):
-                snip = item["snippet"]["topLevelComment"]["snippet"]
+                top = item["snippet"]["topLevelComment"]
+                snip = top["snippet"]
+                author_ch = snip.get("authorChannelId", {})
                 comments.append({
+                    "comment_id": top.get("id", ""),
                     "text": snip.get("textDisplay", ""),
                     "like_count": int(snip.get("likeCount", 0)),
                     "author": snip.get("authorDisplayName", ""),
+                    "author_channel_id": author_ch.get("value", ""),
                     "published_at": snip.get("publishedAt", ""),
                 })
 
@@ -604,7 +609,8 @@ class YouTubeService:
                 break
 
             for item in response.get("items", []):
-                snip = item["snippet"]["topLevelComment"]["snippet"]
+                top = item["snippet"]["topLevelComment"]
+                snip = top["snippet"]
                 pub_raw = snip.get("publishedAt", "")
                 try:
                     pub_dt = _dt.fromisoformat(pub_raw.replace("Z", "+00:00"))
@@ -615,10 +621,13 @@ class YouTubeService:
                     done = True
                     break
 
+                author_ch = snip.get("authorChannelId", {})
                 comments.append({
+                    "comment_id": top.get("id", ""),
                     "text": snip.get("textDisplay", ""),
                     "like_count": int(snip.get("likeCount", 0)),
                     "author": snip.get("authorDisplayName", ""),
+                    "author_channel_id": author_ch.get("value", ""),
                     "published_at": pub_raw,
                 })
 
@@ -627,6 +636,22 @@ class YouTubeService:
                 break
 
         return comments
+
+    def reply_to_comment(self, comment_id: str, text: str) -> str:
+        """Post a reply to a top-level comment.
+
+        Returns the ID of the newly created reply comment.
+        """
+        response = self._youtube.comments().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "parentId": comment_id,
+                    "textOriginal": text,
+                }
+            },
+        ).execute()
+        return response["id"]
 
 
 class YouTubeServiceManager:

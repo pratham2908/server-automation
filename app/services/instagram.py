@@ -99,9 +99,9 @@ class InstagramService:
         """Fetch all comments on a media item owned by the authenticated account.
 
         Returns a list of dicts with keys:
-        ``text``, ``like_count``, ``author``, ``published_at``.
+        ``comment_id``, ``text``, ``like_count``, ``author``, ``published_at``.
         """
-        fields = "text,timestamp,like_count,username"
+        fields = "id,text,timestamp,like_count,username"
         comments: list[dict[str, Any]] = []
         url: str | None = f"{_GRAPH_BASE}/{media_id}/comments"
         params: dict = {"fields": fields, "limit": "100", "access_token": self._token}
@@ -112,6 +112,7 @@ class InstagramService:
             body = resp.json()
             for item in body.get("data", []):
                 comments.append({
+                    "comment_id": item.get("id", ""),
                     "text": item.get("text", ""),
                     "like_count": int(item.get("like_count", 0)),
                     "author": item.get("username", ""),
@@ -152,6 +153,21 @@ class InstagramService:
                 new_comments.append(c)
 
         return new_comments
+
+    def reply_to_comment(self, comment_id: str, message: str) -> str:
+        """Reply to a comment on an owned media item.
+
+        Requires ``instagram_manage_comments`` permission.
+        Returns the ID of the newly created reply.
+        """
+        url = f"{_GRAPH_BASE}/{comment_id}/replies"
+        resp = requests.post(
+            url,
+            params={"message": message, "access_token": self._token},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("id", "")
 
     def get_reel_insights(self, media_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Fetch per-reel insights (views, reach, saved, shares).

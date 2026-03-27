@@ -82,6 +82,13 @@ async def connect_db(
     await _db.retention_analysis.create_index(
         [("channel_id", 1), ("analyzed_at", -1)],
     )
+    await _db.comment_replies.create_index(
+        [("channel_id", 1), ("comment_id", 1)],
+        unique=True,
+    )
+    await _db.comment_replies.create_index(
+        [("channel_id", 1), ("replied_at", -1)],
+    )
 
     return _db
 
