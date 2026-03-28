@@ -76,6 +76,8 @@ class ChannelUpdate(BaseModel):
     """Partial update payload."""
 
     name: Optional[str] = None
+    default_description: Optional[str] = None
+    default_tags: Optional[list[str]] = None
 
 
 # ------------------------------------------------------------------
