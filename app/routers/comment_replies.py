@@ -64,13 +64,16 @@ async def trigger_comment_replies(
 async def get_reply_history(
     channel_id: str,
     video_id: Optional[str] = Query(None, description="Filter by video_id"),
+    status: Optional[str] = Query(None, description="Filter by status (replied, skipped_negative, etc)"),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """List comments that have been auto-replied to for this channel."""
+    """List comments that have been processed for this channel."""
     query: dict[str, Any] = {"channel_id": channel_id}
     if video_id:
         query["video_id"] = video_id
+    if status:
+        query["status"] = status
 
     docs = await db.comment_replies.find(query).sort(
         "replied_at", -1

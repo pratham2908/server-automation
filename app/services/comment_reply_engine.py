@@ -178,6 +178,23 @@ async def run_comment_reply_cycle(
                 sentiment_counts[sent] = sentiment_counts.get(sent, 0) + 1
                 if sent == "positive":
                     positive_comments.append(c)
+                else:
+                    # Mark as skipped in DB to avoid re-analysis
+                    status_val = f"skipped_{sent}" if sent in ("negative", "neutral", "spam") else "skipped_other"
+                    await db.comment_replies.insert_one({
+                        "channel_id": channel_id,
+                        "video_id": video.get("video_id", ""),
+                        "video_title": video.get("title", ""),
+                        "video_url": c.get("video_url", ""),
+                        "platform": platform,
+                        "comment_id": c["comment_id"],
+                        "comment_text": c.get("text", ""),
+                        "comment_author": c.get("author", ""),
+                        "comment_url": c.get("comment_url", ""),
+                        "sentiment": sent,
+                        "status": status_val,
+                        "replied_at": now_ist(), # processed_at
+                    })
 
         logger.info(
             "Video '%s': %d total comments, %d positive, %d negative, %d neutral, %d spam",
@@ -218,6 +235,7 @@ async def run_comment_reply_cycle(
                 "comment_author": c.get("author", ""),
                 "comment_url": c.get("comment_url", ""),
                 "sentiment": "positive",
+                "status": "replied",
                 "reply_text": reply_text,
                 "reply_id": reply_id,
                 "replied_at": now_ist(),
