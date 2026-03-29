@@ -607,10 +607,11 @@ async def delete_content_param(
 
 class CompetitorCreate(BaseModel):
     """Payload for adding a competitor channel."""
-    youtube_channel_id: str = Field(..., description="Competitor's YouTube channel ID")
-    handle: str = Field(..., description="YouTube handle, e.g. @MrBeast")
-    name: str = Field(..., description="Display name")
-    thumbnail: str = Field("", description="Thumbnail/avatar URL")
+    youtube_channel_id: Optional[str] = Field(None, description="Competitor's YouTube channel ID")
+    handle: Optional[str] = Field(None, description="YouTube handle, e.g. @MrBeast")
+    instagram_username: Optional[str] = Field(None, description="Instagram username, e.g. 'mrbeast'")
+    name: Optional[str] = Field(None, description="Display name (auto-fetched if omitted)")
+    thumbnail: Optional[str] = Field(None, description="Thumbnail/avatar URL (auto-fetched if omitted)")
 
 
 @router.get("/{channel_id}/competitors")
@@ -635,34 +636,83 @@ async def add_competitor(
     body: CompetitorCreate,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Add a competitor to a channel (YouTube channels only)."""
+    """Add a competitor to a channel (YouTube or Instagram)."""
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
 
-    if channel.get("platform", "youtube") != "youtube":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Competitor tracking is only supported for YouTube channels",
-        )
+    platform = channel.get("platform", "youtube")
+    comp_platform = "instagram" if body.instagram_username else "youtube"
 
-    existing = await db.competitors.find_one({
-        "channel_id": channel_id,
-        "youtube_channel_id": body.youtube_channel_id,
-    })
+    # -- Validate input --
+    if comp_platform == "youtube" and not body.youtube_channel_id:
+        raise HTTPException(status_code=400, detail="youtube_channel_id is required for YouTube competitors")
+    if comp_platform == "instagram" and not body.instagram_username:
+        raise HTTPException(status_code=400, detail="instagram_username is required for Instagram competitors")
+
+    # -- Check for existing --
+    search_query = {"channel_id": channel_id}
+    if comp_platform == "youtube":
+        search_query["youtube_channel_id"] = body.youtube_channel_id
+    else:
+        search_query["instagram_username"] = body.instagram_username
+
+    existing = await db.competitors.find_one(search_query)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Competitor '{body.youtube_channel_id}' already exists for this channel",
+            detail=f"Competitor '{body.youtube_channel_id or body.instagram_username}' already exists for this channel",
         )
+
+    # -- Fetch metadata if missing --
+    name = body.name
+    thumbnail = body.thumbnail
+    sub_count = 0
+    vid_count = 0
+    comp_yt_id = body.youtube_channel_id
+    comp_ig_user_id = None
+
+    if comp_platform == "youtube":
+        manager = _get_youtube_manager()
+        yt = await manager.get_service(channel_id)
+        if yt:
+            try:
+                info = yt.get_channel_info(body.youtube_channel_id)
+                name = name or info.get("name")
+                thumbnail = thumbnail or info.get("thumbnail_url")
+                sub_count = info.get("subscriber_count", 0)
+                vid_count = info.get("video_count", 0)
+            except Exception as e:
+                logger.warning("Could not fetch YouTube competitor metadata: %s", e)
+    else:
+        # Instagram competitor fetching via Business Discovery
+        manager = _get_instagram_manager()
+        ig = await manager.get_service(channel_id)
+        own_ig_id = channel.get("instagram_user_id")
+        if ig and own_ig_id:
+            try:
+                info = ig.discover_business_account(own_ig_id, body.instagram_username)
+                name = name or info.get("name")
+                thumbnail = thumbnail or info.get("profile_picture_url")
+                sub_count = info.get("followers_count", 0)
+                vid_count = info.get("media_count", 0)
+                comp_ig_user_id = info.get("instagram_user_id")
+            except Exception as e:
+                logger.warning("Could not fetch Instagram competitor metadata: %s", e)
 
     doc = {
         "channel_id": channel_id,
-        "youtube_channel_id": body.youtube_channel_id,
+        "platform": comp_platform,
+        "youtube_channel_id": comp_yt_id,
+        "instagram_username": body.instagram_username,
+        "instagram_user_id": comp_ig_user_id,
         "handle": body.handle,
-        "name": body.name,
-        "thumbnail": body.thumbnail,
+        "name": name or body.instagram_username or body.handle or "Unknown",
+        "thumbnail": thumbnail or "",
+        "subscriber_count": sub_count,
+        "video_count": vid_count,
         "created_at": now_ist(),
+        "updated_at": now_ist(),
     }
     await db.competitors.insert_one(doc)
     doc.pop("_id", None)

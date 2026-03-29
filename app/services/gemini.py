@@ -23,10 +23,9 @@ class GeminiService:
     # Model fallback chain — tried in order. If a model fails, the next
     # one is attempted.  Edit this list to change priority.
     _MODEL_CHAIN = [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite-preview-02-05",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
+        "gemini-3-flash-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
     ]
 
     def __init__(self, api_key: str) -> None:
@@ -763,7 +762,7 @@ Return a JSON array with one entry per comment:
 
 Classify every comment. Do not skip any."""
 
-        text = await self._generate(prompt, specific_model="gemini-3-flash-preview")
+        text = await self._generate(prompt)
         try:
             return json.loads(text)
         except (json.JSONDecodeError, TypeError):

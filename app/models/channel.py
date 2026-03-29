@@ -43,14 +43,28 @@ class ContentParamDefinition(BaseModel):
 
 
 class Competitor(BaseModel):
-    """A competitor YouTube channel tracked for a managed channel."""
+    """A competitor (YouTube or Instagram) tracked for a managed channel."""
 
     channel_id: str = Field(..., description="Parent channel this competitor belongs to")
-    youtube_channel_id: str = Field(..., description="Competitor's YouTube channel ID")
-    handle: str = Field(..., description="Competitor's YouTube handle, e.g. @MrBeast")
+    platform: str = Field("youtube", description="'youtube' or 'instagram'")
+
+    # YouTube (optional)
+    youtube_channel_id: Optional[str] = Field(None, description="Competitor's YouTube UC... ID")
+    handle: Optional[str] = Field(None, description="YouTube handle, e.g. @MrBeast")
+
+    # Instagram (optional)
+    instagram_username: Optional[str] = Field(None, description="Instagram username, e.g. 'mrbeast'")
+    instagram_user_id: Optional[str] = Field(None, description="Instagram ID (if known)")
+
     name: str = Field(..., description="Display name")
     thumbnail: str = Field("", description="Thumbnail/avatar URL")
+
+    # Stats
+    subscriber_count: int = Field(0, description="Follower count")
+    video_count: int = Field(0, description="Media count")
+
     created_at: datetime = Field(default_factory=now_ist)
+    updated_at: datetime = Field(default_factory=now_ist)
 
 
 class YouTubeTokens(BaseModel):

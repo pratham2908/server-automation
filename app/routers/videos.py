@@ -796,9 +796,7 @@ Return a single JSON object mapping each schema parameter name to its extracted 
 Example: {{"simulation_type": "battle", "challenge_mechanic": "1v1"}}
 """
 
-    # For Instagram Reels, use the specific gemini-3-flash-preview model.
-    specific_model = "gemini-3-flash-preview" if platform == "instagram" else None
-    text = await gemini_service._generate(prompt, specific_model=specific_model)
+    text = await gemini_service._generate(prompt)
 
     try:
         params = json.loads(text)
@@ -886,9 +884,7 @@ async def extract_all_content_params(
 Return a single JSON object mapping each schema parameter name to its extracted value."""
 
         try:
-            # For Instagram Reels, use the specific gemini-3-flash-preview model.
-            specific_model = "gemini-3-flash-preview" if platform == "instagram" else None
-            text = await gemini_service._generate(prompt, specific_model=specific_model)
+            text = await gemini_service._generate(prompt)
             params = json.loads(text)
             if not isinstance(params, dict):
                 continue
@@ -1085,18 +1081,6 @@ async def create_video(
             detail=f"Channel '{channel_id}' not found",
         )
 
-    # Parse tags (comma-separated or JSON array)
-    parsed_tags: list[str] = []
-    if tags:
-        tags_stripped = tags.strip()
-        if tags_stripped.startswith("["):
-            try:
-                parsed_tags = _json.loads(tags_stripped)
-            except _json.JSONDecodeError:
-                parsed_tags = [t.strip() for t in tags_stripped.split(",") if t.strip()]
-        else:
-            parsed_tags = [t.strip() for t in tags_stripped.split(",") if t.strip()]
-
     # Parse content_params (JSON string)
     parsed_params: dict | None = None
     if content_params:
@@ -1108,8 +1092,21 @@ async def create_video(
                 detail="content_params must be a valid JSON object",
             )
 
-    is_verified = bool(category and parsed_params)
     platform = channel.get("platform", "youtube")
+
+    # Parse tags (comma-separated or JSON array) - YouTube only
+    parsed_tags: list[str] = []
+    if platform == "youtube" and tags:
+        tags_stripped = tags.strip()
+        if tags_stripped.startswith("["):
+            try:
+                parsed_tags = _json.loads(tags_stripped)
+            except _json.JSONDecodeError:
+                parsed_tags = [t.strip() for t in tags_stripped.split(",") if t.strip()]
+        else:
+            parsed_tags = [t.strip() for t in tags_stripped.split(",") if t.strip()]
+
+    is_verified = bool(category and parsed_params)
 
     # Handle direct scheduling if requested
     parsed_scheduled_at: datetime | None = None
@@ -1582,9 +1579,7 @@ Return a JSON array of objects, one per video, matching this exact schema:
 
 Be precise. Do not invent parameters not in the schema. Do not include parameters that don't belong to the chosen category."""
 
-    # For Instagram Reels, use the specific gemini-3-flash-preview model.
-    specific_model = "gemini-3-flash-preview" if platform == "instagram" else None
-    response_text = await gemini_service._generate(prompt, specific_model=specific_model)
+    response_text = await gemini_service._generate(prompt)
 
     try:
         return json.loads(response_text)

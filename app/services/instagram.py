@@ -70,6 +70,26 @@ class InstagramService:
             "biography": data.get("biography", ""),
         }
 
+    def discover_business_account(self, own_ig_user_id: str, target_username: str) -> dict[str, Any]:
+        """Fetch metadata for *any* Business/Creator account using Business Discovery.
+
+        Requires an authenticated business account (own_ig_user_id) to perform
+        the search.  Returns a dict with basic metadata.
+        """
+        query = f"business_discovery.username({target_username}){{id,username,name,profile_picture_url,followers_count,media_count,biography}}"
+        data = self._get(own_ig_user_id, {"fields": query})
+
+        disc = data.get("business_discovery", {})
+        return {
+            "instagram_user_id": disc.get("id"),
+            "username": disc.get("username", target_username),
+            "name": disc.get("name", ""),
+            "profile_picture_url": disc.get("profile_picture_url", ""),
+            "followers_count": disc.get("followers_count", 0),
+            "media_count": disc.get("media_count", 0),
+            "biography": disc.get("biography", ""),
+        }
+
     # ------------------------------------------------------------------
     # Reels
     # ------------------------------------------------------------------

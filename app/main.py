@@ -498,7 +498,7 @@ async def api_schema():
                     "file": "(binary)",
                     "title": "My Reel",
                     "description": "...",
-                    "tags": "tag1, tag2",
+                    "tags": "tag1, tag2 (YouTube only; ignored for Instagram)",
                     "category": "Comedy",
                     "content_params": "{\"topic\": \"humor\"}",
                     "scheduled_at": "2026-03-20T10:00:00+05:30 (Instagram only)"
