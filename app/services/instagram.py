@@ -81,7 +81,7 @@ class InstagramService:
         ``media_type`` to keep only video/reel content.
         """
         fields = (
-            "id,caption,media_type,media_url,thumbnail_url,"
+            "id,caption,media_type,media_url,"
             "timestamp,permalink,like_count,comments_count"
         )
         reels: list[dict[str, Any]] = []
