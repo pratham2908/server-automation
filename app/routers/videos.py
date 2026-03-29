@@ -796,7 +796,9 @@ Return a single JSON object mapping each schema parameter name to its extracted 
 Example: {{"simulation_type": "battle", "challenge_mechanic": "1v1"}}
 """
 
-    text = await gemini_service._generate(prompt)
+    # For Instagram Reels, use the specific gemini-3-flash-preview model.
+    specific_model = "gemini-3-flash-preview" if platform == "instagram" else None
+    text = await gemini_service._generate(prompt, specific_model=specific_model)
 
     try:
         params = json.loads(text)
@@ -884,7 +886,9 @@ async def extract_all_content_params(
 Return a single JSON object mapping each schema parameter name to its extracted value."""
 
         try:
-            text = await gemini_service._generate(prompt)
+            # For Instagram Reels, use the specific gemini-3-flash-preview model.
+            specific_model = "gemini-3-flash-preview" if platform == "instagram" else None
+            text = await gemini_service._generate(prompt, specific_model=specific_model)
             params = json.loads(text)
             if not isinstance(params, dict):
                 continue
@@ -1578,7 +1582,9 @@ Return a JSON array of objects, one per video, matching this exact schema:
 
 Be precise. Do not invent parameters not in the schema. Do not include parameters that don't belong to the chosen category."""
 
-    response_text = await gemini_service._generate(prompt)
+    # For Instagram Reels, use the specific gemini-3-flash-preview model.
+    specific_model = "gemini-3-flash-preview" if platform == "instagram" else None
+    response_text = await gemini_service._generate(prompt, specific_model=specific_model)
 
     try:
         return json.loads(response_text)
@@ -1623,12 +1629,16 @@ async def _process_unverified_videos(
         ]
 
     # Batch process all unverified videos.
+    channel_doc = await db.channels.find_one({"channel_id": channel_id})
+    platform = (channel_doc or {}).get("platform", "youtube")
+
     results = await _extract_params_and_categorize_batch(
         gemini_service, content_schema, existing_cats, unverified_docs,
         category_instructions=body.new_category_description if body else "",
+        platform=platform,
     )
 
-    id_key = "youtube_video_id" if (await db.channels.find_one({"channel_id": channel_id})).get("platform") == "youtube" else "instagram_media_id"
+    id_key = "youtube_video_id" if platform == "youtube" else "instagram_media_id"
 
     updated = 0
     for res in results:
