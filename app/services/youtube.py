@@ -697,11 +697,17 @@ class YouTubeServiceManager:
             return self._cache[channel_id]
 
         channel = await self._db.channels.find_one({"channel_id": channel_id})
-        if not channel or not channel.get("youtube_tokens"):
-            logger.warning(
-                "No YouTube tokens stored for channel '%s'",
-                channel_id,
-            )
+        if not channel:
+            logger.warning("Channel '%s' not found", channel_id)
+            return None
+            
+        if not channel.get("youtube_tokens"):
+            # Only warn if this is intended to be a YouTube channel
+            if channel.get("platform") == "youtube":
+                logger.warning(
+                    "No YouTube tokens stored for channel '%s'",
+                    channel_id,
+                )
             return None
 
         try:

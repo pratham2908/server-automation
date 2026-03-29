@@ -749,7 +749,7 @@ async def extract_content_params(
     """
     import json
 
-    _, gemini_service = await _get_services(channel_id)
+    gemini_service = _get_gemini_service()
     if gemini_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -842,7 +842,7 @@ async def extract_all_content_params(
     """Bulk-extract content parameters for every video that doesn't have them yet."""
     import json
 
-    _, gemini_service = await _get_services(channel_id)
+    gemini_service = _get_gemini_service()
     if gemini_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1386,6 +1386,18 @@ async def _get_services(channel_id: str):
 
     youtube_service = await youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
     return youtube_service, gemini_service
+
+
+def _get_gemini_service():
+    """Lazy import for Gemini service singleton."""
+    from app.main import gemini_service  # type: ignore[import]
+    return gemini_service
+
+
+def _get_gemini_service():
+    """Lazy import for Gemini service singleton."""
+    from app.main import gemini_service  # type: ignore[import]
+    return gemini_service
 
 
 async def _get_instagram_service(channel_id: str):
@@ -2064,7 +2076,7 @@ async def _sync_instagram_reels(
             detail=f"No Instagram token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/instagram-token",
         )
 
-    _, gemini_service = await _get_services(channel_id)
+    gemini_service = _get_gemini_service()
     if gemini_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2078,12 +2090,23 @@ async def _sync_instagram_reels(
             detail="Channel has no instagram_user_id",
         )
 
-    reels = ig_svc.get_reels(ig_user_id)
-    if not reels:
-        return {"ok": True, "synced": 0, "message": "No reels found on Instagram"}
+    try:
+        reels = ig_svc.get_reels(ig_user_id)
+        if not reels:
+            return {"ok": True, "synced": 0, "message": "No reels found on Instagram"}
 
-    media_ids = [r["id"] for r in reels]
-    insights = ig_svc.get_reel_insights(media_ids)
+        media_ids = [r["id"] for r in reels]
+        insights = ig_svc.get_reel_insights(media_ids)
+    except Exception as exc:
+        msg = str(exc)
+        if "API access blocked" in msg:
+            msg = "Instagram API access blocked. Check your Meta developer account/app status and ensures permissions are active."
+        
+        logger.error("Instagram sync failed for channel '%s': %s", channel_id, msg)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Instagram API failure: {msg}"
+        )
 
     existing_ig_ids: set[str] = set()
     async for doc in db.videos.find(
@@ -2344,7 +2367,7 @@ async def generate_todos(
     """Generate `n` new to-do videos for *channel_id*."""
     from app.services.todo_engine import generate_todo_videos
 
-    _, gemini_service = await _get_services(channel_id)
+    gemini_service = _get_gemini_service()
 
     if gemini_service is None:
         raise HTTPException(

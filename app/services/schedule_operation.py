@@ -28,17 +28,24 @@ def _build_instagram_caption(video_doc: dict[str, Any]) -> str:
 
     desc = (video_doc.get("description") or "").strip()
     if desc:
+        # Normalise line breaks to \n only
+        desc = desc.replace("\r\n", "\n").replace("\r", "\n")
         parts.append(desc)
 
     tags = video_doc.get("tags") or []
     if tags:
-        hashtags = " ".join(
-            f"#{t.strip().replace(' ', '')}" if not t.startswith("#") else t.strip()
-            for t in tags
-            if t.strip()
-        )
-        if hashtags:
-            parts.append(hashtags)
+        # Create hashtags string, but check if they're already in desc
+        hashtag_list = []
+        for t in tags:
+            tag = t.strip()
+            if not tag:
+                continue
+            h = f"#{tag.replace(' ', '')}" if not tag.startswith("#") else tag
+            if h.lower() not in desc.lower():
+                hashtag_list.append(h)
+        
+        if hashtag_list:
+            parts.append(" ".join(hashtag_list))
 
     return "\n\n".join(parts)
 

@@ -35,9 +35,20 @@ class InstagramService:
         self._channel_id = channel_id
 
     def _get(self, endpoint: str, params: dict | None = None) -> dict:
-        params = params or {}
-        params["access_token"] = self._token
-        resp = requests.get(f"{_GRAPH_BASE}/{endpoint}", params=params, timeout=30)
+        headers = {"Authorization": f"Bearer {self._token}"}
+        resp = requests.get(
+            f"{_GRAPH_BASE}/{endpoint}",
+            params=params,
+            headers=headers,
+            timeout=30,
+        )
+        if not resp.ok:
+            try:
+                error_data = resp.json()
+                logger.error("Instagram API GET failed (%d): %s", resp.status_code, error_data)
+                # If it's a 400, the error_data usually contains important details like "(#10) Permission error"
+            except Exception:
+                logger.error("Instagram API GET failed (%d): %s", resp.status_code, resp.text)
         resp.raise_for_status()
         return resp.json()
 
@@ -74,19 +85,24 @@ class InstagramService:
             "timestamp,permalink,like_count,comments_count"
         )
         reels: list[dict[str, Any]] = []
-        url: str | None = f"{_GRAPH_BASE}/{ig_user_id}/media"
-        params: dict = {"fields": fields, "limit": "100", "access_token": self._token}
+        url = f"{ig_user_id}/media"
+        params: dict = {"fields": fields, "limit": "100"}
 
         while url:
-            resp = requests.get(url, params=params, timeout=30)
-            resp.raise_for_status()
-            body = resp.json()
+            body = self._get(url, params=params)
             for item in body.get("data", []):
                 if item.get("media_type") in ("VIDEO", "REEL"):
                     reels.append(item)
             paging = body.get("paging", {})
-            url = paging.get("next")
-            params = {}  # next URL already contains params
+            next_url = paging.get("next")
+            if next_url:
+                # The 'next' URL is absolute and contains all tokens, 
+                # but our _get helper prepends _GRAPH_BASE.
+                # So we strip the base if it's there, or just use requests.get directly for paging.
+                params = {}
+                url = next_url.replace(f"{_GRAPH_BASE}/", "")
+            else:
+                url = None
 
         logger.info("Fetched %d reels for IG user %s", len(reels), ig_user_id)
         return reels
@@ -103,13 +119,11 @@ class InstagramService:
         """
         fields = "id,text,timestamp,like_count,username"
         comments: list[dict[str, Any]] = []
-        url: str | None = f"{_GRAPH_BASE}/{media_id}/comments"
-        params: dict = {"fields": fields, "limit": "100", "access_token": self._token}
+        url = f"{media_id}/comments"
+        params: dict = {"fields": fields, "limit": "100"}
 
         while url:
-            resp = requests.get(url, params=params, timeout=30)
-            resp.raise_for_status()
-            body = resp.json()
+            body = self._get(url, params=params)
             for item in body.get("data", []):
                 comments.append({
                     "comment_id": item.get("id", ""),
@@ -121,8 +135,12 @@ class InstagramService:
                     "comment_url": f"https://www.instagram.com/reels/comments/{item.get('id', '')}/",
                 })
             paging = body.get("paging", {})
-            url = paging.get("next")
-            params = {}
+            next_url = paging.get("next")
+            if next_url:
+                params = {}
+                url = next_url.replace(f"{_GRAPH_BASE}/", "")
+            else:
+                url = None
 
         return comments
 
@@ -162,14 +180,7 @@ class InstagramService:
         Requires ``instagram_manage_comments`` permission.
         Returns the ID of the newly created reply.
         """
-        url = f"{_GRAPH_BASE}/{comment_id}/replies"
-        resp = requests.post(
-            url,
-            params={"message": message, "access_token": self._token},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json().get("id", "")
+        return self._post(f"{comment_id}/replies", {"message": message}).get("id", "")
 
     def get_reel_insights(self, media_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Fetch per-reel insights (views, reach, saved, shares).
@@ -198,9 +209,20 @@ class InstagramService:
     # ------------------------------------------------------------------
 
     def _post(self, endpoint: str, params: dict | None = None) -> dict:
-        params = params or {}
-        params["access_token"] = self._token
-        resp = requests.post(f"{_GRAPH_BASE}/{endpoint}", params=params, timeout=60)
+        payload = params or {}
+        headers = {"Authorization": f"Bearer {self._token}"}
+        resp = requests.post(
+            f"{_GRAPH_BASE}/{endpoint}",
+            data=payload,
+            headers=headers,
+            timeout=60,
+        )
+        if not resp.ok:
+            try:
+                error_data = resp.json()
+                logger.error("Instagram API POST failed (%d): %s", resp.status_code, error_data)
+            except Exception:
+                logger.error("Instagram API POST failed (%d): %s", resp.status_code, resp.text)
         resp.raise_for_status()
         return resp.json()
 
