@@ -118,15 +118,19 @@ async def run_auto_publisher(db: Any, r2_service: Any) -> None:
     from app.services.instagram import InstagramServiceManager
 
     logger.info("Auto-publisher started (poll interval: %ds)", _POLL_INTERVAL_SECONDS)
+    from app.services.metrics import metrics_service
 
     while True:
         try:
+            metrics_service.track_task_start("auto_publisher")
             await _poll_and_publish(db, r2_service)
+            metrics_service.track_task_end("auto_publisher", "success")
         except asyncio.CancelledError:
             logger.info("Auto-publisher shutting down")
             break
         except Exception:
             logger.exception("Auto-publisher encountered an error during poll cycle")
+            metrics_service.track_task_end("auto_publisher", "error")
 
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 

@@ -97,6 +97,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background comment analysis cron started")
 
+    # ---- Background metrics persistence (every hour) ----
+    from app.services.metrics import metrics_service
+    async def run_metrics_persistence():
+        while True:
+            await asyncio.sleep(3600)  # 1 hour
+            try:
+                await metrics_service.persist_snapshot(db)
+            except Exception as e:
+                logger.error(f"Failed to persist metrics: {e}")
+    
+    global _metrics_persistence_task
+    _metrics_persistence_task = asyncio.create_task(run_metrics_persistence())
+    logger.info("Background metrics persistence started")
+
     # ---- Background comment reply cron (every 6 hours) ----
     from app.services.comment_reply_cron import run_comment_reply_cron
 
@@ -108,7 +122,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     yield
 
     # ---- Shutdown ----
-    for task in (_auto_publisher_task, _comment_analysis_task, _comment_reply_task):
+    if _metrics_persistence_task:
+        _metrics_persistence_task.cancel()
+        # Take final snapshot
+        try:
+            await metrics_service.persist_snapshot(db)
+        except:
+            pass
+
+    for task in (_auto_publisher_task, _comment_analysis_task, _comment_reply_task, _metrics_persistence_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -142,7 +164,7 @@ app.add_middleware(
 )
 app.add_middleware(StructuredLoggingMiddleware)
 
-from app.routers import analysis, categories, channels, comment_analysis, comment_replies, preview_analysis, retention_analysis, system, ui, videos  # noqa: E402
+from app.routers import analysis, categories, channels, comment_analysis, comment_replies, observability, preview_analysis, retention_analysis, system, ui, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
@@ -156,6 +178,7 @@ app.include_router(preview_analysis.router)
 app.include_router(retention_analysis.router)
 app.include_router(ui.router)
 app.include_router(system.router)
+app.include_router(observability.router)
 
 
 @app.get("/health", tags=["health"])

@@ -5,6 +5,7 @@ import uuid
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.logger import get_logger
+from app.services.metrics import metrics_service
 
 logger = get_logger("http")
 
@@ -19,13 +20,15 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         query = str(request.query_params)
         
-        # Don't log large binary uploads or logs/stream
-        if "/logs/stream" in path or "/upload" in path or "/create" in path:
+        # Dont log large binary uploads or logs/stream
+        if "/logs/stream" in path or "/upload" in path or "/create" in path or "/dashboard" in path:
              # Just basic info for heavy endpoints
              response = await call_next(request)
              duration = (time.time() - start_time) * 1000
              status_code = response.status_code
              logger.info(f"[REQUEST] {method} {path} | {status_code} | {duration:.2f}ms")
+             # Record high-level metrics for performance monitoring
+             metrics_service.record_request(method, path, status_code, duration)
              return response
 
         # Capture all headers as-is
@@ -47,6 +50,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 "query": query,
             }
             logger.error(f"REQUEST_BOX: {json.dumps(error_data)}")
+            metrics_service.record_request(method, path, 500, duration)
             raise e
 
         duration = (time.time() - start_time) * 1000
@@ -65,5 +69,8 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
 
         # Log specialized "box" format for UI
         logger.info(f"REQUEST_BOX: {json.dumps(log_data)}")
+        
+        # Record the standard metrics
+        metrics_service.record_request(method, path, status_code, duration)
         
         return response

@@ -36,19 +36,16 @@ class GeminiService:
     # ------------------------------------------------------------------
 
     async def _generate(self, prompt: str, specific_model: str | None = None) -> str:
-        """Try each model in the fallback chain until one succeeds.
-        
-        If `specific_model` is provided, it attempts only that model.
-
-        Returns the raw response text. Raises the last exception if
-        every model fails.
-        """
+        """Try each model in the fallback chain until one succeeds."""
         import asyncio
+        from app.services.metrics import metrics_service
+        import time
+        
         last_error: Exception | None = None
-
         models_to_try = [specific_model] if specific_model else self._MODEL_CHAIN
 
         for model in models_to_try:
+            start_time = time.time()
             try:
                 # Use the async client and enforce a 90s timeout
                 response = await asyncio.wait_for(
@@ -61,18 +58,21 @@ class GeminiService:
                     ),
                     timeout=90.0,
                 )
-                logger.info("Gemini response from model '%s'", model, extra={"color": "CYAN"})
+                duration = (time.time() - start_time) * 1000
+                metrics_service.record_ai_call(model, duration, "success")
+                logger.info("Gemini response from model '%s' (%.2fms)", model, duration, extra={"color": "CYAN"})
                 return response.text
             except Exception as exc:
+                duration = (time.time() - start_time) * 1000
+                metrics_service.record_ai_call(model, duration, "error")
                 last_error = exc
-                is_last = model == self._MODEL_CHAIN[-1]
+                is_last = model == models_to_try[-1]
                 if is_last:
-                    logger.error(f"🚨 All Gemini models in the fallback chain failed! Last error: {exc}")
+                    logger.error(f"🚨 All Gemini models tried failed! Last error: {exc}")
                 else:
                     logger.warning(
-                        "⚠️ Model '%s' failed: %s — trying next fallback",
-                        model,
-                        exc,
+                        "⚠️ Model '%s' failed (%.2fms): %s — trying next fallback",
+                        model, duration, exc,
                     )
 
         raise last_error  # type: ignore[misc]
@@ -528,12 +528,10 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
     # ------------------------------------------------------------------
 
     async def _generate_with_video(self, video_path: str, prompt: str) -> str:
-        """Upload a video file to Gemini, wait for processing, then generate.
-
-        Tries each model in the fallback chain. Cleans up the uploaded
-        file from Gemini storage after generation (or on failure).
-        """
+        """Upload a video file to Gemini, wait for processing, then generate."""
         import asyncio
+        from app.services.metrics import metrics_service
+        import time
 
         uploaded_file = await self._client.aio.files.upload(file=video_path)
         logger.info("Uploaded video to Gemini (name=%s, state=%s)", uploaded_file.name, uploaded_file.state)
@@ -555,6 +553,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 
             last_error: Exception | None = None
             for model in self._MODEL_CHAIN:
+                start_time = time.time()
                 try:
                     response = await asyncio.wait_for(
                         self._client.aio.models.generate_content(
@@ -566,15 +565,19 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                         ),
                         timeout=180.0,
                     )
-                    logger.info("Gemini video analysis response from model '%s'", model, extra={"color": "CYAN"})
+                    duration = (time.time() - start_time) * 1000
+                    metrics_service.record_ai_call(model, duration, "success")
+                    logger.info("Gemini video analysis response from model '%s' (%.2fms)", model, duration, extra={"color": "CYAN"})
                     return response.text
                 except Exception as exc:
+                    duration = (time.time() - start_time) * 1000
+                    metrics_service.record_ai_call(model, duration, "error")
                     last_error = exc
                     is_last = model == self._MODEL_CHAIN[-1]
                     if is_last:
                         logger.error("All Gemini models failed for video analysis: %s", exc)
                     else:
-                        logger.warning("Model '%s' failed for video analysis: %s — trying next", model, exc)
+                        logger.warning("Model '%s' failed for video analysis (%.2fms): %s — trying next", model, duration, exc)
 
             raise last_error  # type: ignore[misc]
         finally:

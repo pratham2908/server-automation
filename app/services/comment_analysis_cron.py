@@ -72,8 +72,10 @@ async def run_comment_analysis_cron(
         )
 
         await asyncio.sleep(wait_seconds)
+        from app.services.metrics import metrics_service
 
         try:
+            metrics_service.track_task_start("comment_analysis")
             channels = await db.channels.find().to_list(length=None)
             logger.info(
                 "🔄 Comment analysis cron tick — processing %d channel(s)",
@@ -104,5 +106,7 @@ async def run_comment_analysis_cron(
                         "Comment analysis cron failed for channel '%s': %s",
                         channel_id, exc,
                     )
+            metrics_service.track_task_end("comment_analysis", "success")
         except Exception as exc:
             logger.error("Comment analysis cron top-level error: %s", exc)
+            metrics_service.track_task_end("comment_analysis", "error")
