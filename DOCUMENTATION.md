@@ -1950,6 +1950,13 @@ Orchestrates the video retention analysis pipeline:
 - **`compute_comparison(doc)`**: Pure helper that computes predicted-vs-actual deviation from a single `retention_analysis` document. Returns `retention_deviation`, `retention_accuracy_pct`, and `prediction_quality` ("accurate"/"close"/"off"). Returns `None` if actuals haven't been backfilled yet
 - **Background task trigger**: Automatically fired as `asyncio.create_task` when a video moves to `ready` status (via `POST /upload` or `POST /create`). Non-blocking — the upload response returns immediately
 
+### Preview Analysis Service (`app/services/preview_analysis.py`)
+
+Ephemeral retention prediction for draft videos (not tied to the pipeline):
+
+- **`run_preview_analysis(preview_id, video_path, title, platform, db, gemini_service)`**: Takes a local temp file, sends it to Gemini for the same multimodal retention analysis, stores the result in `preview_analysis` collection, cleans up the temp file. No R2 involvement.
+- **`compute_version_comparison(current_doc, previous_doc)`**: Pure helper that computes deltas between two preview analyses — `predicted_retention_delta`, `hook_score_delta`, `pacing_score_delta`, and `improved` boolean. Returns `None` if either analysis is not completed.
+
 ### Comment Analysis Engine (`app/services/comment_analysis_engine.py`)
 
 Orchestrates the full comment sentiment and demand extraction pipeline:
@@ -2224,6 +2231,63 @@ The `GET /{video_id}` endpoint automatically includes a `comparison` sub-object 
 - **Only own-channel videos with R2 files** are eligible (the system needs the actual video file)
 - Automatically triggered when a video reaches `ready` status
 - Can also be manually triggered via `POST /{video_id}/trigger`
+
+---
+
+## Preview Analysis System
+
+The preview analysis system provides **ephemeral retention predictions** for draft videos that are not part of the pipeline. Upload any video file, get the same Gemini multimodal retention analysis as the regular system, and the results auto-expire after 24 hours.
+
+### Purpose
+
+This is an iterative feedback tool. Before committing a video to the pipeline (uploading to R2, scheduling, publishing), you can:
+
+1. Upload a rough cut and see hook score, pacing, predicted retention, and recommendations
+2. Make improvements based on the feedback
+3. Upload the revised version, linking it to the previous preview via `previous_preview_id`
+4. See a `version_comparison` showing exactly how your changes affected scores
+
+### How It Works
+
+1. `POST /preview-analysis/` accepts a video file via multipart upload (plus optional `title`, `label`, `previous_preview_id`)
+2. The file is saved to a temp directory on disk (not R2)
+3. A `preview_analysis` doc is created with `status: "analyzing"` and `expires_at: now + 24h`
+4. A background task uploads the file to Gemini, runs multimodal retention analysis (same prompt as the regular retention system), stores the result
+5. The temp file and Gemini upload are cleaned up immediately after analysis
+6. MongoDB's TTL index automatically deletes the doc after 24 hours
+
+### Version Linking
+
+When uploading a revised version, pass `previous_preview_id` to link it to the previous analysis. When fetching via `GET /{preview_id}`, the API computes a `version_comparison` object on-the-fly:
+
+- `predicted_retention_delta`: How much predicted retention changed (positive = improvement)
+- `hook_score_delta`: Hook score change
+- `pacing_score_delta`: Pacing score change
+- `improved`: Boolean -- `true` if retention went up
+
+If the previous preview has expired (TTL cleanup), `version_comparison` is gracefully set to `null`.
+
+### TTL Auto-Cleanup
+
+The `preview_analysis` collection has a MongoDB TTL index on the `expires_at` field with `expireAfterSeconds: 0`. Each doc sets `expires_at = created_at + 24h`. MongoDB's background thread automatically deletes expired docs -- no application-level cron needed.
+
+### API Endpoints
+
+**Per-channel endpoints** under `/api/v1/channels/{channel_id}/preview-analysis/`:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/` | Upload video for ephemeral analysis (returns `preview_id` immediately) |
+| `GET` | `/{preview_id}` | Get result with optional `version_comparison` |
+| `GET` | `/` | List active previews for the channel |
+| `DELETE` | `/{preview_id}` | Manually delete before TTL expires |
+
+### Files
+
+| File | Description |
+|------|-------------|
+| `app/services/preview_analysis.py` | `run_preview_analysis()` + `compute_version_comparison()` |
+| `app/routers/preview_analysis.py` | API endpoints |
 
 ---
 

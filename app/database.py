@@ -89,6 +89,10 @@ async def connect_db(
     await _db.comment_replies.create_index(
         [("channel_id", 1), ("replied_at", -1)],
     )
+    await _db.preview_analysis.create_index(
+        "expires_at", expireAfterSeconds=0,
+    )
+    await _db.preview_analysis.create_index("preview_id", unique=True)
 
     return _db
 

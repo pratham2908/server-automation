@@ -1177,6 +1177,87 @@ Video retention prediction using Gemini's multimodal analysis. Automatically tri
 
 ---
 
+## Preview Analysis
+
+Ephemeral video retention prediction. Upload any video file (not tied to the pipeline) to get a Gemini multimodal retention prediction. Results auto-expire after 24 hours. Supports version linking — pass the `previous_preview_id` when uploading a revised version to get a comparison showing how scores changed.
+
+### Upload Video for Preview Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/preview-analysis/`
+- **Method**: `POST`
+- **Content-Type**: `multipart/form-data`
+- **Form Fields**:
+  - `file` (required): The video file.
+  - `title` (optional): Video title for context. Defaults to `"Untitled"`.
+  - `label` (optional): Version label (e.g. `"v1 rough cut"`, `"v2 with new hook"`).
+  - `previous_preview_id` (optional): The `preview_id` of a previous version to link for comparison.
+- **Description**: Saves the video to a temp file, creates a `preview_analysis` doc with `status: "analyzing"`, fires a background Gemini multimodal analysis, and returns immediately. Poll `GET /{preview_id}` for results. The temp file and Gemini upload are cleaned up automatically. The doc auto-expires after 24 hours.
+- **Response** (202 Accepted):
+
+```json
+{
+  "ok": true,
+  "preview_id": "550e8400-...",
+  "message": "Preview analysis started — poll GET /{preview_id} for results",
+  "expires_at": "2026-03-08T12:00:00+05:30"
+}
+```
+
+### Get Preview Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/preview-analysis/{preview_id}`
+- **Method**: `GET`
+- **Description**: Returns the preview analysis result. If linked to a previous preview that still exists, includes a `version_comparison` object with score deltas. If the previous preview has expired, `version_comparison` is `null`.
+- **Response**:
+
+```json
+{
+  "preview_id": "550e8400-...",
+  "channel_id": "ch1",
+  "title": "My Video Draft",
+  "label": "v2 with new hook",
+  "previous_preview_id": "abc-123",
+  "platform": "youtube",
+  "status": "completed",
+  "analysis": {
+    "predicted_avg_retention_percent": 68.5,
+    "hook_analysis": { "score": 82, "risk_level": "low" },
+    "pacing_analysis": { "pacing_score": 74, "total_scene_cuts": 18 },
+    "strengths": ["Strong opening hook"],
+    "weaknesses": ["Mid-section pacing drops"],
+    "recommendations": ["Add B-roll at 45s mark"]
+  },
+  "version_comparison": {
+    "previous_preview_id": "abc-123",
+    "previous_label": "v1 rough cut",
+    "predicted_retention_delta": 8.5,
+    "hook_score_delta": 12,
+    "pacing_score_delta": -3,
+    "improved": true
+  },
+  "created_at": "2026-03-07T12:00:00+05:30",
+  "analyzed_at": "2026-03-07T12:01:30+05:30",
+  "expires_at": "2026-03-08T12:00:00+05:30"
+}
+```
+
+> `version_comparison` is `null` if no `previous_preview_id` was provided, or the previous doc has expired.
+
+### List Preview Analyses
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/preview-analysis/`
+- **Method**: `GET`
+- **Query Params**: `limit` (optional, default 20, max 100)
+- **Response**: Array of preview analysis documents, newest first.
+
+### Delete Preview Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/preview-analysis/{preview_id}`
+- **Method**: `DELETE`
+- **Response**: `{"ok": true, "preview_id": "...", "deleted": true}`
+
+---
+
 ## Comment Replies
 
 Automated comment reply system. A background cron (default every 6 hours) fetches unreplied comments from recent published videos, classifies sentiment via Gemini, and auto-replies to positive comments with a subscribe-nudge message. Works on both YouTube and Instagram. Liking/hearting comments is **not** supported by either platform's API.

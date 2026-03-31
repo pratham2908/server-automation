@@ -142,7 +142,7 @@ app.add_middleware(
 )
 app.add_middleware(StructuredLoggingMiddleware)
 
-from app.routers import analysis, categories, channels, comment_analysis, comment_replies, retention_analysis, system, ui, videos  # noqa: E402
+from app.routers import analysis, categories, channels, comment_analysis, comment_replies, preview_analysis, retention_analysis, system, ui, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
@@ -152,6 +152,7 @@ app.include_router(comment_analysis.router)
 app.include_router(comment_analysis.config_router)
 app.include_router(comment_replies.router)
 app.include_router(comment_replies.config_router)
+app.include_router(preview_analysis.router)
 app.include_router(retention_analysis.router)
 app.include_router(ui.router)
 app.include_router(system.router)
@@ -932,6 +933,85 @@ async def api_schema():
                 "description": "Delete the retention analysis for a video",
                 "request": None,
                 "response": {"ok": True, "video_id": "uuid-1234", "deleted": True},
+            },
+            # -- Preview Analysis --
+            {
+                "group": "Preview Analysis",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/preview-analysis/",
+                "description": "Upload a video for ephemeral retention prediction (24h TTL). Optionally link to a previous preview for version comparison.",
+                "content_type": "multipart/form-data",
+                "request": {
+                    "file": "(binary video file)",
+                    "title": "My Video Draft",
+                    "label": "v2 with new hook (optional)",
+                    "previous_preview_id": "uuid of previous preview (optional)",
+                },
+                "response": {
+                    "ok": True,
+                    "preview_id": "550e8400-...",
+                    "message": "Preview analysis started — poll GET /{preview_id} for results",
+                    "expires_at": "2026-03-08T12:00:00+05:30",
+                },
+            },
+            {
+                "group": "Preview Analysis",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/preview-analysis/{preview_id}",
+                "description": "Get a preview analysis result. Includes version_comparison if linked to a previous preview.",
+                "request": None,
+                "response": {
+                    "preview_id": "550e8400-...",
+                    "channel_id": "ch1",
+                    "title": "My Video Draft",
+                    "label": "v2 with new hook",
+                    "previous_preview_id": "abc-123",
+                    "platform": "youtube",
+                    "status": "completed",
+                    "analysis": {
+                        "predicted_avg_retention_percent": 68.5,
+                        "hook_analysis": {"score": 82, "risk_level": "low"},
+                        "pacing_analysis": {"pacing_score": 74},
+                    },
+                    "version_comparison": {
+                        "previous_preview_id": "abc-123",
+                        "previous_label": "v1 rough cut",
+                        "predicted_retention_delta": 8.5,
+                        "hook_score_delta": 12,
+                        "pacing_score_delta": -3,
+                        "improved": True,
+                    },
+                    "created_at": "2026-03-07T12:00:00+05:30",
+                    "analyzed_at": "2026-03-07T12:01:30+05:30",
+                    "expires_at": "2026-03-08T12:00:00+05:30",
+                },
+            },
+            {
+                "group": "Preview Analysis",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/preview-analysis/",
+                "description": "List all active preview analyses for a channel",
+                "query_params": {
+                    "limit": {"type": "integer", "optional": True, "default": 20},
+                },
+                "request": None,
+                "response": [
+                    {
+                        "preview_id": "550e8400-...",
+                        "title": "My Video Draft",
+                        "label": "v2",
+                        "status": "completed",
+                        "created_at": "2026-03-07T12:00:00+05:30",
+                    }
+                ],
+            },
+            {
+                "group": "Preview Analysis",
+                "method": "DELETE",
+                "path": "/api/v1/channels/{channel_id}/preview-analysis/{preview_id}",
+                "description": "Manually delete a preview analysis before its TTL expires",
+                "request": None,
+                "response": {"ok": True, "preview_id": "550e8400-...", "deleted": True},
             },
             # -- Comment Analysis Config --
             {
