@@ -1,11 +1,8 @@
-from fastapi import APIRouter, Request, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import HTMLResponse
-import asyncio
 from app.services.metrics import metrics_service
 from app.config import get_settings
-from app.database import connect_db
-import os
-import psutil
+from app.database import get_db
 
 router = APIRouter(tags=["observability"])
 
@@ -319,6 +316,21 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                 <div id="ai-error-rate" class="stat-value" style="font-size: 1.5rem">0.0%</div>
             </div>
 
+            <div class="card">
+                <div class="stat-header">
+                    <div class="stat-title">Active Workers</div>
+                    <div class="stat-icon" style="color: var(--success)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></div>
+                </div>
+                <div id="active-tasks" class="stat-value" style="font-size: 1.5rem">0</div>
+            </div>
+            <div class="card">
+                <div class="stat-header">
+                    <div class="stat-title">DB Documents</div>
+                    <div class="stat-icon" style="color: var(--accent)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg></div>
+                </div>
+                <div id="total-documents" class="stat-value" style="font-size: 1.5rem">0</div>
+            </div>
+
             <!-- Resource Usage -->
             <div class="card span-2">
                 <h3 style="margin-bottom: 1.5rem">System Resources</h3>
@@ -471,95 +483,116 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                 });
             }
 
+            function safeSet(id, value) {
+                const el = document.getElementById(id);
+                if (el) el.textContent = value;
+            }
+
+            function safeStyle(id, prop, value) {
+                const el = document.getElementById(id);
+                if (el) el.style[prop] = value;
+            }
+
             function updateStats(data) {
-                document.getElementById('total-requests').textContent = data.requests.total;
-                document.getElementById('avg-latency').textContent = data.requests.avg_duration_ms + 'ms';
-                document.getElementById('uptime-text').textContent = 'Uptime: ' + data.uptime_human;
-                
-                // AI Stats
-                if (data.ai) {
-                    document.getElementById('ai-total-calls').textContent = data.ai.total_calls;
-                    document.getElementById('ai-avg-latency').textContent = data.ai.avg_latency_ms.toFixed(0) + 'ms';
-                    document.getElementById('ai-error-rate').textContent = data.ai.error_rate.toFixed(1) + '%';
-                    
-                    // Update Model Chart
-                    const usage = data.ai.model_usage;
-                    modelChart.data.labels = Object.keys(usage);
-                    modelChart.data.datasets[0].data = Object.values(usage);
-                    modelChart.update();
-                }
+                try {
+                    safeSet('total-requests', data.requests.total);
+                    safeSet('avg-latency', data.requests.avg_duration_ms + 'ms');
+                    safeSet('uptime-text', 'Uptime: ' + data.uptime_human);
+                } catch (e) { console.warn('Stats: requests section error', e); }
 
-                // Error Rate
-                const statusCounts = data.requests.status_counts;
-                const total = data.requests.total || 1;
-                const errors = (statusCounts['500'] || 0) + (statusCounts['400'] || 0) + (statusCounts['401'] || 0) + (statusCounts['403'] || 0);
-                const errorRate = (errors / total * 100).toFixed(1);
-                document.getElementById('error-rate').textContent = errorRate + '%';
-                
-                // Database Counts
-                if (data.database) {
-                    document.getElementById('count-channels').textContent = data.database.channels;
-                    document.getElementById('count-videos').textContent = data.database.videos;
-                    document.getElementById('count-categories').textContent = data.database.categories;
-                    document.getElementById('count-history').textContent = data.database.history;
-                }
-                
-                // Gauges
-                if (data.system) {
-                    const sys = data.system;
-                    document.getElementById('cpu-percent').textContent = sys.cpu.percent + '%';
-                    document.getElementById('cpu-fill').style.width = sys.cpu.percent + '%';
-                    
-                    document.getElementById('mem-percent').textContent = sys.mem.percent + '%';
-                    document.getElementById('mem-fill').style.width = sys.mem.percent + '%';
-                    
-                    document.getElementById('disk-percent').textContent = sys.disk.percent + '%';
-                    document.getElementById('disk-fill').style.width = sys.disk.percent + '%';
-                    
-                    document.getElementById('process-mem').textContent = 'RSS: ' + sys.process.mem_mb + 'MB';
-                }
+                try {
+                    if (data.ai) {
+                        safeSet('ai-total-calls', data.ai.total_calls);
+                        safeSet('ai-avg-latency', data.ai.avg_latency_ms.toFixed(0) + 'ms');
+                        safeSet('ai-error-rate', data.ai.error_rate.toFixed(1) + '%');
 
-                // Traffic Chart
-                const s2 = (statusCounts['200'] || 0) + (statusCounts['201'] || 0);
-                const s4 = (statusCounts['400'] || 0) + (statusCounts['401'] || 0) + (statusCounts['403'] || 0) + (statusCounts['404'] || 0);
-                const s5 = (statusCounts['500'] || 0);
-                trafficChart.data.datasets[0].data = [s2, s4, s5];
-                trafficChart.update();
+                        const usage = data.ai.model_usage || {};
+                        modelChart.data.labels = Object.keys(usage);
+                        modelChart.data.datasets[0].data = Object.values(usage);
+                        modelChart.update();
+                    }
+                } catch (e) { console.warn('Stats: AI section error', e); }
 
-                // Active Tasks
-                let activeCount = 0;
-                let taskHtml = '';
-                for (const [name, task] of Object.entries(data.tasks)) {
-                    if (task.status === 'running') activeCount++;
-                    const statusClass = task.status === 'running' ? 'badge-success' : 'badge-warning';
-                    taskHtml += `
-                        <div style="display:flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 0.75rem; border-radius: 0.75rem">
-                            <div>
-                                <div style="font-weight:700; text-transform: capitalize">${name.replace(/_/g, ' ')}</div>
-                                <div style="font-size:0.7rem; color: var(--text-secondary)">Last: ${task.last_run ? new Date(task.last_run).toLocaleTimeString() : 'Never'}</div>
+                try {
+                    const statusCounts = data.requests.status_counts || {};
+                    const total = data.requests.total || 1;
+                    const errors = (statusCounts['500'] || 0) + (statusCounts['400'] || 0) + (statusCounts['401'] || 0) + (statusCounts['403'] || 0);
+                    const errorRate = (errors / total * 100).toFixed(1);
+                    safeSet('error-rate', errorRate + '%');
+
+                    const s2 = (statusCounts['200'] || 0) + (statusCounts['201'] || 0);
+                    const s4 = (statusCounts['400'] || 0) + (statusCounts['401'] || 0) + (statusCounts['403'] || 0) + (statusCounts['404'] || 0);
+                    const s5 = (statusCounts['500'] || 0);
+                    trafficChart.data.datasets[0].data = [s2, s4, s5];
+                    trafficChart.update();
+                } catch (e) { console.warn('Stats: error rate section error', e); }
+
+                try {
+                    if (data.database) {
+                        safeSet('count-channels', data.database.channels);
+                        safeSet('count-videos', data.database.videos);
+                        safeSet('count-categories', data.database.categories);
+                        safeSet('count-history', data.database.history);
+                        const totalDocs = (data.database.channels || 0) + (data.database.videos || 0) + (data.database.categories || 0) + (data.database.history || 0);
+                        safeSet('total-documents', totalDocs);
+                    }
+                } catch (e) { console.warn('Stats: database section error', e); }
+
+                try {
+                    if (data.system && data.system.cpu) {
+                        const sys = data.system;
+                        safeSet('cpu-percent', sys.cpu.percent + '%');
+                        safeStyle('cpu-fill', 'width', sys.cpu.percent + '%');
+
+                        safeSet('mem-percent', sys.mem.percent + '%');
+                        safeStyle('mem-fill', 'width', sys.mem.percent + '%');
+
+                        safeSet('disk-percent', sys.disk.percent + '%');
+                        safeStyle('disk-fill', 'width', sys.disk.percent + '%');
+
+                        if (sys.process) safeSet('process-mem', 'RSS: ' + sys.process.mem_mb + 'MB');
+                    }
+                } catch (e) { console.warn('Stats: system section error', e); }
+
+                try {
+                    let activeCount = 0;
+                    let taskHtml = '';
+                    for (const [name, task] of Object.entries(data.tasks || {})) {
+                        if (task.status === 'running') activeCount++;
+                        const statusClass = task.status === 'running' ? 'badge-success' : 'badge-warning';
+                        taskHtml += `
+                            <div style="display:flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 0.75rem; border-radius: 0.75rem">
+                                <div>
+                                    <div style="font-weight:700; text-transform: capitalize">${name.replace(/_/g, ' ')}</div>
+                                    <div style="font-size:0.7rem; color: var(--text-secondary)">Last: ${task.last_run ? new Date(task.last_run).toLocaleTimeString() : 'Never'}</div>
+                                </div>
+                                <div class="badge ${statusClass}">${task.status}</div>
                             </div>
-                            <div class="badge ${statusClass}">${task.status}</div>
-                        </div>
-                    `;
-                }
-                document.getElementById('active-tasks').textContent = activeCount;
-                document.getElementById('task-list').innerHTML = taskHtml;
+                        `;
+                    }
+                    safeSet('active-tasks', activeCount);
+                    const taskListEl = document.getElementById('task-list');
+                    if (taskListEl) taskListEl.innerHTML = taskHtml;
+                } catch (e) { console.warn('Stats: tasks section error', e); }
 
-                // Recent Requests Table
-                let tableHtml = '';
-                data.requests.recent.reverse().forEach(req => {
-                    const statusClass = req.status >= 500 ? 'badge-error' : (req.status >= 400 ? 'badge-warning' : 'badge-success');
-                    tableHtml += `
-                        <tr>
-                            <td><span style="font-weight:700; color: var(--primary)">${req.method}</span></td>
-                            <td title="${req.path}"><code style="font-size:0.7rem">${req.path.substring(0, 30)}${req.path.length > 30 ? '...' : ''}</code></td>
-                            <td><span class="badge ${statusClass}">${req.status}</span></td>
-                            <td>${req.duration_ms}ms</td>
-                            <td style="font-size:0.7rem; color: var(--text-secondary)">${new Date(req.time).toLocaleTimeString()}</td>
-                        </tr>
-                    `;
-                });
-                document.getElementById('request-table').innerHTML = tableHtml;
+                try {
+                    let tableHtml = '';
+                    const recent = data.requests.recent || [];
+                    [...recent].reverse().forEach(req => {
+                        const statusClass = req.status >= 500 ? 'badge-error' : (req.status >= 400 ? 'badge-warning' : 'badge-success');
+                        tableHtml += `
+                            <tr>
+                                <td><span style="font-weight:700; color: var(--primary)">${req.method}</span></td>
+                                <td title="${req.path}"><code style="font-size:0.7rem">${req.path.substring(0, 30)}${req.path.length > 30 ? '...' : ''}</code></td>
+                                <td><span class="badge ${statusClass}">${req.status}</span></td>
+                                <td>${req.duration_ms}ms</td>
+                                <td style="font-size:0.7rem; color: var(--text-secondary)">${new Date(req.time).toLocaleTimeString()}</td>
+                            </tr>
+                        `;
+                    });
+                    const reqTable = document.getElementById('request-table');
+                    if (reqTable) reqTable.innerHTML = tableHtml;
+                } catch (e) { console.warn('Stats: request table error', e); }
             }
 
             async function fetchData() {
@@ -611,17 +644,15 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
 @router.get("/api/v1/observability/metrics")
 async def get_metrics_api(api_key: str = Depends(verify_api_key)):
     """Returns detailed metrics for the dashboard, including database stats."""
-    settings = get_settings()
-    db = await connect_db(settings.MONGODB_URI, settings.MONGODB_DB_NAME)
-    
-    # Application logical stats
+    db = get_db()
+
     counts = {
         "channels": await db.channels.count_documents({}),
         "videos": await db.videos.count_documents({}),
         "categories": await db.categories.count_documents({}),
         "history": await db.analysis_history.count_documents({}),
     }
-    
+
     summary = metrics_service.get_summary()
     summary["database"] = counts
     return summary

@@ -16,7 +16,7 @@ git commit -m "update: deployment"
 git push origin main
 ```
 
-3. SSH into production server, pull code, and restart service
+3. SSH into production server, pull code, install requirements, and restart service
 ```bash
-ssh -i ssh-key-2.key ubuntu@68.233.115.135 "cd ~/automation-server && git pull && sudo systemctl restart automation-server"
+ssh -i ssh-key-2.key ubuntu@68.233.115.135 "cd ~/automation-server && git pull origin main && ./venv/bin/pip install -r requirements.txt && sudo systemctl restart automation-server"
 ```

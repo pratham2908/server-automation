@@ -963,3 +963,245 @@ Return a JSON object with exactly these keys:
   "trending_topics": ["..."],
   "key_insights": ["..."]
 }}"""
+
+    # ------------------------------------------------------------------
+    # Thumbnail analysis (multimodal image)
+    # ------------------------------------------------------------------
+
+    async def analyze_thumbnail(
+        self,
+        image_path: str,
+        title: str,
+        platform: str = "youtube",
+    ) -> dict[str, Any]:
+        """Analyze a thumbnail image for click-worthiness and visual quality.
+
+        Uses inline image bytes (no file upload API needed for images).
+        """
+        import asyncio
+        import mimetypes
+        import time
+        from app.services.metrics import metrics_service
+
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+
+        mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+        image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        prompt = self._build_thumbnail_analysis_prompt(title, platform)
+
+        last_error: Exception | None = None
+        for model in self._MODEL_CHAIN:
+            start_time = time.time()
+            try:
+                response = await asyncio.wait_for(
+                    self._client.aio.models.generate_content(
+                        model=model,
+                        contents=[image_part, prompt],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                        ),
+                    ),
+                    timeout=90.0,
+                )
+                duration = (time.time() - start_time) * 1000
+                metrics_service.record_ai_call(model, duration, "success")
+                logger.info("Gemini thumbnail analysis from '%s' (%.2fms)", model, duration, extra={"color": "CYAN"})
+
+                return json.loads(response.text)
+            except Exception as exc:
+                duration = (time.time() - start_time) * 1000
+                metrics_service.record_ai_call(model, duration, "error")
+                last_error = exc
+                is_last = model == self._MODEL_CHAIN[-1]
+                if is_last:
+                    logger.error("All Gemini models failed for thumbnail analysis: %s", exc)
+                else:
+                    logger.warning("Model '%s' failed for thumbnail analysis (%.2fms): %s — trying next", model, duration, exc)
+
+        raise last_error  # type: ignore[misc]
+
+    @staticmethod
+    def _build_thumbnail_analysis_prompt(title: str, platform: str = "youtube") -> str:
+        if platform == "instagram":
+            platform_context = (
+                "This thumbnail is for an Instagram Reel. Instagram thumbnails appear as vertical "
+                "squares or 4:5 crops in the grid. Mobile-first: most viewers see them at small sizes "
+                "on phone screens. Visual consistency with the creator's feed aesthetic matters."
+            )
+            aspect_note = "Aspect ratio context: Instagram grid shows 1:1 square crops; Reels cover uses 9:16."
+        else:
+            platform_context = (
+                "This thumbnail is for a YouTube video. YouTube thumbnails are 16:9 (1280x720). "
+                "They appear alongside dozens of competing thumbnails in search, suggested, and home feed. "
+                "Click-through rate (CTR) is the primary metric — the thumbnail must grab attention in under "
+                "1 second at small sizes (120px tall in mobile suggested)."
+            )
+            aspect_note = "Aspect ratio context: 16:9 landscape. Must be readable at both full size and small mobile preview."
+
+        return f"""You are an elite Thumbnail Analyst and Visual CTR Specialist. Analyze this thumbnail image and provide a comprehensive quality and click-worthiness assessment.
+
+## Context
+- **Video Title**: "{title}"
+- **Platform**: {platform.capitalize()}
+- {platform_context}
+- {aspect_note}
+
+## Analysis Dimensions
+
+Score each dimension 0-100 and provide specific observations:
+
+1. **Composition**: Rule of thirds, visual hierarchy, focal point clarity, negative space usage, overall balance.
+2. **Text Readability**: If text is present — font size vs thumbnail size, contrast against background, readability at small sizes (120px tall), text placement, character count. If no text, score based on whether text would improve it.
+3. **Emotional Impact**: Does the image trigger curiosity, excitement, surprise, or urgency? Facial expressions, dramatic visuals, emotional contrast.
+4. **Face Visibility**: If faces are present — size, expression clarity, eye contact with camera, lighting on face. If no faces, evaluate whether adding a face/reaction would help.
+5. **Contrast & Color**: Color saturation, brightness, contrast ratio between subject and background, color temperature, visual "pop" factor. Would this stand out in a feed of other thumbnails?
+
+## Rules
+
+1. Be hyper-critical. Most thumbnails are mediocre. Only score above 85 if truly exceptional.
+2. Always evaluate mobile readability — if text or details disappear at small sizes, penalize heavily.
+3. Compare mentally against top-performing thumbnails in this content's likely niche.
+4. Every observation must be specific and actionable.
+
+## Required Output Format
+
+Return a JSON object with exactly these keys:
+
+{{
+  "overall_score": 72,
+  "composition_score": 80,
+  "text_readability_score": 55,
+  "emotional_impact_score": 68,
+  "face_visibility_score": 85,
+  "contrast_color_score": 74,
+  "ctr_prediction": 6.5,
+  "click_worthiness": "good",
+  "strengths": [
+    "Strong facial expression creates curiosity",
+    "High contrast between subject and background"
+  ],
+  "weaknesses": [
+    "Text is too small to read on mobile — needs to be 2x larger",
+    "Background is cluttered and competes with the subject"
+  ],
+  "recommendations": [
+    "Increase text size by 50% and add a dark stroke/shadow for contrast",
+    "Simplify the background — use a gradient or blur to isolate the subject",
+    "Add a subtle border or glow around the subject to create visual separation"
+  ],
+  "detailed_analysis": {{
+    "composition": "Subject is centered but slightly too small in frame. The rule of thirds is not leveraged — placing the subject at a power point would increase visual interest.",
+    "text_elements": "Title text is present in the upper right but at 14pt equivalent size — illegible below 200px thumbnail width. White text on light background without stroke.",
+    "color_palette": "Predominantly blue/teal with warm accents. Saturation is moderate. The palette is cohesive but lacks a strong contrast accent color.",
+    "subject_focus": "Main subject is clearly identifiable but doesn't dominate the frame. Background elements draw attention away.",
+    "mobile_readability": "At typical mobile thumbnail size (120px tall), text is completely illegible and facial expression is barely discernible. Needs bolder, simpler elements."
+  }}
+}}
+
+## Field Guidelines
+
+- **overall_score**: Weighted average — composition 20%, text 15%, emotion 25%, face 15%, contrast 25%. Adjust if a critical weakness drags everything down.
+- **ctr_prediction**: Estimated CTR percentage (0.0-15.0). Average YouTube CTR is 2-5%. Outstanding thumbnails hit 8-12%.
+- **click_worthiness**: One of "excellent" (>80), "good" (60-80), "needs_work" (40-59), "poor" (<40).
+- **strengths**: 2-4 specific things the thumbnail does well.
+- **weaknesses**: 2-4 specific issues to fix, with concrete details.
+- **recommendations**: 3-5 actionable improvement suggestions, ordered by expected impact.
+- **detailed_analysis**: One paragraph per dimension with specific observations.
+
+Be thorough, specific, and ruthlessly honest. Generic feedback is useless."""
+
+    # ------------------------------------------------------------------
+    # Pre-publish scorecard synthesis
+    # ------------------------------------------------------------------
+
+    async def generate_scorecard(
+        self,
+        signals: dict[str, Any],
+        platform: str = "youtube",
+    ) -> dict[str, Any]:
+        """Synthesize multiple pre-publish signals into a unified scorecard.
+
+        *signals* is a dict with optional keys: ``retention``, ``thumbnail``,
+        ``title_description``, ``content_params``, ``posting_time``, ``category``,
+        ``channel_patterns``.  The Gemini prompt evaluates each present signal and
+        produces a combined readiness verdict.
+        """
+        prompt = self._build_scorecard_prompt(signals, platform)
+        text = await self._generate(prompt)
+
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            logger.error("Failed to parse Gemini scorecard response: %s", text)
+            raise ValueError("Failed to parse Gemini scorecard response")
+
+    @staticmethod
+    def _build_scorecard_prompt(signals: dict[str, Any], platform: str = "youtube") -> str:
+        signals_json = json.dumps(signals, indent=2, default=str)
+
+        platform_note = (
+            "This is a YouTube video. CTR, retention, and SEO matter most."
+            if platform == "youtube"
+            else "This is an Instagram Reel. Hook speed, visual impact, and hashtag relevance matter most."
+        )
+
+        return f"""You are a Pre-publish Content Strategist. You have been given all available pre-publish signals for a video that is about to be published. Your job is to synthesize them into a single readiness scorecard.
+
+## Platform
+{platform_note}
+
+## Available Signals
+```json
+{signals_json}
+```
+
+Each signal key may or may not be present. Only score dimensions where data is available. If a signal is missing, note it as "not available" in your assessment rather than penalizing the score.
+
+## Scoring Dimensions
+
+Evaluate each dimension 0-100 based on available signals:
+
+1. **hook_score**: How strong is the opening? (from retention analysis hook data, if available)
+2. **retention_score**: Predicted audience retention quality (from retention analysis, if available)
+3. **thumbnail_score**: Thumbnail quality and CTR potential (from thumbnail analysis, if available)
+4. **title_score**: Title quality — click-worthiness, curiosity gap, length, SEO (evaluate the title directly)
+5. **description_score**: Description quality — hook line, keywords, CTA, length (evaluate directly)
+6. **content_alignment_score**: How well the video's content params match the channel's proven winning formulas (from channel patterns and content param data)
+7. **timing_score**: Whether the planned or likely posting time aligns with the channel's best posting times (if data available)
+
+## Required Output Format
+
+Return a JSON object:
+
+{{
+  "overall_score": 72,
+  "verdict": "needs_work",
+  "dimensions": {{
+    "hook": {{"score": 75, "available": true, "note": "Strong visual hook but no audio cue in first 2s"}},
+    "retention": {{"score": 68, "available": true, "note": "Predicted 58% retention — pacing drops mid-video"}},
+    "thumbnail": {{"score": 82, "available": true, "note": "Good composition, text could be larger"}},
+    "title": {{"score": 70, "available": true, "note": "Decent curiosity gap but too long at 72 chars"}},
+    "description": {{"score": 60, "available": true, "note": "Missing keywords, weak opening line"}},
+    "content_alignment": {{"score": 85, "available": true, "note": "Strong match with top-performing formula"}},
+    "timing": {{"score": 90, "available": true, "note": "Publishing on Friday evening — matches best posting window"}}
+  }},
+  "top_issues": [
+    "Predicted retention drop at 45s — add a pattern interrupt or B-roll",
+    "Description opening line is generic — lead with the hook or a bold claim",
+    "Thumbnail text is 14pt equivalent — increase to 24pt+ for mobile legibility"
+  ],
+  "publish_recommendation": "This video scores 72/100. The content alignment and timing are strong, but the mid-video pacing and weak description are holding it back. Fix the description opening line and consider adding visual variety around the 45-second mark. The thumbnail is solid but could be improved with larger text. Verdict: publishable with minor fixes.",
+  "missing_signals": ["retention analysis not available"]
+}}
+
+## Field Guidelines
+
+- **overall_score**: Weighted average of available dimensions. Hook 15%, retention 20%, thumbnail 20%, title 15%, description 10%, content alignment 10%, timing 10%. If a dimension is unavailable, redistribute its weight proportionally.
+- **verdict**: One of "ready" (score >= 80), "needs_work" (60-79), "major_issues" (< 60).
+- **dimensions**: Each dimension has `score` (0-100), `available` (bool — was data present to evaluate this?), and `note` (1-2 sentence specific assessment).
+- **top_issues**: The 3 most impactful things to fix, ordered by expected improvement. Be specific with timestamps, character counts, or exact suggestions. Max 5 items.
+- **publish_recommendation**: 2-4 sentence natural language summary. State the score, the strongest and weakest dimensions, the most impactful fix, and a clear verdict.
+- **missing_signals**: List of signal types that were not available for evaluation.
+
+Be specific, actionable, and honest. Reference concrete data from the signals."""

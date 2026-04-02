@@ -1407,3 +1407,222 @@ Global configuration for the comment analysis cron schedule. Not channel-scoped.
   "message": "Comment analysis cron will run daily at 04:00 IST"
 }
 ```
+
+---
+
+## Auto Sync + Analysis Pipeline
+
+Automated background cron that syncs videos from all channels and triggers analysis when enough new videos are eligible. Runs every N hours (default 12).
+
+### Get Pipeline Config
+
+- **Endpoint**: `/api/v1/config/auto-pipeline/`
+- **Method**: `GET`
+- **Description**: Returns the current auto-sync + analysis pipeline configuration.
+- **Response**:
+
+```json
+{
+  "key": "sync_analysis_config",
+  "enabled": true,
+  "interval_hours": 12,
+  "analysis_threshold": 3
+}
+```
+
+> If never configured, returns defaults (`enabled: true`, `interval_hours: 12`, `analysis_threshold: 3`).
+
+### Update Pipeline Config
+
+- **Endpoint**: `/api/v1/config/auto-pipeline/`
+- **Method**: `PUT`
+- **Description**: Update the auto-sync + analysis pipeline configuration. Only provided fields are changed. Changes take effect on the next cron cycle — no server restart needed.
+- **Request**:
+
+```json
+{
+  "enabled": true,
+  "interval_hours": 6,
+  "analysis_threshold": 2
+}
+```
+
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "key": "sync_analysis_config",
+  "enabled": true,
+  "interval_hours": 6,
+  "analysis_threshold": 2,
+  "updated_at": "2026-03-07T14:00:00+05:30"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | bool | Enable or disable the cron |
+| `interval_hours` | int (1-168) | How often to sync (in hours) |
+| `analysis_threshold` | int (1-50) | Minimum unanalyzed videos to trigger analysis |
+
+### Trigger Sync + Analysis
+
+- **Endpoint**: `/api/v1/sync-analysis/trigger`
+- **Method**: `POST`
+- **Query**: `?channel_id=ch1` (optional — omit to process all channels)
+- **Description**: Manually trigger a sync + analysis cycle. For each channel, syncs videos from the platform, then checks if enough unanalyzed videos are eligible to trigger a full analysis update.
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "channels_processed": 2,
+  "results": [
+    {
+      "channel_id": "ch1",
+      "platform": "youtube",
+      "sync": "ok",
+      "analysis": "ok",
+      "unanalyzed_count": 5
+    },
+    {
+      "channel_id": "ch2",
+      "platform": "instagram",
+      "sync": "ok",
+      "analysis": null,
+      "unanalyzed_count": 1
+    }
+  ]
+}
+```
+
+> `sync` is `"ok"`, `"skipped (reason)"`, or `"error (details)"`. `analysis` is `"ok"`, `"error (details)"`, or `null` (if threshold not met).
+
+---
+
+## Thumbnail Analysis
+
+Ephemeral thumbnail quality and CTR scoring via Gemini multimodal image analysis. Results auto-expire after 24 hours (MongoDB TTL). Supports version linking for iterative improvement.
+
+### Upload Thumbnail for Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/thumbnail-analysis/`
+- **Method**: `POST` (multipart form)
+- **Description**: Upload a thumbnail image for quality and click-worthiness analysis. Analysis runs in the background — poll `GET /{analysis_id}` for results.
+- **Form Fields**:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | File | Yes | Image file (JPEG, PNG, WebP) |
+| `title` | string | No | Video title for context (default: "Untitled") |
+| `label` | string | No | Version label (e.g. "v2", "dark variant") |
+| `previous_analysis_id` | string | No | Link to previous analysis for comparison |
+
+- **Response** (202 Accepted):
+
+```json
+{
+  "ok": true,
+  "analysis_id": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "Thumbnail analysis started — poll GET /{analysis_id} for results",
+  "expires_at": "2026-03-08T14:00:00+05:30"
+}
+```
+
+### Analyze Video Thumbnail (YouTube)
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/thumbnail-analysis/video/{video_id}`
+- **Method**: `POST`
+- **Query**: `?label=v1&previous_analysis_id=uuid` (both optional)
+- **Description**: Fetch and analyze the thumbnail of an existing YouTube video. The high-res thumbnail is automatically downloaded from YouTube. Instagram videos require manual upload via the standalone endpoint.
+- **Response** (202 Accepted):
+
+```json
+{
+  "ok": true,
+  "analysis_id": "550e8400-...",
+  "video_id": "uuid-1234",
+  "message": "Thumbnail analysis started — poll GET /{analysis_id} for results",
+  "expires_at": "2026-03-08T14:00:00+05:30"
+}
+```
+
+### Get Thumbnail Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/thumbnail-analysis/{analysis_id}`
+- **Method**: `GET`
+- **Description**: Get the result of a thumbnail analysis. If `previous_analysis_id` is set and the previous analysis still exists, a `version_comparison` object is included.
+- **Response**:
+
+```json
+{
+  "analysis_id": "550e8400-...",
+  "channel_id": "ch1",
+  "title": "My Video Title",
+  "label": "v2",
+  "video_id": null,
+  "platform": "youtube",
+  "status": "completed",
+  "analysis": {
+    "overall_score": 72,
+    "composition_score": 80,
+    "text_readability_score": 55,
+    "emotional_impact_score": 68,
+    "face_visibility_score": 85,
+    "contrast_color_score": 74,
+    "ctr_prediction": 6.5,
+    "click_worthiness": "good",
+    "strengths": ["Strong facial expression creates curiosity"],
+    "weaknesses": ["Text too small for mobile"],
+    "recommendations": ["Increase text size by 50%"],
+    "detailed_analysis": {
+      "composition": "Subject is centered but slightly too small...",
+      "text_elements": "Title text at 14pt equivalent...",
+      "color_palette": "Blue/teal with warm accents...",
+      "subject_focus": "Main subject is identifiable...",
+      "mobile_readability": "At mobile size, text is illegible..."
+    }
+  },
+  "version_comparison": {
+    "previous_analysis_id": "prev-uuid",
+    "previous_label": "v1",
+    "overall_score_delta": 8,
+    "composition_delta": 5,
+    "text_readability_delta": 15,
+    "emotional_impact_delta": 3,
+    "face_visibility_delta": 0,
+    "contrast_color_delta": 4,
+    "ctr_prediction_delta": 1.2,
+    "improved": true
+  },
+  "created_at": "2026-03-07T14:00:00+05:30",
+  "analyzed_at": "2026-03-07T14:00:05+05:30",
+  "expires_at": "2026-03-08T14:00:00+05:30"
+}
+```
+
+> `version_comparison` is `null` if no `previous_analysis_id` was provided, the previous analysis expired, or either analysis is not yet completed.
+
+### List Thumbnail Analyses
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/thumbnail-analysis/`
+- **Method**: `GET`
+- **Query**: `?limit=20` (default 20, max 100)
+- **Description**: List all active (not yet expired) thumbnail analyses for a channel, newest first.
+- **Response**: Array of thumbnail analysis objects (without `version_comparison`).
+
+### Delete Thumbnail Analysis
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/thumbnail-analysis/{analysis_id}`
+- **Method**: `DELETE`
+- **Description**: Manually delete a thumbnail analysis before its TTL expires.
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "analysis_id": "550e8400-...",
+  "deleted": true
+}
+```

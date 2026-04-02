@@ -94,6 +94,11 @@ async def connect_db(
     )
     await _db.preview_analysis.create_index("preview_id", unique=True)
 
+    await _db.thumbnail_analysis.create_index(
+        "expires_at", expireAfterSeconds=0,
+    )
+    await _db.thumbnail_analysis.create_index("analysis_id", unique=True)
+
     return _db
 
 

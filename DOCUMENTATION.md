@@ -1998,6 +1998,25 @@ Background async task that runs the comment analysis pipeline daily at a configu
 - **Started automatically** in `main.py` lifespan as an `asyncio.create_task`
 - **Graceful shutdown**: Task is cancelled during app shutdown
 
+### Sync-Analysis Cron (`app/services/sync_analysis_cron.py`)
+
+Background async task that syncs videos from all channels and conditionally triggers analysis:
+
+- **Schedule**: Runs every `interval_hours` (default: **12 hours**). Re-reads config each cycle.
+- **What it does**: For each channel, calls the existing `sync_videos` logic, then counts unanalyzed eligible videos. If the count meets `analysis_threshold` (default 3), triggers `run_analysis`.
+- **Error handling**: `HTTPException`s from the sync handler (e.g. missing tokens) are caught and logged — the cron skips that channel and continues.
+- **Configurable at runtime**: `enabled`, `interval_hours`, `analysis_threshold` stored in `config` collection (key: `sync_analysis_config`). Update via `PUT /api/v1/config/auto-pipeline/`.
+- **Manual trigger**: `POST /api/v1/sync-analysis/trigger` runs one cycle immediately (with optional `?channel_id=` filter).
+- **Started automatically** in `main.py` lifespan as an `asyncio.create_task`
+- **Graceful shutdown**: Task is cancelled during app shutdown
+
+### Thumbnail Analysis Service (`app/services/thumbnail_analysis.py`)
+
+Ephemeral thumbnail quality and CTR scoring (same pattern as preview analysis):
+
+- **`run_thumbnail_analysis(analysis_id, image_path, title, platform, db, gemini_service)`**: Reads image, sends to Gemini multimodal with thumbnail-specific prompt, stores structured scores (composition, text readability, emotional impact, face visibility, contrast/color, CTR prediction) in `thumbnail_analysis` collection, cleans up temp file.
+- **`compute_thumbnail_comparison(current_doc, previous_doc)`**: Pure helper that computes deltas between two thumbnail analyses across all scoring dimensions. Returns `None` if either analysis is not completed.
+
 ### Analysis Engine (`app/services/analysis_engine.py`)
 
 Platform-aware two-step pipeline (auto-detects YouTube vs Instagram):
@@ -2291,6 +2310,118 @@ The `preview_analysis` collection has a MongoDB TTL index on the `expires_at` fi
 
 ---
 
+## Auto Sync + Analysis Pipeline
+
+The sync-analysis pipeline is a **background cron** that automates the two most critical manual tasks: syncing videos from platforms and running the analysis engine.
+
+### How It Works
+
+1. Every N hours (default 12), the cron wakes up and iterates over all registered channels
+2. For each channel, it calls the existing `sync_videos` logic (same code as `POST /videos/sync`) to pull new videos from YouTube/Instagram and refresh metadata on existing ones
+3. After sync, it counts how many published + verified videos have no `analysis_history` entry yet
+4. If the count meets the configurable threshold (default 3), it triggers `run_analysis` for that channel -- updating `analysis_history`, the channel `analysis` summary, category scores, and content param scores
+5. Channels with missing tokens or service errors are logged and skipped without affecting other channels
+
+### Configuration
+
+Stored in `db.config` with key `sync_analysis_config`. Read fresh each cycle, so changes apply without restart.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable/disable the cron |
+| `interval_hours` | int | `12` | How often to run (hours) |
+| `analysis_threshold` | int | `3` | Min unanalyzed videos to trigger analysis |
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/config/auto-pipeline/` | Get pipeline config |
+| `PUT` | `/api/v1/config/auto-pipeline/` | Update pipeline config |
+| `POST` | `/api/v1/sync-analysis/trigger` | Manually trigger a cycle (`?channel_id=` optional) |
+
+### Files
+
+| File | Description |
+|------|-------------|
+| `app/services/sync_analysis_cron.py` | Cron loop + per-channel sync+analysis logic |
+| `app/routers/sync_analysis.py` | Config GET/PUT + manual trigger endpoints |
+
+---
+
+## Thumbnail Analysis System
+
+The thumbnail analysis system provides **ephemeral image quality and CTR scoring** via Gemini multimodal analysis. Upload any thumbnail image (or fetch a YouTube video's thumbnail automatically), get composition, readability, emotional impact, and click-worthiness scores, plus actionable recommendations. Results auto-expire after 24 hours.
+
+### Purpose
+
+Thumbnails are the single biggest factor in click-through rate. This system lets you:
+
+1. Upload a thumbnail draft and get detailed scoring across 5 dimensions (composition, text readability, emotional impact, face visibility, contrast/color)
+2. Get a predicted CTR and actionable recommendations
+3. Make improvements based on feedback
+4. Upload the revised version, linking it to the previous via `previous_analysis_id`
+5. See a `version_comparison` showing exactly how each score changed
+
+### How It Works
+
+1. `POST /thumbnail-analysis/` accepts an image file via multipart upload (plus optional `title`, `label`, `previous_analysis_id`)
+2. The image is saved to a temp file on disk
+3. A `thumbnail_analysis` doc is created with `status: "analyzing"` and `expires_at: now + 24h`
+4. A background task reads the image bytes, sends them inline to Gemini (using `types.Part.from_bytes` -- no file upload API needed for images), and stores the structured result
+5. The temp file is cleaned up immediately after analysis
+6. MongoDB's TTL index automatically deletes the doc after 24 hours
+
+For YouTube videos, `POST /thumbnail-analysis/video/{video_id}` automatically fetches the high-res thumbnail from `img.youtube.com` (trying `maxresdefault.jpg` first, falling back to `hqdefault.jpg`).
+
+### Gemini Scoring Dimensions
+
+| Dimension | What It Measures |
+|-----------|-----------------|
+| `composition_score` | Rule of thirds, visual hierarchy, focal point, balance |
+| `text_readability_score` | Font size vs thumbnail size, contrast, mobile readability |
+| `emotional_impact_score` | Curiosity, excitement, surprise triggers |
+| `face_visibility_score` | Face size, expression clarity, eye contact |
+| `contrast_color_score` | Saturation, brightness, "pop" factor |
+| `ctr_prediction` | Estimated CTR percentage (0-15%) |
+| `click_worthiness` | "excellent", "good", "needs_work", or "poor" |
+
+### Version Linking
+
+When uploading a revised thumbnail, pass `previous_analysis_id` to link it. When fetching via `GET /{analysis_id}`, the API computes a `version_comparison` object:
+
+- `overall_score_delta`, `composition_delta`, `text_readability_delta`, etc.
+- `ctr_prediction_delta`: How much predicted CTR changed
+- `improved`: Boolean -- `true` if overall score went up
+
+If the previous analysis has expired, `version_comparison` is gracefully set to `null`.
+
+### TTL Auto-Cleanup
+
+Same pattern as preview analysis: TTL index on `expires_at` with `expireAfterSeconds: 0`.
+
+### API Endpoints
+
+**Per-channel endpoints** under `/api/v1/channels/{channel_id}/thumbnail-analysis/`:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/` | Upload image for analysis (returns `analysis_id` immediately) |
+| `POST` | `/video/{video_id}` | Fetch and analyze YouTube video's thumbnail |
+| `GET` | `/{analysis_id}` | Get result with optional `version_comparison` |
+| `GET` | `/` | List active analyses for the channel |
+| `DELETE` | `/{analysis_id}` | Manually delete before TTL expires |
+
+### Files
+
+| File | Description |
+|------|-------------|
+| `app/services/gemini.py` | `analyze_thumbnail()` + `_build_thumbnail_analysis_prompt()` |
+| `app/services/thumbnail_analysis.py` | `run_thumbnail_analysis()` + `compute_thumbnail_comparison()` |
+| `app/routers/thumbnail_analysis.py` | API endpoints |
+
+---
+
 ## Data Flow Diagrams
 
 ### Video Status Lifecycle
@@ -2574,3 +2705,43 @@ flowchart TD
     I -->|Yes| K["Return list of\ntimezone-aware datetimes"]
     F --> J
 ```
+
+---
+
+## Observability Dashboard
+
+### Overview
+
+The observability dashboard (`/dashboard?api_key=...`) provides real-time monitoring of the automation server, including API traffic, AI usage, system resources, background worker status, and database inventory.
+
+### Architecture
+
+- **`app/services/metrics.py`** — `MetricsService` singleton that tracks in-memory metrics:
+  - HTTP request counts, status codes, latencies (last 1,000 durations, last 20 requests)
+  - AI/Gemini call counts, latencies, error rates, model usage distribution
+  - Background task status (auto_publisher, comment_analysis, comment_reply)
+  - System stats via `psutil` (CPU, memory, disk, process RSS)
+- **`app/middleware.py`** — `StructuredLoggingMiddleware` records every request to `metrics_service.record_request()`
+- **`app/routers/observability.py`** — Dashboard HTML and `/api/v1/observability/metrics` JSON endpoint
+- **Metrics persistence** — Background task snapshots metrics to `metrics_history` collection every hour
+
+### Dashboard Sections
+
+| Section | Data Source | Refresh |
+|---|---|---|
+| Requests / Latency / Error Rate | In-memory MetricsService | 2s |
+| AI Calls / AI Latency / AI Error Rate | Gemini service instrumentation | 2s |
+| Active Workers | Background task tracking | 2s |
+| System Resources (CPU/Mem/Disk) | psutil | 2s |
+| Content Inventory (Channels/Videos/etc) | MongoDB count queries | 2s |
+| API Traffic Sentiment (doughnut chart) | Status code distribution | 2s |
+| AI Model Distribution (pie chart) | Model usage counts | 2s |
+| Recent API Traffic (table) | Last 20 requests | 2s |
+| Background Workers (cards) | Task start/end tracking | 2s |
+| Live System Feed | SSE from journalctl | Real-time |
+
+### Comment Analysis Cron Behaviour
+
+- The 20-video-per-run cap applies only to **fresh** (never-analyzed) videos
+- Incremental re-analysis of already-analyzed videos is uncapped
+- Logs include the source channel name (own channel or competitor name) for each video analyzed

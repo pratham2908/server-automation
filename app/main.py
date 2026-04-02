@@ -24,6 +24,7 @@ gemini_service = None
 _auto_publisher_task = None
 _comment_analysis_task = None
 _comment_reply_task = None
+_sync_analysis_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     import asyncio
     from app.services.auto_publisher import run_auto_publisher
 
-    global _auto_publisher_task, _comment_analysis_task, _comment_reply_task
+    global _auto_publisher_task, _comment_analysis_task, _comment_reply_task, _sync_analysis_task
     _auto_publisher_task = asyncio.create_task(run_auto_publisher(db, r2_service))
     logger.info("Background auto-publisher started")
 
@@ -119,6 +120,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background comment reply cron started")
 
+    # ---- Background sync + analysis cron (every 12 hours by default) ----
+    from app.services.sync_analysis_cron import run_sync_analysis_cron
+
+    _sync_analysis_task = asyncio.create_task(
+        run_sync_analysis_cron(db, youtube_service_manager, instagram_service_manager, gemini_service)
+    )
+    logger.info("Background sync-analysis cron started")
+
     yield
 
     # ---- Shutdown ----
@@ -130,7 +139,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         except:
             pass
 
-    for task in (_auto_publisher_task, _comment_analysis_task, _comment_reply_task, _metrics_persistence_task):
+    for task in (_auto_publisher_task, _comment_analysis_task, _comment_reply_task, _metrics_persistence_task, _sync_analysis_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -164,7 +173,7 @@ app.add_middleware(
 )
 app.add_middleware(StructuredLoggingMiddleware)
 
-from app.routers import analysis, categories, channels, comment_analysis, comment_replies, observability, preview_analysis, retention_analysis, system, ui, videos  # noqa: E402
+from app.routers import analysis, categories, channels, comment_analysis, comment_replies, observability, preview_analysis, retention_analysis, sync_analysis, system, thumbnail_analysis, ui, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
@@ -176,6 +185,9 @@ app.include_router(comment_replies.router)
 app.include_router(comment_replies.config_router)
 app.include_router(preview_analysis.router)
 app.include_router(retention_analysis.router)
+app.include_router(sync_analysis.config_router)
+app.include_router(sync_analysis.trigger_router)
+app.include_router(thumbnail_analysis.router)
 app.include_router(ui.router)
 app.include_router(system.router)
 app.include_router(observability.router)
@@ -1060,6 +1072,126 @@ async def api_schema():
                     "analysis_hour": 4,
                     "message": "Comment analysis cron will run daily at 04:00 IST",
                 },
+            },
+            # -- Sync-Analysis Pipeline --
+            {
+                "group": "Sync-Analysis Pipeline",
+                "method": "GET",
+                "path": "/api/v1/config/auto-pipeline/",
+                "description": "Get the auto-sync + analysis pipeline configuration",
+                "request": None,
+                "response": {
+                    "key": "sync_analysis_config",
+                    "enabled": True,
+                    "interval_hours": 12,
+                    "analysis_threshold": 3,
+                },
+            },
+            {
+                "group": "Sync-Analysis Pipeline",
+                "method": "PUT",
+                "path": "/api/v1/config/auto-pipeline/",
+                "description": "Update the auto-sync + analysis pipeline config. Changes apply on the next cron cycle.",
+                "request": {"interval_hours": 6, "analysis_threshold": 2},
+                "response": {
+                    "ok": True,
+                    "enabled": True,
+                    "interval_hours": 6,
+                    "analysis_threshold": 2,
+                },
+            },
+            {
+                "group": "Sync-Analysis Pipeline",
+                "method": "POST",
+                "path": "/api/v1/sync-analysis/trigger",
+                "description": "Manually trigger a sync + analysis cycle for all channels (or a specific channel_id)",
+                "request": None,
+                "response": {
+                    "ok": True,
+                    "channels_processed": 2,
+                    "results": [
+                        {
+                            "channel_id": "ch1",
+                            "platform": "youtube",
+                            "sync": "ok",
+                            "analysis": "ok",
+                            "unanalyzed_count": 5,
+                        }
+                    ],
+                },
+            },
+            # -- Thumbnail Analysis --
+            {
+                "group": "Thumbnail Analysis",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/thumbnail-analysis/",
+                "description": "Upload a thumbnail image for ephemeral quality/CTR analysis (24h TTL). Multipart form: file, title, label, previous_analysis_id.",
+                "request": {"file": "(binary)", "title": "My Video Title", "label": "v2", "previous_analysis_id": "optional-uuid"},
+                "response": {
+                    "ok": True,
+                    "analysis_id": "550e8400-...",
+                    "message": "Thumbnail analysis started",
+                    "expires_at": "2026-03-09T12:00:00+05:30",
+                },
+            },
+            {
+                "group": "Thumbnail Analysis",
+                "method": "POST",
+                "path": "/api/v1/channels/{channel_id}/thumbnail-analysis/video/{video_id}",
+                "description": "Fetch and analyze the YouTube thumbnail of an existing video",
+                "request": None,
+                "response": {
+                    "ok": True,
+                    "analysis_id": "550e8400-...",
+                    "video_id": "uuid-1234",
+                    "message": "Thumbnail analysis started",
+                    "expires_at": "2026-03-09T12:00:00+05:30",
+                },
+            },
+            {
+                "group": "Thumbnail Analysis",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/thumbnail-analysis/{analysis_id}",
+                "description": "Get a thumbnail analysis result with optional version_comparison",
+                "request": None,
+                "response": {
+                    "analysis_id": "550e8400-...",
+                    "channel_id": "ch1",
+                    "title": "My Video",
+                    "status": "completed",
+                    "analysis": {
+                        "overall_score": 72,
+                        "composition_score": 80,
+                        "text_readability_score": 55,
+                        "ctr_prediction": 6.5,
+                        "click_worthiness": "good",
+                        "strengths": ["..."],
+                        "weaknesses": ["..."],
+                        "recommendations": ["..."],
+                    },
+                    "version_comparison": {
+                        "previous_analysis_id": "prev-uuid",
+                        "overall_score_delta": 8,
+                        "ctr_prediction_delta": 1.2,
+                        "improved": True,
+                    },
+                },
+            },
+            {
+                "group": "Thumbnail Analysis",
+                "method": "GET",
+                "path": "/api/v1/channels/{channel_id}/thumbnail-analysis/",
+                "description": "List active thumbnail analyses for a channel",
+                "request": None,
+                "response": [{"analysis_id": "...", "title": "...", "status": "completed"}],
+            },
+            {
+                "group": "Thumbnail Analysis",
+                "method": "DELETE",
+                "path": "/api/v1/channels/{channel_id}/thumbnail-analysis/{analysis_id}",
+                "description": "Manually delete a thumbnail analysis before its TTL expires",
+                "request": None,
+                "response": {"ok": True, "analysis_id": "550e8400-...", "deleted": True},
             },
         ],
     }
