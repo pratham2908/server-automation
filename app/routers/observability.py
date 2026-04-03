@@ -602,8 +602,9 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
 
             async function fetchData() {
                 try {
-                    const res = await fetch(\`/api/v1/observability/metrics?api_key=\${window.apiKey}\`);
+                    const res = await fetch(`/api/v1/observability/metrics?api_key=${window.apiKey}`);
                     const data = await res.json();
+
                     updateStats(data);
 
                 } catch (e) {
