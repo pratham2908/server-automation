@@ -18,6 +18,7 @@ async def verify_api_key(api_key: str = Query(...)):
 @router.get("/dashboard", response_class=HTMLResponse)
 async def get_dashboard(api_key: str = Depends(verify_api_key)):
     """A premium, high-fidelity observability dashboard for the automation server."""
+    metrics_service.cleanse_legacy_metrics()
     html_content = """
     <!DOCTYPE html>
     <html lang="en">

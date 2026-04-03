@@ -39,7 +39,12 @@ class MetricsService:
         self.ai_last_calls = deque(maxlen=20) # Last 20 AI calls
 
     def record_request(self, method: str, path: str, status: int, duration_ms: float):
-        """Records an HTTP request's metrics."""
+        """Records an HTTP request's metrics, excluding meta-endpoints."""
+        # Define endpoints to exclude from analytics
+        exclude_list = ["/observability/metrics", "/dashboard", "/logs/stream", "/health"]
+        if any(ex in path for ex in exclude_list):
+            return
+
         with self.lock:
             self.total_requests += 1
             self.status_codes[status] = self.status_codes.get(status, 0) + 1
@@ -51,6 +56,15 @@ class MetricsService:
                 "status": status,
                 "duration_ms": round(duration_ms, 2)
             })
+
+    def cleanse_legacy_metrics(self):
+        """Wipes monitoring calls from the history that were recorded before the exclusion fix."""
+        exclude_list = ["/observability/metrics", "/dashboard", "/logs/stream", "/health"]
+        with self.lock:
+            # Rebuild the deque filtering out meta-endpoints (legacy data)
+            new_history = deque([r for r in self.last_requests if not any(ex in r["path"] for ex in exclude_list)], maxlen=20)
+            self.last_requests = new_history
+            logger.info("Cleansed monitoring calls from request history.")
 
     def record_ai_call(self, model: str, duration_ms: float, status: str = "success"):
         """Records an AI (Gemini) call metrics."""
