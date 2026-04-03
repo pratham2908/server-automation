@@ -14,6 +14,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
 from app.services.gemini import GeminiService
+from app.services.pacing_templates import PacingTemplateService
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -21,6 +22,7 @@ logger = get_logger(__name__)
 
 async def run_preview_analysis(
     preview_id: str,
+    channel_id: str,
     video_path: str,
     title: str,
     platform: str,
@@ -36,9 +38,30 @@ async def run_preview_analysis(
     """
     try:
         logger.info("Starting preview retention analysis for '%s'...", title[:50])
+        
+        # Fetch templates for the channel
+        pacing_service = PacingTemplateService(db)
+        templates = await pacing_service.get_templates(channel_id)
+        template_dicts = [t.dict() for t in templates]
+
         result = await gemini_service.analyze_video_retention(
-            video_path, title, platform,
+            video_path, title, platform, pacing_templates=template_dicts
         )
+
+        # Compute pacing matches
+        from app.models.retention_analysis import PacingAnalysis
+        try:
+            pacing_analysis = PacingAnalysis(**result.get("pacing_analysis", {}))
+            
+            # Use timestamp of last cut for duration estimate in preview
+            duration = result.get("pacing_analysis", {}).get(
+                "visual_change_timestamps", [{}]
+            )[-1].get("timestamp_seconds") if result.get("pacing_analysis", {}).get("visual_change_timestamps") else None
+            
+            matches = pacing_service.match_pacing(pacing_analysis, templates, video_duration=duration)
+            result["pacing_matches"] = [m.dict() for m in matches]
+        except Exception as e:
+            logger.warning("Failed to compute preview pacing matches: %s", e)
 
         now = now_ist()
         await db.preview_analysis.update_one(

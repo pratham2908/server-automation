@@ -25,6 +25,7 @@ _auto_publisher_task = None
 _comment_analysis_task = None
 _comment_reply_task = None
 _sync_analysis_task = None
+_growth_tracking_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background sync-analysis cron started")
 
+    # ---- Background growth tracking cron (every 24 hours by default) ----
+    from app.services.growth_cron import run_growth_tracking_cron
+
+    global _growth_tracking_task
+    _growth_tracking_task = asyncio.create_task(
+        run_growth_tracking_cron(db, youtube_service_manager, instagram_service_manager)
+    )
+    logger.info("Background growth tracking cron started")
+
     yield
 
     # ---- Shutdown ----
@@ -139,7 +149,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         except:
             pass
 
-    for task in (_auto_publisher_task, _comment_analysis_task, _comment_reply_task, _metrics_persistence_task, _sync_analysis_task):
+    for task in (_auto_publisher_task, _comment_analysis_task, _comment_reply_task, _metrics_persistence_task, _sync_analysis_task, _growth_tracking_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -173,7 +183,7 @@ app.add_middleware(
 )
 app.add_middleware(StructuredLoggingMiddleware)
 
-from app.routers import analysis, categories, channels, comment_analysis, comment_replies, observability, preview_analysis, retention_analysis, sync_analysis, system, thumbnail_analysis, ui, videos  # noqa: E402
+from app.routers import analysis, categories, channels, comment_analysis, comment_replies, growth, observability, preview_analysis, retention_analysis, sync_analysis, system, thumbnail_analysis, ui, videos  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
@@ -191,6 +201,7 @@ app.include_router(thumbnail_analysis.router)
 app.include_router(ui.router)
 app.include_router(system.router)
 app.include_router(observability.router)
+app.include_router(growth.router)
 
 
 @app.get("/health", tags=["health"])

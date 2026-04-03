@@ -156,3 +156,64 @@ async def delete_retention_analysis(
             detail=f"No retention analysis found for video {video_id}",
         )
     return {"ok": True, "video_id": video_id, "deleted": True}
+
+
+# ------------------------------------------------------------------
+# GET /templates — list pacing templates
+# ------------------------------------------------------------------
+
+
+@router.get("/templates")
+async def list_pacing_templates(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """List all defined pacing templates for a channel."""
+    from app.services.pacing_templates import PacingTemplateService
+    service = PacingTemplateService(db)
+    templates = await service.get_templates(channel_id)
+    return [t.dict() for t in templates]
+
+
+# ------------------------------------------------------------------
+# POST /templates/discover — trigger discovery
+# ------------------------------------------------------------------
+
+
+@router.post("/templates/discover")
+async def discover_pacing_templates(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Analyze top-performing videos to discover new pacing templates."""
+    from app.services.pacing_templates import PacingTemplateService
+    service = PacingTemplateService(db)
+    templates = await service.discover_templates(channel_id)
+    return {
+        "ok": True,
+        "count": len(templates),
+        "templates": [t.dict() for t in templates]
+    }
+
+
+# ------------------------------------------------------------------
+# DELETE /templates/{template_id} — delete a template
+# ------------------------------------------------------------------
+
+
+@router.delete("/templates/{template_id}")
+async def delete_pacing_template(
+    channel_id: str,
+    template_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Delete a specific pacing template."""
+    result = await db.pacing_templates.delete_one(
+        {"channel_id": channel_id, "template_id": template_id}
+    )
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Template {template_id} not found",
+        )
+    return {"ok": True, "template_id": template_id, "deleted": True}

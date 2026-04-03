@@ -67,6 +67,7 @@ class RetentionPrediction(BaseModel):
     predicted_drop_off_points: list[DropOffPoint] = Field(default_factory=list)
     hook_analysis: HookAnalysis = Field(default_factory=HookAnalysis)
     pacing_analysis: PacingAnalysis = Field(default_factory=PacingAnalysis)
+    pacing_matches: list[PacingMatch] = Field(default_factory=list)
     narrative_structure: str = Field(
         "",
         description="e.g. linear, problem-solution, listicle, tutorial, montage, story-arc",
@@ -113,3 +114,36 @@ class RetentionAnalysis(BaseModel):
 
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)
+
+
+class PacingTemplate(BaseModel):
+    """A reusable pacing pattern derived from top-performing videos."""
+
+    template_id: str = Field(..., description="Unique ID for the template (e.g. 'fast-cut-montage')")
+    name: str = Field(..., description="Human-readable name")
+    description: str = Field("", description="What this pacing style feels like")
+    
+    # Target metrics
+    target_avg_cut_interval: float = Field(..., description="Ideal seconds per cut")
+    target_pacing_score: int = Field(..., description="Minimum pacing score for this template")
+    cut_density_distribution: list[float] = Field(
+        default_factory=list,
+        description="Percentage of cuts in each decile of the video duration",
+    )
+    
+    # Performance context
+    avg_performance_rating: float = Field(0, description="Average performance of videos using this template")
+    video_count: int = Field(0, description="Number of videos used to define this template")
+    
+    created_at: datetime = Field(default_factory=now_ist)
+    updated_at: datetime = Field(default_factory=now_ist)
+
+
+class PacingMatch(BaseModel):
+    """Result of matching a video's pacing against a template."""
+
+    template_id: str
+    template_name: str
+    match_score: int = Field(..., ge=0, le=100, description="How closely it matches 0-100")
+    deviations: list[str] = Field(default_factory=list, description="Specific ways it differs from the template")
+    recommendations: list[str] = Field(default_factory=list, description="How to better align with the template")

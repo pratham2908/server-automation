@@ -14,6 +14,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
 from app.services.gemini import GeminiService
+from app.services.pacing_templates import PacingTemplateService
 from app.services.r2 import R2Service
 from app.timezone import now_ist
 
@@ -81,9 +82,28 @@ async def run_retention_analysis(
         temp_path = r2_service.download_video(r2_key)
 
         logger.info("Starting Gemini retention analysis for '%s'...", video_title[:50])
+        
+        # Fetch templates for the channel to provide context to Gemini and for matching
+        pacing_service = PacingTemplateService(db)
+        templates = await pacing_service.get_templates(channel_id)
+        template_dicts = [t.dict() for t in templates]
+        
         result = await gemini_service.analyze_video_retention(
-            temp_path, video_title, platform,
+            temp_path, video_title, platform, pacing_templates=template_dicts
         )
+
+        # Compute pacing matches
+        from app.models.retention_analysis import PacingAnalysis
+        try:
+            pacing_analysis = PacingAnalysis(**result.get("pacing_analysis", {}))
+            duration = result.get("pacing_analysis", {}).get(
+                "visual_change_timestamps", [{}]
+            )[-1].get("timestamp_seconds") if result.get("pacing_analysis", {}).get("visual_change_timestamps") else None
+            
+            matches = pacing_service.match_pacing(pacing_analysis, templates, video_duration=duration)
+            result["pacing_matches"] = [m.dict() for m in matches]
+        except Exception as e:
+            logger.warning("Failed to compute pacing matches: %s", e)
 
         now = now_ist()
         await db.retention_analysis.update_one(

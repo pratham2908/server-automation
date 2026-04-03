@@ -592,6 +592,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
         video_path: str,
         video_title: str,
         platform: str = "youtube",
+        pacing_templates: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Analyze a video file for retention prediction.
 
@@ -603,12 +604,14 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
             Title of the video (provides context to the model).
         platform:
             ``"youtube"`` or ``"instagram"``.
+        pacing_templates:
+            Optional list of proven pacing templates for the channel.
 
         Returns
         -------
         dict matching the ``RetentionPrediction`` schema.
         """
-        prompt = self._build_retention_analysis_prompt(video_title, platform)
+        prompt = self._build_retention_analysis_prompt(video_title, platform, pacing_templates)
         text = await self._generate_with_video(video_path, prompt)
 
         try:
@@ -618,7 +621,11 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
             raise ValueError("Failed to parse Gemini video retention analysis response")
 
     @staticmethod
-    def _build_retention_analysis_prompt(video_title: str, platform: str = "youtube") -> str:
+    def _build_retention_analysis_prompt(
+        video_title: str, 
+        platform: str = "youtube",
+        pacing_templates: list[dict[str, Any]] | None = None,
+    ) -> str:
         if platform == "instagram":
             platform_context = (
                 "This is an Instagram Reel. Reels are short-form vertical videos (typically 15-90 seconds). "
@@ -632,12 +639,25 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                 "Average retention above 50% is good; above 70% is excellent."
             )
 
+        template_section = ""
+        if pacing_templates:
+            template_section = (
+                "\n\n## Proven Pacing Templates for this Channel\n"
+                "The following pacing patterns have historically performed well for this creator. "
+                "Use these as a reference to evaluate if the current video's pacing aligns with "
+                "proven success patterns:\n"
+                f"```json\n{json.dumps(pacing_templates, indent=2)}\n```\n"
+                "In your recommendations, note if the video deviates significantly from these templates "
+                "in a way that might hurt retention."
+            )
+
         return f"""You are an elite Video Retention Analyst and AI Content Auditor. Your objective is to analyze this video file to reverse-engineer its engagement structure and predict audience retention.
 
 ## Video Context
 - **Title**: "{video_title}"
 - **Platform**: {platform.capitalize()}
 - {platform_context}
+{template_section}
 
 ## Analysis Task
 

@@ -99,7 +99,7 @@ async def create_preview_analysis(
 
     asyncio.create_task(
         run_preview_analysis(
-            preview_id, tmp_path, title, platform, db, main_mod.gemini_service,
+            preview_id, channel_id, tmp_path, title, platform, db, main_mod.gemini_service,
         )
     )
 
