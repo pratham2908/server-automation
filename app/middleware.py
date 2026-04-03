@@ -20,15 +20,19 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         query = str(request.query_params)
         
-        # Dont log large binary uploads or logs/stream
+        # Metadata for exclusion
+        is_meta_endpoint = "/observability/metrics" in path or "/dashboard" in path or "/logs/stream" in path or "/health" in path
+        
+        # Don't log large binary uploads or logs/stream
         if "/logs/stream" in path or "/upload" in path or "/create" in path or "/dashboard" in path:
              # Just basic info for heavy endpoints
              response = await call_next(request)
              duration = (time.time() - start_time) * 1000
              status_code = response.status_code
              logger.info(f"[REQUEST] {method} {path} | {status_code} | {duration:.2f}ms")
-             # Record high-level metrics for performance monitoring
-             metrics_service.record_request(method, path, status_code, duration)
+             # Record high-level metrics for performance monitoring (unless it's a meta-endpoint)
+             if not is_meta_endpoint:
+                 metrics_service.record_request(method, path, status_code, duration)
              return response
 
         # Capture all headers as-is
@@ -50,7 +54,8 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 "query": query,
             }
             logger.error(f"REQUEST_BOX: {json.dumps(error_data)}")
-            metrics_service.record_request(method, path, 500, duration)
+            if not is_meta_endpoint:
+                metrics_service.record_request(method, path, 500, duration)
             raise e
 
         duration = (time.time() - start_time) * 1000
@@ -71,6 +76,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         logger.info(f"REQUEST_BOX: {json.dumps(log_data)}")
         
         # Record the standard metrics
-        metrics_service.record_request(method, path, status_code, duration)
+        if not is_meta_endpoint:
+            metrics_service.record_request(method, path, status_code, duration)
         
         return response
