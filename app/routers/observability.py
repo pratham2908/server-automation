@@ -267,7 +267,7 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                     <div class="dot"></div>
                     <span id="uptime-text">Uptime: --</span>
                 </div>
-                <button class="btn-action" onclick="window.location.href='/system?api_key=' + apiKey">System Control</button>
+                <button class="btn-action" onclick="window.location.href='/system?api_key=' + (window.apiKey || '')">System Control</button>
             </div>
         </nav>
 
@@ -442,7 +442,7 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
         </div>
 
         <script>
-            const apiKey = '""" + api_key + """';
+            window.apiKey = '""" + api_key + """';
             let trafficChart, modelChart;
             
             // Initialize Chart
@@ -502,22 +502,27 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
 
                 try {
                     if (data.ai) {
-                        safeSet('ai-total-calls', data.ai.total_calls);
-                        safeSet('ai-avg-latency', data.ai.avg_latency_ms.toFixed(0) + 'ms');
-                        safeSet('ai-error-rate', data.ai.error_rate.toFixed(1) + '%');
+                        safeSet('ai-total-calls', data.ai.total_calls || 0);
+                        safeSet('ai-avg-latency', (data.ai.avg_latency_ms || 0).toFixed(0) + 'ms');
+                        safeSet('ai-error-rate', (data.ai.error_rate || 0).toFixed(1) + '%');
 
                         const usage = data.ai.model_usage || {};
-                        modelChart.data.labels = Object.keys(usage);
-                        modelChart.data.datasets[0].data = Object.values(usage);
-                        modelChart.update();
+                        if (Object.keys(usage).length > 0) {
+                            modelChart.data.labels = Object.keys(usage);
+                            modelChart.data.datasets[0].data = Object.values(usage);
+                            modelChart.update();
+                        }
                     }
                 } catch (e) { console.warn('Stats: AI section error', e); }
 
                 try {
                     const statusCounts = data.requests.status_counts || {};
-                    const total = data.requests.total || 1;
-                    const errors = (statusCounts['500'] || 0) + (statusCounts['400'] || 0) + (statusCounts['401'] || 0) + (statusCounts['403'] || 0);
-                    const errorRate = (errors / total * 100).toFixed(1);
+                    const total = data.requests.total || 0;
+                    let errorRate = "0.0";
+                    if (total > 0) {
+                        const errors = (statusCounts['500'] || 0) + (statusCounts['400'] || 0) + (statusCounts['401'] || 0) + (statusCounts['403'] || 0);
+                        errorRate = (errors / total * 100).toFixed(1);
+                    }
                     safeSet('error-rate', errorRate + '%');
 
                     const s2 = (statusCounts['200'] || 0) + (statusCounts['201'] || 0);
@@ -597,9 +602,10 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
 
             async function fetchData() {
                 try {
-                    const res = await fetch(\`/api/v1/observability/metrics?api_key=\${apiKey}\`);
+                    const res = await fetch(\`/api/v1/observability/metrics?api_key=\${window.apiKey}\`);
                     const data = await res.json();
                     updateStats(data);
+
                 } catch (e) {
                     console.error("Dashboard fetch error:", e);
                 }

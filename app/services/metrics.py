@@ -27,6 +27,7 @@ class MetricsService:
             "auto_publisher": {"status": "idle", "last_run": None, "count": 0, "errors": 0},
             "comment_analysis": {"status": "idle", "last_run": None, "count": 0, "errors": 0},
             "comment_reply": {"status": "idle", "last_run": None, "count": 0, "errors": 0},
+            "sync_analysis": {"status": "idle", "last_run": None, "count": 0, "errors": 0},
         }
 
         # AI metrics
