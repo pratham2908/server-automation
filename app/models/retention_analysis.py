@@ -57,6 +57,16 @@ class DropOffPoint(BaseModel):
     severity: int = Field(1, ge=1, le=10, description="Impact severity 1-10")
 
 
+class PacingMatch(BaseModel):
+    """Result of matching a video's pacing against a template."""
+
+    template_id: str
+    template_name: str
+    match_score: int = Field(..., ge=0, le=100, description="How closely it matches 0-100")
+    deviations: list[str] = Field(default_factory=list, description="Specific ways it differs from the template")
+    recommendations: list[str] = Field(default_factory=list, description="How to better align with the template")
+
+
 class RetentionPrediction(BaseModel):
     """Full structured output from Gemini's video retention analysis."""
 
@@ -139,11 +149,5 @@ class PacingTemplate(BaseModel):
     updated_at: datetime = Field(default_factory=now_ist)
 
 
-class PacingMatch(BaseModel):
-    """Result of matching a video's pacing against a template."""
-
-    template_id: str
-    template_name: str
-    match_score: int = Field(..., ge=0, le=100, description="How closely it matches 0-100")
-    deviations: list[str] = Field(default_factory=list, description="Specific ways it differs from the template")
-    recommendations: list[str] = Field(default_factory=list, description="How to better align with the template")
+    created_at: datetime = Field(default_factory=now_ist)
+    updated_at: datetime = Field(default_factory=now_ist)
