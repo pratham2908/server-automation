@@ -16,6 +16,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.database import update_channel_task_status
 from app.services.comment_analysis_engine import run_cron_cycle
 from app.services.gemini import GeminiService
 from app.timezone import IST, now_ist
@@ -101,6 +102,8 @@ async def run_comment_analysis_cron(
                         "✅ Comment analysis cron completed for '%s': %s",
                         channel_id, stats,
                     )
+                    # Update channel status
+                    await update_channel_task_status(db, channel_id, "comment_analysis")
                 except Exception as exc:
                     logger.error(
                         "Comment analysis cron failed for channel '%s': %s",

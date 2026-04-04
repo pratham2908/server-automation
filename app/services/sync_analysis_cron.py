@@ -21,6 +21,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
 from app.services.analysis_engine import run_analysis
+from app.database import update_channel_task_status
 from app.services.gemini import GeminiService
 
 logger = get_logger(__name__)
@@ -139,6 +140,7 @@ async def run_sync_analysis_for_channel(
         result["analysis"] = f"error ({exc})"
         logger.error("Auto-analysis failed for '%s': %s", channel_id, exc)
 
+    await update_channel_task_status(db, channel_id, "sync_analysis")
     return result
 
 

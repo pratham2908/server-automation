@@ -11,6 +11,7 @@ import asyncio
 from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.logger import get_logger
+from app.database import update_channel_task_status
 from app.services.growth_tracking import GrowthTrackingService
 
 logger = get_logger(__name__)
@@ -77,6 +78,9 @@ async def run_growth_tracking_cron(
 
                     # Record the snapshot
                     await growth_service.record_snapshot(channel_id, platform, subs, views, metadata)
+                    
+                    # Update channel status
+                    await update_channel_task_status(db, channel_id, "growth_tracking")
                     
                 except Exception as exc:
                     logger.error(f"Growth snapshot failed for channel '{channel_id}': {exc}")

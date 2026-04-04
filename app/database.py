@@ -166,3 +166,11 @@ async def get_content_schema_for_prompt(
         
     return result
 
+async def update_channel_task_status(db: AsyncIOMotorDatabase, channel_id: str, task_name: str):
+    """Update the last run timestamp for a specific task on a channel."""
+    from app.timezone import now_ist
+
+    await db.channels.update_one(
+        {"channel_id": channel_id},
+        {"$set": {f"last_tasks.{task_name}": now_ist()}},
+    )
