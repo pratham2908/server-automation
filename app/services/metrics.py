@@ -37,6 +37,9 @@ class MetricsService:
         self.ai_total_latency = 0.0
         self.ai_model_usage = {} # model -> count
         self.ai_last_calls = deque(maxlen=20) # Last 20 AI calls
+        
+        # Endpoint stats
+        self.endpoint_stats: Dict[str, Dict] = {} # key: "METHOD PATH" -> {count, avg_ms, errors}
 
     def record_request(self, method: str, path: str, status: int, duration_ms: float):
         """Records an HTTP request's metrics, excluding meta-endpoints."""
@@ -56,6 +59,28 @@ class MetricsService:
                 "status": status,
                 "duration_ms": round(duration_ms, 2)
             })
+
+            # Record per-endpoint stats
+            # Normalize path to group by generic endpoint if it contains IDs
+            norm_path = path
+            segments = path.strip("/").split("/")
+            if len(segments) > 2 and segments[0] == "api" and segments[1] == "v1":
+                # For /api/v1/channels/{id}/... normalize the ID
+                if len(segments) >= 4:
+                    norm_path = f"/api/v1/{segments[2]}/{{id}}"
+                    if len(segments) >= 5:
+                        norm_path += f"/{segments[4]}"
+                elif len(segments) == 3:
+                     norm_path = f"/api/v1/{segments[2]}"
+            
+            key = f"{method} {norm_path}"
+            if key not in self.endpoint_stats:
+                self.endpoint_stats[key] = {"count": 0, "total_ms": 0.0, "errors": 0}
+            
+            self.endpoint_stats[key]["count"] += 1
+            self.endpoint_stats[key]["total_ms"] += duration_ms
+            if status >= 400:
+                self.endpoint_stats[key]["errors"] += 1
 
     def cleanse_legacy_metrics(self):
         """Wipes monitoring calls from the history that were recorded before the exclusion fix."""
@@ -157,6 +182,15 @@ class MetricsService:
                     "error_rate": round(self.ai_errors / self.ai_calls * 100, 2) if self.ai_calls > 0 else 0,
                     "model_usage": self.ai_model_usage,
                     "history": list(self.ai_last_calls)
+                },
+                "endpoints": {
+                    k: {
+                        "count": v["count"],
+                        "avg_ms": round(v["total_ms"] / v["count"], 2) if v["count"] > 0 else 0,
+                        "errors": v["errors"],
+                        "error_rate": round(v["errors"] / v["count"] * 100, 1) if v["count"] > 0 else 0
+                    }
+                    for k, v in sorted(self.endpoint_stats.items(), key=lambda item: item[1]["count"], reverse=True)[:10]
                 },
                 "tasks": self.tasks,
                 "system": self.get_system_stats()

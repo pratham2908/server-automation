@@ -279,14 +279,23 @@ class InstagramService:
             "Authorization": f"OAuth {self._token}",
             "offset": "0",
             "file_size": str(file_size),
+            "Content-Type": "application/octet-stream",
         }
+        
+        # Read file into memory to avoid 'Transfer-Encoding: chunked' issues with Instagram
         with open(file_path, "rb") as f:
-            resp = requests.post(
-                upload_uri,
-                headers=headers,
-                data=f,
-                timeout=600,
-            )
+            binary_data = f.read()
+
+        resp = requests.post(
+            upload_uri,
+            headers=headers,
+            data=binary_data,
+            timeout=600,
+        )
+        
+        if not resp.ok:
+            logger.error("Instagram upload failed (%d): %s", resp.status_code, resp.text)
+        
         resp.raise_for_status()
         logger.info("Uploaded video (%d bytes) to %s", file_size, upload_uri[:80])
 

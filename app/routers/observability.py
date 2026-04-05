@@ -378,10 +378,30 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
             </div>
 
             <!-- Table: Recent Requests -->
-            <div class="card span-4">
+            <div class="card span-2">
+                <div style="display:flex; justify-content: space-between; align-items: center">
+                    <h3>Endpoint Performance</h3>
+                    <div style="font-size: 0.75rem; color: var(--secondary)">Top 10 by volume</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Endpoint</th>
+                            <th>Calls</th>
+                            <th>Avg</th>
+                            <th>Limit %</th>
+                        </tr>
+                    </thead>
+                    <tbody id="endpoint-table">
+                        <!-- Filled by JS -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="card span-2">
                 <div style="display:flex; justify-content: space-between; align-items: center">
                     <h3>Recent API Traffic</h3>
-                    <div style="font-size: 0.75rem; color: var(--secondary)">Auto-refreshing every 2s</div>
+                    <div style="font-size: 0.75rem; color: var(--secondary)">Auto-refreshing</div>
                 </div>
                 <table>
                     <thead>
@@ -390,7 +410,6 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                             <th>Path</th>
                             <th>Status</th>
                             <th>Latency</th>
-                            <th>Timestamp</th>
                         </tr>
                     </thead>
                     <tbody id="request-table">
@@ -599,6 +618,24 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                     const reqTable = document.getElementById('request-table');
                     if (reqTable) reqTable.innerHTML = tableHtml;
                 } catch (e) { console.warn('Stats: request table error', e); }
+
+                try {
+                    let endHtml = '';
+                    const endpoints = data.endpoints || {};
+                    for (const [key, stats] of Object.entries(endpoints)) {
+                        const errClass = stats.error_rate > 5 ? 'color: var(--error)' : (stats.error_rate > 1 ? 'color: var(--warning)' : '');
+                        endHtml += `
+                            <tr>
+                                <td title="${key}"><code style="font-size:0.65rem; color: var(--primary)">${key.split(' ')[0]}</code> <span style="font-size:0.75rem">${key.split(' ')[1]}</span></td>
+                                <td>${stats.count}</td>
+                                <td>${stats.avg_ms.toFixed(0)}ms</td>
+                                <td style="font-weight:700; ${errClass}">${stats.error_rate}%</td>
+                            </tr>
+                        `;
+                    }
+                    const endTable = document.getElementById('endpoint-table');
+                    if (endTable) endTable.innerHTML = endHtml;
+                } catch (e) { console.warn('Stats: endpoint table error', e); }
             }
 
             async function fetchData() {
