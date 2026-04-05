@@ -143,7 +143,8 @@ async def run_auto_publisher(db: Any, r2_service: Any) -> None:
 async def _poll_and_publish(db: Any, r2_service: Any) -> None:
     """One poll cycle: find due entries and publish them."""
     from app.main import instagram_service_manager  # type: ignore[import]
-
+    
+    logger.info("Auto-publisher: checking schedule queue...")
     now = now_ist()
 
     due_entries = await db.schedule_queue.find(
@@ -152,11 +153,14 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
 
     total_count = await db.schedule_queue.count_documents({})
 
+    if total_count == 0:
+        logger.info("Auto-publisher: schedule queue is empty.")
+        return
+
     if not due_entries:
-        if total_count > 0:
-            logger.info("Auto-publisher: 0 due entries (next reel at %s, total queue: %d)", 
-                        (await db.schedule_queue.find_one(sort=[("scheduled_at", 1)]))["scheduled_at"],
-                        total_count)
+        logger.info("Auto-publisher: 0 due entries (next reel at %s, total queue: %d)", 
+                    (await db.schedule_queue.find_one(sort=[("scheduled_at", 1)]))["scheduled_at"],
+                    total_count)
         return
 
     for entry in due_entries:
