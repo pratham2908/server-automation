@@ -150,7 +150,13 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
         {"scheduled_at": {"$lte": now}}
     ).to_list(length=None)
 
+    total_count = await db.schedule_queue.count_documents({})
+
     if not due_entries:
+        if total_count > 0:
+            logger.info("Auto-publisher: 0 due entries (next reel at %s, total queue: %d)", 
+                        (await db.schedule_queue.find_one(sort=[("scheduled_at", 1)]))["scheduled_at"],
+                        total_count)
         return
 
     for entry in due_entries:
