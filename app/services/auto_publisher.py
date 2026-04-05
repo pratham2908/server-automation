@@ -14,6 +14,7 @@ from typing import Any
 
 from app.logger import get_logger
 from app.services.schedule_operation import _build_instagram_caption
+from app.database import update_channel_task_status
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -79,6 +80,10 @@ async def _publish_one_reel(
             media_id,
             channel_id,
         )
+        
+        # Update channel task history
+        await update_channel_task_status(db, channel_id, "auto_publisher")
+        
         return True
 
     except Exception:
