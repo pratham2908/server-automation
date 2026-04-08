@@ -90,7 +90,8 @@ class DiscoveryService:
             score = min(100.0, (total_views / 10000.0) * (competitor_count / 2.0))
             
             topics.append(TopicGroup(
-                topic_name=c.get("topic_name", "Unknown Topic"),
+                topic_name=topic_name,
+                category=c.get("category", "Uncategorized"),
                 description=c.get("description", ""),
                 videos=topic_videos,
                 total_views=total_views,

@@ -386,7 +386,8 @@ Return a JSON object with a single "topics" key containing an array of clusters:
 {{
   "topics": [
     {{
-      "topic_name": "Concise Name for the Concept",
+      "category": "Broad Category Name",
+      "topic_name": "Specific Concept Name (Exact Topic)",
       "description": "Short explanation of why this specific concept is trending or successful",
       "video_indices": [0, 2, 5]
     }}
@@ -394,11 +395,13 @@ Return a JSON object with a single "topics" key containing an array of clusters:
 }}
 
 Guidelines:
-- **topic_name**: Use a clear, marketable names for the idea.
+- **category**: A broader grouping that helps organize related concepts.
+- **topic_name**: The specific concept match (Exact Topic).
 - **description**: Focus on the appeal of the specific concept.
 - **video_indices**: Use the index numbers from the list above.
 - Every video must be assigned to exactly one topic. If a video is unique, put it in its own topic group.
-- Do NOT generate generic topics like "Gaming" or "Vlogs". Be specific to the hook."""
+- Do NOT generate generic categories like "Uncategorized". Be descriptive.
+- Ensure the **topic_name** is specific enough that it represents a single "proven idea"."""
 
     @staticmethod
     def _build_single_video_prompt(video_data: dict[str, Any], platform: str = "youtube") -> str:

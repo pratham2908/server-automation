@@ -24,6 +24,7 @@ class CompetitorVideoRef(BaseModel):
 class TopicGroup(BaseModel):
     """A cluster of videos from various competitors that share the same exact concept."""
     topic_name: str = Field(..., description="The AI-generated name for this concept")
+    category: str = Field(default="Uncategorized", description="The broader category this concept belongs to")
     description: str = Field(..., description="A brief description of what makes this concept successful")
     videos: list[CompetitorVideoRef] = Field(default_factory=list)
     

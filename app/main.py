@@ -1234,8 +1234,9 @@ async def api_schema():
                     "status": "success",
                     "topics": [
                         {
-                            "topic_name": "Mass Battle 1 vs 100",
-                            "description": "High engagement conflict simulation",
+                            "topic_name": "Walking 27 Years Around the World",
+                            "category": "Inspirational Journeys",
+                            "description": "Unique extreme endurance feat with high emotional hook",
                             "total_views": 250000,
                             "competitor_count": 3,
                             "recommendation_score": 85.5,
@@ -1251,7 +1252,7 @@ async def api_schema():
                 "request": None,
                 "response": {
                     "channel_id": "ch1",
-                    "topics": [{"topic_name": "Mass Battle 1 vs 100", "recommendation_score": 85.5}],
+                    "topics": [{"topic_name": "Walking 27 Years Around the World", "category": "Inspirational Journeys", "recommendation_score": 85.5}],
                 },
             },
             {
