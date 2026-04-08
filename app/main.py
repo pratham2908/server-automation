@@ -1222,5 +1222,46 @@ async def api_schema():
                 "request": None,
                 "response": {"ok": True, "analysis_id": "550e8400-...", "deleted": True},
             },
+            # -- Discovery --
+            {
+                "group": "Discovery",
+                "method": "POST",
+                "path": "/api/v1/discovery/{channel_id}/scan",
+                "description": "Trigger a fresh discovery scan of all competitors for a channel",
+                "request": None,
+                "response": {
+                    "channel_id": "ch1",
+                    "status": "success",
+                    "topics": [
+                        {
+                            "topic_name": "Mass Battle 1 vs 100",
+                            "description": "High engagement conflict simulation",
+                            "total_views": 250000,
+                            "competitor_count": 3,
+                            "recommendation_score": 85.5,
+                        }
+                    ],
+                },
+            },
+            {
+                "group": "Discovery",
+                "method": "GET",
+                "path": "/api/v1/discovery/{channel_id}/topics",
+                "description": "Get the latest discovered concepts from competitors",
+                "request": None,
+                "response": {
+                    "channel_id": "ch1",
+                    "topics": [{"topic_name": "Mass Battle 1 vs 100", "recommendation_score": 85.5}],
+                },
+            },
+            {
+                "group": "Discovery",
+                "method": "POST",
+                "path": "/api/v1/discovery/{channel_id}/topics/done",
+                "description": "Mark a specific concept as completed/done to hide it from future scans",
+                "query_params": {"topic_name": {"type": "string"}},
+                "request": None,
+                "response": {"status": "success", "topic_name": "Mass Battle 1 vs 100"},
+            },
         ],
     }
