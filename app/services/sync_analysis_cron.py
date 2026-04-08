@@ -99,10 +99,12 @@ async def run_sync_analysis_for_channel(
         logger.warning(
             "Auto-sync skipped for '%s': %s", channel_id, exc.detail,
         )
+        await update_channel_task_status(db, channel_id, "sync_analysis")
         return result
     except Exception as exc:
         result["sync"] = f"error ({exc})"
         logger.error("Auto-sync failed for '%s': %s", channel_id, exc)
+        await update_channel_task_status(db, channel_id, "sync_analysis")
         return result
 
     # --- Check unanalyzed count ---
@@ -114,6 +116,7 @@ async def run_sync_analysis_for_channel(
             "Channel '%s': %d unanalyzed video(s) < threshold %d — skipping analysis",
             channel_id, unanalyzed, analysis_threshold,
         )
+        await update_channel_task_status(db, channel_id, "sync_analysis")
         return result
 
     # --- Analysis ---
