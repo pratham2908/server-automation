@@ -90,6 +90,41 @@ class InstagramService:
             "biography": disc.get("biography", ""),
         }
 
+    def discover_competitor_media(
+        self, own_ig_user_id: str, target_username: str, max_results: int = 50
+    ) -> list[dict[str, Any]]:
+        """Fetch recent reels/videos from *any* Business account using Business Discovery.
+        
+        Note: The Business Discovery API has strict limitations on pagination depth.
+        """
+        fields = (
+            f"business_discovery.username({target_username})"
+            f"{{media{{id,caption,media_type,media_url,timestamp,permalink,like_count,comments_count}}}}"
+        )
+        
+        try:
+            data = self._get(own_ig_user_id, {"fields": fields})
+            media_list = data.get("business_discovery", {}).get("media", {}).get("data", [])
+            
+            reels: list[dict[str, Any]] = []
+            for item in media_list:
+                if item.get("media_type") in ("VIDEO", "REEL"):
+                    reels.append({
+                        "id": item.get("id"),
+                        "caption": item.get("caption", ""),
+                        "permalink": item.get("permalink", ""),
+                        "published_at": item.get("timestamp", ""),
+                        "like_count": int(item.get("like_count", 0)),
+                        "comment_count": int(item.get("comments_count", 0)),
+                        "views": 0, # Business Discovery does NOT provide view counts for public media
+                    })
+                if len(reels) >= max_results:
+                    break
+            return reels
+        except Exception as exc:
+            logger.error("Business Discovery media fetch failed for %s: %s", target_username, exc)
+            return []
+
     # ------------------------------------------------------------------
     # Reels
     # ------------------------------------------------------------------

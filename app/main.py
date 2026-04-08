@@ -26,6 +26,7 @@ _comment_analysis_task = None
 _comment_reply_task = None
 _sync_analysis_task = None
 _growth_tracking_task = None
+_metrics_persistence_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +184,23 @@ app.add_middleware(
 )
 app.add_middleware(StructuredLoggingMiddleware)
 
-from app.routers import analysis, categories, channels, comment_analysis, comment_replies, growth, observability, preview_analysis, retention_analysis, sync_analysis, system, thumbnail_analysis, ui, videos  # noqa: E402
+from app.routers import (
+    analysis,
+    categories,
+    channels,
+    comment_analysis,
+    comment_replies,
+    discovery,
+    growth,
+    observability,
+    preview_analysis,
+    retention_analysis,
+    sync_analysis,
+    system,
+    thumbnail_analysis,
+    ui,
+    videos,
+)  # noqa: E402
 
 app.include_router(channels.router)
 app.include_router(videos.router)
@@ -198,6 +215,7 @@ app.include_router(retention_analysis.router)
 app.include_router(sync_analysis.config_router)
 app.include_router(sync_analysis.trigger_router)
 app.include_router(thumbnail_analysis.router)
+app.include_router(discovery.router)
 app.include_router(ui.router)
 app.include_router(system.router)
 app.include_router(observability.router)

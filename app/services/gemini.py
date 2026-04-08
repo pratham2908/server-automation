@@ -144,6 +144,35 @@ class GeminiService:
             logger.error("Failed to parse Gemini per-video analysis response: %s", text)
             raise ValueError("Failed to parse Gemini per-video analysis response")
 
+    async def cluster_video_topics(
+        self,
+        videos: list[dict[str, Any]],
+        platform: str = "youtube",
+    ) -> list[dict[str, Any]]:
+        """Cluster a list of video titles into distinct, proven concepts.
+        
+        Parameters
+        ----------
+        videos:
+            List of dicts with ``video_id``, ``title``, and ``views``.
+            
+        Returns
+        -------
+        list[dict]
+            A list of topic groups, each with a name, description, and the
+            indices of the videos that belong to it.
+        """
+        logger.info("Clustering %d videos into topics via Gemini", len(videos))
+        prompt = self._build_clustering_prompt(videos, platform)
+        text = await self._generate(prompt)
+
+        try:
+            result = json.loads(text)
+            return result.get("topics", [])
+        except (json.JSONDecodeError, TypeError):
+            logger.error("Failed to parse Gemini topic clustering response: %s", text)
+            return []
+
     async def generate_video_content(
         self,
         channel_id: str,
@@ -327,6 +356,49 @@ Guidelines:
   - {"`avg_view_duration_seconds`, `estimated_minutes_watched`." if platform == "youtube" else ""}
 - **Per-video AI insights**: Use the `ai_insight` field to identify recurring patterns in what works and what doesn't across videos. Aggregate `key_learnings` into your recommendations.
 - If previous analysis exists, **refine incrementally**."""
+
+    @staticmethod
+    def _build_clustering_prompt(
+        videos: list[dict[str, Any]],
+        platform: str = "youtube",
+    ) -> str:
+        """Build the prompt for strict semantic clustering of video titles."""
+        
+        video_list_str = "\n".join([
+            f"{i}: {v['title']} ({v.get('views', 0)} views)"
+            for i, v in enumerate(videos)
+        ])
+        
+        return f"""You are an expert content strategist specializing in niche trend analysis. Your goal is to identify **Proven Content Concepts** by clustering similar videos into distinct topic groups.
+
+## STRICT CLUSTERING RULE
+You must use **Strict Semantic Mapping**. Only group videos together if they share the **EXACT SAME CONCEPT or CORE HOOK**. 
+- If two videos have different core premises (even if in the same niche), they must be in SEPARATE groups.
+- Example of a match: "1 vs 100 soldiers" and "100 soldiers vs 1 warrior" (same concept: mass battle).
+- Example of a non-match: "Building a house" and "Fixing a roof" (different specific tasks).
+
+## Video Titles to Cluster ({platform.capitalize()})
+{video_list_str}
+
+## Required Output Format
+Return a JSON object with a single "topics" key containing an array of clusters:
+
+{{
+  "topics": [
+    {{
+      "topic_name": "Concise Name for the Concept",
+      "description": "Short explanation of why this specific concept is trending or successful",
+      "video_indices": [0, 2, 5]
+    }}
+  ]
+}}
+
+Guidelines:
+- **topic_name**: Use a clear, marketable names for the idea.
+- **description**: Focus on the appeal of the specific concept.
+- **video_indices**: Use the index numbers from the list above.
+- Every video must be assigned to exactly one topic. If a video is unique, put it in its own topic group.
+- Do NOT generate generic topics like "Gaming" or "Vlogs". Be specific to the hook."""
 
     @staticmethod
     def _build_single_video_prompt(video_data: dict[str, Any], platform: str = "youtube") -> str:
