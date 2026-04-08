@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
+from app.dependencies import verify_api_key
 from app.main import (
     gemini_service,
     youtube_service_manager,
@@ -12,7 +13,11 @@ from app.main import (
 from app.services.discovery_service import DiscoveryService
 from app.models.topic_discovery import TopicDiscoveryResult, DoneTopic
 
-router = APIRouter(prefix="/discovery", tags=["Discovery"])
+router = APIRouter(
+    prefix="/api/v1/discovery",
+    tags=["Discovery"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 def get_discovery_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> DiscoveryService:
