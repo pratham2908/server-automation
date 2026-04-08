@@ -5,9 +5,6 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
 from app.dependencies import verify_api_key
-from app.main import (
-    gemini_service,
-)
 import app.main as main_app
 from app.services.discovery_service import DiscoveryService
 from app.models.topic_discovery import TopicDiscoveryResult, DoneTopic
@@ -22,7 +19,7 @@ router = APIRouter(
 def get_discovery_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> DiscoveryService:
     return DiscoveryService(
         db=db,
-        gemini_service=gemini_service,
+        gemini_service=main_app.gemini_service,
         youtube_manager=main_app.youtube_service_manager,
         instagram_manager=main_app.instagram_service_manager,
     )
