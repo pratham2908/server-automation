@@ -7,9 +7,8 @@ from app.database import get_db
 from app.dependencies import verify_api_key
 from app.main import (
     gemini_service,
-    youtube_service_manager,
-    instagram_service_manager,
 )
+import app.main as main_app
 from app.services.discovery_service import DiscoveryService
 from app.models.topic_discovery import TopicDiscoveryResult, DoneTopic
 
@@ -24,8 +23,8 @@ def get_discovery_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> Discove
     return DiscoveryService(
         db=db,
         gemini_service=gemini_service,
-        youtube_manager=youtube_service_manager,
-        instagram_manager=instagram_service_manager,
+        youtube_manager=main_app.youtube_service_manager,
+        instagram_manager=main_app.instagram_service_manager,
     )
 
 
