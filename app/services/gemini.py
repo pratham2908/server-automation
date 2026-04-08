@@ -371,11 +371,15 @@ Guidelines:
         
         return f"""You are an expert content strategist specializing in niche trend analysis. Your goal is to identify **Proven Content Concepts** by clustering similar videos into distinct topic groups.
 
-## STRICT CLUSTERING RULE
-You must use **Strict Semantic Mapping**. Only group videos together if they share the **EXACT SAME CONCEPT or CORE HOOK**. 
-- If two videos have different core premises (even if in the same niche), they must be in SEPARATE groups.
-- Example of a match: "1 vs 100 soldiers" and "100 soldiers vs 1 warrior" (same concept: mass battle).
-- Example of a non-match: "Building a house" and "Fixing a roof" (different specific tasks).
+## ULTRA-GRANULAR CLUSTERING RULES
+You must follow a TWO-TIER hierarchy for every discovered idea:
+
+1. **Category (The Theme)**: Group topics by their broad content type or genre (e.g., "Walking Journeys", "Mass Battles", "Building Challenges").
+2. **Topic Name (The Identity)**: This must be surgically precise. It represents the **Exact Proven Idea**.
+   - **Entity Identity Rule**: If two videos share a theme but have different locations, specific numbers, or subjects, they are **DIFFERENT** topics.
+   - Example (Category: "Walking Journeys"): "India to USA" and "USA to Russia" are **SEPARATE** topics. They must NOT be grouped.
+   - Example (Category: "Survival"): "100 Days in Jungle" and "100 Days in Desert" are **SEPARATE** topics.
+   - Match only if the **core hook and specific entities** are identical (e.g., "Man walks 27 years" and "This guy walked for 27 years").
 
 ## Video Titles to Cluster ({platform.capitalize()})
 {video_list_str}
