@@ -104,6 +104,7 @@ class Channel(BaseModel):
     """Represents a channel (YouTube or Instagram) managed by the automation system."""
 
     channel_id: str = Field(..., description="Internal unique identifier")
+    profile_id: str = Field("default", description="ID of the profile that owns this channel")
     name: str = Field(..., description="Human-readable channel name")
     platform: str = Field("youtube", description="'youtube' or 'instagram'")
     youtube_channel_id: Optional[str] = Field(None, description="YouTube UC... channel ID (youtube only)")

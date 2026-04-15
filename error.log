@@ -1,0 +1,108 @@
+Traceback (most recent call last):
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/migrate_profiles.py", line 54, in <module>
+    asyncio.run(migrate())
+    ~~~~~~~~~~~^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/migrate_profiles.py", line 31, in migrate
+    existing = await db.profiles.find_one({})
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py", line 86, in run
+    result = ctx.run(self.task)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py", line 73, in run
+    return fn(*args, **kwargs)
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/collection.py", line 1755, in find_one
+    for result in cursor.limit(-1):
+                  ~~~~~~~~~~~~^^^^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/cursor.py", line 1289, in __next__
+    return self.next()
+           ~~~~~~~~~^^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/cursor.py", line 1265, in next
+    if len(self._data) or self._refresh():
+                          ~~~~~~~~~~~~~^^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/cursor.py", line 1213, in _refresh
+    self._send_message(q)
+    ~~~~~~~~~~~~~~~~~~^^^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/cursor.py", line 1108, in _send_message
+    response = client._run_operation(
+        operation, self._unpack_response, address=self._address
+    )
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/_csot.py", line 125, in csot_wrapper
+    return func(self, *args, **kwargs)
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/mongo_client.py", line 1938, in _run_operation
+    return self._retryable_read(
+           ~~~~~~~~~~~~~~~~~~~~^
+        _cmd,
+        ^^^^^
+    ...<4 lines>...
+        operation=operation.name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/mongo_client.py", line 2048, in _retryable_read
+    return self._retry_internal(
+           ~~~~~~~~~~~~~~~~~~~~^
+        func,
+        ^^^^^
+    ...<7 lines>...
+        operation_id=operation_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/_csot.py", line 125, in csot_wrapper
+    return func(self, *args, **kwargs)
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/mongo_client.py", line 2014, in _retry_internal
+    ).run()
+      ~~~^^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/mongo_client.py", line 2763, in run
+    return self._read() if self._is_read else self._write()
+           ~~~~~~~~~~^^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/mongo_client.py", line 2908, in _read
+    self._server = self._get_server()
+                   ~~~~~~~~~~~~~~~~^^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/mongo_client.py", line 2856, in _get_server
+    return self._client._select_server(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self._server_selector,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+        operation_id=self._operation_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/mongo_client.py", line 1833, in _select_server
+    server = topology.select_server(
+        server_selector,
+    ...<2 lines>...
+        operation_id=operation_id,
+    )
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/topology.py", line 428, in select_server
+    server = self._select_server(
+        selector,
+    ...<4 lines>...
+        operation_id=operation_id,
+    )
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/topology.py", line 402, in _select_server
+    servers = self.select_servers(
+        selector,
+    ...<4 lines>...
+        deprioritized_servers,
+    )
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/topology.py", line 298, in select_servers
+    server_descriptions = self._select_servers_loop(
+        selector,
+    ...<4 lines>...
+        deprioritized_servers=deprioritized_servers,
+    )
+  File "/Users/anjaligarg/anjali/Insta/Code/automation-server/.venv/lib/python3.14/site-packages/pymongo/synchronous/topology.py", line 359, in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+        f"{self._error_message(selector)}, Timeout: {timeout}s, Topology Description: {self.description!r}"
+    )
+pymongo.errors.ServerSelectionTimeoutError: SSL handshake failed: ac-e0w3r1y-shard-00-00.yqfnb50.mongodb.net:27017: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1081) (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms),SSL handshake failed: ac-e0w3r1y-shard-00-01.yqfnb50.mongodb.net:27017: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1081) (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms),SSL handshake failed: ac-e0w3r1y-shard-00-02.yqfnb50.mongodb.net:27017: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1081) (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 30s, Topology Description: <TopologyDescription id: 69dfddfb4a0da8adbf7f96d6, topology_type: ReplicaSetNoPrimary, servers: [<ServerDescription ('ac-e0w3r1y-shard-00-00.yqfnb50.mongodb.net', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('SSL handshake failed: ac-e0w3r1y-shard-00-00.yqfnb50.mongodb.net:27017: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1081) (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>, <ServerDescription ('ac-e0w3r1y-shard-00-01.yqfnb50.mongodb.net', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('SSL handshake failed: ac-e0w3r1y-shard-00-01.yqfnb50.mongodb.net:27017: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1081) (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>, <ServerDescription ('ac-e0w3r1y-shard-00-02.yqfnb50.mongodb.net', 27017) server_type: Unknown, rtt: None, error=AutoReconnect('SSL handshake failed: ac-e0w3r1y-shard-00-02.yqfnb50.mongodb.net:27017: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error (_ssl.c:1081) (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>

@@ -209,6 +209,7 @@ app.add_middleware(StructuredLoggingMiddleware)
 
 from app.routers import (
     analysis,
+    auth,
     categories,
     channels,
     comment_analysis,
@@ -226,6 +227,7 @@ from app.routers import (
     videos,
 )  # noqa: E402
 
+app.include_router(auth.router)
 app.include_router(channels.router)
 app.include_router(videos.router)
 app.include_router(categories.router)

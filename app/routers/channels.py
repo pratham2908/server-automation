@@ -13,7 +13,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
 from app.database import get_db
-from app.dependencies import verify_api_key
+from app.dependencies import verify_api_key, get_current_profile
+from app.models.profile import ProfileInDB
 from app.logger import get_logger
 
 logger = get_logger(__name__)
@@ -91,10 +92,11 @@ from app.models.channel import Channel
 @router.get("/")
 async def list_channels(
     db: AsyncIOMotorDatabase = Depends(get_db),
+    current_profile: ProfileInDB = Depends(get_current_profile),
 ):
-    """Return all registered channels (tokens excluded)."""
+    """Return all registered channels (tokens excluded) belonging to the current profile."""
     channels = await db.channels.find(
-        {}, {"youtube_tokens": 0, "instagram_tokens": 0}
+        {"profile_id": current_profile.id}, {"youtube_tokens": 0, "instagram_tokens": 0}
     ).to_list(length=None)
     for c in channels:
         c["_id"] = str(c["_id"])
@@ -110,15 +112,16 @@ async def list_channels(
 async def get_channel(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
+    current_profile: ProfileInDB = Depends(get_current_profile),
 ):
     """Return a single channel by its ``channel_id`` (tokens excluded)."""
     doc = await db.channels.find_one(
-        {"channel_id": channel_id}, {"youtube_tokens": 0, "instagram_tokens": 0}
+        {"channel_id": channel_id, "profile_id": current_profile.id}, {"youtube_tokens": 0, "instagram_tokens": 0}
     )
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Channel '{channel_id}' not found",
+            detail=f"Channel '{channel_id}' not found or you don't have access",
         )
     doc["_id"] = str(doc["_id"])
     return doc
@@ -133,6 +136,7 @@ async def get_channel(
 async def create_channel(
     body: ChannelCreate,
     db: AsyncIOMotorDatabase = Depends(get_db),
+    current_profile: ProfileInDB = Depends(get_current_profile),
 ):
     """Register a new channel by fetching its data from YouTube or Instagram.
 
@@ -147,7 +151,7 @@ async def create_channel(
         )
 
     if platform == "instagram":
-        return await _create_instagram_channel(body, db)
+        return await _create_instagram_channel(body, db, current_profile.id)
 
     # --- YouTube flow (existing) ---
     if not body.youtube_channel_id:
@@ -214,6 +218,7 @@ async def create_channel(
         "subscriber_count": yt_data.get("subscriber_count", 0),
         "video_count": yt_data.get("video_count", 0),
         "view_count": yt_data.get("view_count", 0),
+        "profile_id": current_profile.id,
         "created_at": now,
         "updated_at": now,
     }
@@ -225,6 +230,7 @@ async def create_channel(
 async def _create_instagram_channel(
     body: ChannelCreate,
     db: AsyncIOMotorDatabase,
+    profile_id: str,
 ) -> dict:
     """Register a new Instagram channel.
 
@@ -288,6 +294,7 @@ async def _create_instagram_channel(
         "subscriber_count": ig_data.get("followers_count", 0),
         "video_count": ig_data.get("media_count", 0),
         "view_count": 0,
+        "profile_id": profile_id,
         "created_at": now,
         "updated_at": now,
     }
@@ -309,6 +316,7 @@ async def update_channel(
     channel_id: str,
     body: ChannelUpdate,
     db: AsyncIOMotorDatabase = Depends(get_db),
+    current_profile: ProfileInDB = Depends(get_current_profile),
 ):
     """Partially update a channel."""
     update_data = body.model_dump(exclude_none=True)
@@ -321,7 +329,7 @@ async def update_channel(
     update_data["updated_at"] = now_ist()
 
     result = await db.channels.update_one(
-        {"channel_id": channel_id},
+        {"channel_id": channel_id, "profile_id": current_profile.id},
         {"$set": update_data},
     )
     if result.matched_count == 0:
