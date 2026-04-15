@@ -213,6 +213,7 @@ from app.routers import (
     channels,
     comment_analysis,
     comment_replies,
+    content_intelligence,
     discovery,
     growth,
     observability,
@@ -239,6 +240,7 @@ app.include_router(sync_analysis.config_router)
 app.include_router(sync_analysis.trigger_router)
 app.include_router(thumbnail_analysis.router)
 app.include_router(discovery.router)
+app.include_router(content_intelligence.router)
 app.include_router(ui.router)
 app.include_router(system.router)
 app.include_router(observability.router)

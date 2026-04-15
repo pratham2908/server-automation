@@ -99,6 +99,15 @@ async def connect_db(
     )
     await _db.thumbnail_analysis.create_index("analysis_id", unique=True)
 
+    await _db.video_intelligence.create_index(
+        [("channel_id", 1), ("source", 1)],
+    )
+    await _db.video_intelligence.create_index(
+        [("channel_id", 1), ("platform_video_id", 1)],
+        unique=True,
+    )
+    await _db.video_intelligence.create_index("intel_id", unique=True)
+
     return _db
 
 

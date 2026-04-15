@@ -1626,3 +1626,151 @@ Ephemeral thumbnail quality and CTR scoring via Gemini multimodal image analysis
   "deleted": true
 }
 ```
+
+---
+
+## Content Intelligence
+
+Deeply analyzes competitor and own-channel videos — extracting hooks, CTAs, content structure, pacing, and performance — then compares patterns to surface what's working and what to change.
+
+### Trigger Content Intelligence Scan
+
+Scans competitor and/or own videos. Incremental — only processes videos not already stored.
+
+- **URL**: `POST /api/v1/content-intel/{channel_id}/scan`
+- **Query Params**:
+  - `source` (optional): `"competitor"`, `"own"`, or omit for both
+- **Headers**: `X-API-Key: your_api_key`
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "channel_id": "abc123",
+  "scan_results": [
+    {
+      "source": "competitor",
+      "total": 90,
+      "new": 45,
+      "skipped": 45,
+      "failed": 0
+    },
+    {
+      "source": "own",
+      "total": 30,
+      "new": 30,
+      "skipped": 0,
+      "failed": 0
+    }
+  ]
+}
+```
+
+> **Note**: Each video is sent to Gemini in batches of 10 for hook/CTA/structure extraction. The scan can take a few minutes depending on the number of videos.
+
+### Generate Content Insights
+
+Compares your patterns against competitor patterns and returns structured, actionable insights.
+
+- **URL**: `POST /api/v1/content-intel/{channel_id}/insights`
+- **Headers**: `X-API-Key: your_api_key`
+- **Response**:
+
+```json
+{
+  "hook_patterns": {
+    "competitor_winning_hooks": ["question hooks avg 2.3x more views"],
+    "your_best_hooks": ["direct address works well for your audience"],
+    "hooks_to_try": ["bold_claim hooks — competitors avg 150k views, you haven't tried"],
+    "hooks_to_avoid": ["story_tease underperforms for both"]
+  },
+  "cta_patterns": {
+    "competitor_ctas": ["mid-video CTAs dominate top performers"],
+    "your_cta_gaps": ["no pinned-comment CTAs — competitors get 3x comment rate"],
+    "recommendations": ["add mid-video CTA around 60% mark"]
+  },
+  "content_structure": {
+    "competitor_winning_formats": ["listicle and comparison dominate"],
+    "your_strengths": ["tutorial content has highest engagement"],
+    "gaps": ["no comparison/vs content — competitors avg 200k views"]
+  },
+  "title_patterns": {
+    "competitor_patterns": ["number_list titles avg 180k views"],
+    "your_patterns": ["how_to titles strongest at 4.2% CTR"],
+    "suggestions": ["try question titles — competitors see 2.5x engagement"]
+  },
+  "top_action_items": [
+    "Start using mid-video CTAs",
+    "Try comparison/vs format videos",
+    "Switch to question-format titles"
+  ],
+  "overall_gap_score": 35,
+  "channel_id": "abc123",
+  "own_videos_analyzed": 30,
+  "competitor_videos_analyzed": 90
+}
+```
+
+### Get Latest Insights
+
+Retrieve the most recently generated insights without re-running analysis.
+
+- **URL**: `GET /api/v1/content-intel/{channel_id}/insights`
+- **Headers**: `X-API-Key: your_api_key`
+- **Response**: Same shape as POST /insights response.
+
+### List Video Intelligence Entries
+
+Lists stored per-video intelligence data (hook, CTA, structure, etc.) sorted by views.
+
+- **URL**: `GET /api/v1/content-intel/{channel_id}/videos`
+- **Query Params**:
+  - `source` (optional): `"competitor"` or `"own"`
+  - `limit` (optional): 1–200, default 50
+- **Headers**: `X-API-Key: your_api_key`
+- **Response**:
+
+```json
+[
+  {
+    "intel_id": "550e8400-...",
+    "channel_id": "abc123",
+    "platform_video_id": "dQw4w9WgXcQ",
+    "source": "competitor",
+    "title": "10 Tips for Better Videos",
+    "views": 500000,
+    "hook_type": "number_list",
+    "cta_type": "subscribe",
+    "content_structure": "listicle",
+    "content_pacing": "fast",
+    "title_style": "number_list",
+    "key_topics": ["video production", "content creation"],
+    "competitor_name": "TopCreator"
+  }
+]
+```
+
+### Get Single Video Intelligence Entry
+
+- **URL**: `GET /api/v1/content-intel/{channel_id}/videos/{intel_id}`
+- **Headers**: `X-API-Key: your_api_key`
+- **Response**: A single video intelligence object (same shape as list items).
+
+### Clear Intelligence Data
+
+Delete all stored intelligence for a channel to allow a fresh re-scan.
+
+- **URL**: `DELETE /api/v1/content-intel/{channel_id}/scan`
+- **Query Params**:
+  - `source` (optional): `"competitor"` or `"own"`, or omit to clear all
+- **Headers**: `X-API-Key: your_api_key`
+- **Response**:
+
+```json
+{
+  "ok": true,
+  "channel_id": "abc123",
+  "source_cleared": "all",
+  "deleted_count": 120
+}
+```

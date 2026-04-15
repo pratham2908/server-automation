@@ -2745,3 +2745,63 @@ The observability dashboard (`/dashboard?api_key=...`) provides real-time monito
 - The 20-video-per-run cap applies only to **fresh** (never-analyzed) videos
 - Incremental re-analysis of already-analyzed videos is uncapped
 - Logs include the source channel name (own channel or competitor name) for each video analyzed
+
+---
+
+## Content Intelligence Engine
+
+### Purpose
+
+Analyzes both competitor and own-channel videos to extract structured intelligence about hooks, CTAs, content structure, pacing, and title style — then compares patterns to surface what's working for competitors that you're missing, and what to double down on.
+
+### Architecture
+
+Two-phase system:
+
+1. **Deep Scan** — Fetches competitor top videos (top 30 per competitor by views) and all own published videos, sends metadata (title, description, tags, performance) to Gemini in batches of 10 for structured extraction, stores results in `video_intelligence` collection.
+2. **Insights** — Loads all stored intelligence, splits by source (own vs competitor), sends both sets to Gemini for comparative analysis, returns structured insights with action items.
+
+### What Gets Stored Per Video (`video_intelligence`)
+
+| Field | Description |
+|---|---|
+| `intel_id` | Unique UUID |
+| `channel_id` | Parent channel |
+| `platform_video_id` | YouTube video ID or Instagram media ID |
+| `source` | `"competitor"` or `"own"` |
+| `hook_type` | question, bold_claim, visual_shock, story_tease, stat_fact, etc. |
+| `hook_description` | 1-sentence description of hook strategy |
+| `cta_type` | subscribe, comment, like, link_click, follow, share, save, engage, none |
+| `cta_placement` | title, description_top, description_bottom, both, none |
+| `cta_text` | Actual CTA message |
+| `content_structure` | tutorial, listicle, story, comparison, challenge, reaction, etc. |
+| `content_pacing` | fast, medium, slow |
+| `key_topics` | Array of 2-4 topic keywords |
+| `title_style` | question, how_to, number_list, shock, emotional, curiosity_gap, direct, etc. |
+| `estimated_production` | low, medium, high |
+| `views`, `likes`, `comments`, `engagement_rate`, `duration_seconds` | Performance metrics |
+
+### Key Design Decisions
+
+- **Metadata-level analysis** — No video file upload needed. Gemini infers hook style, CTA, and content structure from title/description/tags.
+- **Persistent storage** — Unlike preview/thumbnail analysis (ephemeral 24h), intelligence is long-lived and improves over time.
+- **Incremental** — Videos already in `video_intelligence` are skipped on re-scan. Use DELETE to clear for a fresh scan.
+- **Batch processing** — Videos sent to Gemini in batches of 10 for efficiency.
+
+### API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/content-intel/{channel_id}/scan` | Trigger scan (competitor/own/both) |
+| `POST` | `/api/v1/content-intel/{channel_id}/insights` | Generate comparative insights |
+| `GET` | `/api/v1/content-intel/{channel_id}/insights` | Get latest stored insights |
+| `GET` | `/api/v1/content-intel/{channel_id}/videos` | List video intelligence entries |
+| `GET` | `/api/v1/content-intel/{channel_id}/videos/{intel_id}` | Get single entry |
+| `DELETE` | `/api/v1/content-intel/{channel_id}/scan` | Clear intelligence data |
+
+### Files
+
+- **`app/services/content_intelligence.py`** — Core service with `scan_competitor_videos()`, `scan_own_videos()`, `generate_insights()`
+- **`app/routers/content_intelligence.py`** — API endpoints
+- **`app/services/gemini.py`** — `extract_video_intelligence()` and `compare_content_patterns()` methods
+- **`app/database.py`** — Indexes for `video_intelligence` collection

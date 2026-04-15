@@ -1304,3 +1304,181 @@ Return a JSON object:
 - **missing_signals**: List of signal types that were not available for evaluation.
 
 Be specific, actionable, and honest. Reference concrete data from the signals."""
+
+    # ------------------------------------------------------------------
+    # Content intelligence — video extraction & comparison
+    # ------------------------------------------------------------------
+
+    async def extract_video_intelligence(
+        self,
+        videos: list[dict[str, Any]],
+        platform: str = "youtube",
+    ) -> list[dict[str, Any]]:
+        """Batch-extract hook, CTA, content structure from video metadata.
+
+        Each video dict should have at least ``video_id``, ``title``,
+        ``description`` (can be empty), and optionally ``tags``, ``views``,
+        ``likes``, ``comments``, ``duration_seconds``.
+        """
+        videos_json = json.dumps(videos, indent=2, default=str)
+
+        platform_note = (
+            "These are YouTube videos. Evaluate hooks, CTAs, and structure through a YouTube lens "
+            "(subscribe CTAs, end screens, cards, pinned comments, SEO-driven titles)."
+            if platform == "youtube"
+            else "These are Instagram Reels. Evaluate hooks, CTAs, and structure through an Instagram lens "
+            "(follow CTAs, caption hooks, hashtag strategy, save/share prompts, visual-first pacing)."
+        )
+
+        prompt = f"""You are a Content Strategy Analyst. Analyze each video below and extract structured intelligence about its hook technique, CTA strategy, content structure, and title style.
+
+## Platform
+{platform_note}
+
+## Videos ({len(videos)} total)
+```json
+{videos_json}
+```
+
+## What to Extract Per Video
+
+For each video, analyze the title and description (and tags if provided) to infer:
+
+1. **hook_type**: The hook technique used in the title/opening. One of: question, bold_claim, visual_shock, story_tease, stat_fact, controversy, direct_address, how_to, listicle_tease, challenge, comparison, other.
+2. **hook_description**: 1 sentence describing the specific hook strategy used.
+3. **cta_type**: Primary CTA detected in description/title. One of: subscribe, comment, like, link_click, follow, share, save, engage, none.
+4. **cta_placement**: Where CTA appears. One of: title, description_top, description_bottom, both, none.
+5. **cta_text**: The actual CTA text (or "none" if absent). Keep it brief.
+6. **content_structure**: The narrative format. One of: tutorial, listicle, story, comparison, challenge, reaction, vlog, montage, reveal, before_after, educational, entertainment, review, other.
+7. **content_pacing**: Inferred pacing from title/description style. One of: fast, medium, slow.
+8. **key_topics**: Array of 2-4 topic keywords the video covers.
+9. **title_style**: The titling technique. One of: question, how_to, number_list, shock, emotional, curiosity_gap, direct, challenge, comparison, other.
+10. **estimated_production**: Inferred production quality. One of: low, medium, high.
+
+## Required Output Format
+
+Return a JSON array with one object per video:
+
+[
+  {{
+    "video_id": "...",
+    "hook_type": "question",
+    "hook_description": "Opens with a provocative question that challenges conventional wisdom",
+    "cta_type": "subscribe",
+    "cta_placement": "description_bottom",
+    "cta_text": "Subscribe for more tips!",
+    "content_structure": "tutorial",
+    "content_pacing": "medium",
+    "key_topics": ["productivity", "time management"],
+    "title_style": "question",
+    "estimated_production": "medium"
+  }}
+]
+
+## Rules
+
+- Analyze EVERY video in the list. Do not skip any.
+- Base your analysis on the title and description text. If description is empty, infer from title alone.
+- Be precise with classifications — don't default to "other" unless nothing else fits.
+- key_topics should be specific themes, not generic categories."""
+
+        text = await self._generate(prompt)
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            logger.error("Failed to parse video intelligence extraction: %s", text[:500])
+            return []
+
+    async def compare_content_patterns(
+        self,
+        own_videos: list[dict[str, Any]],
+        competitor_videos: list[dict[str, Any]],
+        platform: str = "youtube",
+    ) -> dict[str, Any]:
+        """Compare own-channel patterns against competitor patterns.
+
+        Both lists should contain video intelligence entries with extracted
+        fields (hook_type, cta_type, etc.) plus performance metrics.
+        """
+        own_json = json.dumps(own_videos, indent=2, default=str)
+        comp_json = json.dumps(competitor_videos, indent=2, default=str)
+
+        platform_note = (
+            "Platform: YouTube. Focus on CTR, retention, subscribe CTAs, SEO titles, and watch time."
+            if platform == "youtube"
+            else "Platform: Instagram Reels. Focus on hook speed, saves, shares, follow CTAs, and visual impact."
+        )
+
+        prompt = f"""You are an elite Content Strategy Consultant. You have two datasets: the creator's own videos and their competitors' videos. Both have been analyzed for hooks, CTAs, content structure, and performance.
+
+Your job: find what competitors do that works, what the creator does well, and most importantly — what specific changes would improve the creator's content.
+
+## {platform_note}
+
+## Creator's Own Videos ({len(own_videos)} videos)
+```json
+{own_json}
+```
+
+## Competitor Videos ({len(competitor_videos)} videos)
+```json
+{comp_json}
+```
+
+## Analysis Tasks
+
+1. **Hook Patterns**: Which hook types correlate with highest views/engagement for competitors? Which hooks does the creator use most? What hooks are competitors using successfully that the creator hasn't tried?
+
+2. **CTA Patterns**: What CTAs do top-performing competitor videos use? Where are they placed? How does the creator's CTA strategy compare? What's missing?
+
+3. **Content Structure**: Which content formats (tutorial, listicle, comparison, etc.) perform best for competitors? Which does the creator rely on? What formats are proven winners that the creator hasn't explored?
+
+4. **Title Patterns**: Which title styles correlate with highest views for competitors? How do the creator's title patterns compare?
+
+5. **Action Items**: Based on all the above, what are the top concrete changes the creator should make?
+
+## Required Output Format
+
+Return a JSON object:
+
+{{
+  "hook_patterns": {{
+    "competitor_winning_hooks": ["specific observation with data, e.g. 'question hooks avg 2.3x more views than direct titles'"],
+    "your_best_hooks": ["what works for the creator with evidence"],
+    "hooks_to_try": ["specific hook types competitors use successfully that the creator hasn't tried"],
+    "hooks_to_avoid": ["hooks that underperform for both creator and competitors"]
+  }},
+  "cta_patterns": {{
+    "competitor_ctas": ["what top competitors do for CTAs"],
+    "your_cta_gaps": ["what the creator is missing in their CTA strategy"],
+    "recommendations": ["specific CTA improvements to make"]
+  }},
+  "content_structure": {{
+    "competitor_winning_formats": ["which formats drive highest views/engagement for competitors"],
+    "your_strengths": ["which formats work best for the creator"],
+    "gaps": ["proven formats the creator hasn't explored"]
+  }},
+  "title_patterns": {{
+    "competitor_patterns": ["what title styles correlate with high performance"],
+    "your_patterns": ["the creator's title tendencies and their performance"],
+    "suggestions": ["specific title style changes to test"]
+  }},
+  "top_action_items": [
+    "Ranked list of 5-7 specific, actionable changes the creator should make, ordered by expected impact. Each should reference concrete data from the analysis."
+  ],
+  "overall_gap_score": 35
+}}
+
+## Field Guidelines
+
+- **All observations must cite data** — don't say "question hooks work well," say "question hooks avg 150k views vs 80k for direct titles across 12 competitor videos."
+- **top_action_items**: 5-7 items, ordered by expected impact. Each must be a specific action (not vague advice).
+- **overall_gap_score**: 0-100, where 0 = creator is doing everything competitors do (no gap), 100 = massive gaps across all dimensions. This measures how much room for improvement exists based on competitor patterns.
+- Be brutally honest. The creator wants to know what to change, not be reassured."""
+
+        text = await self._generate(prompt)
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            logger.error("Failed to parse content pattern comparison: %s", text[:500])
+            raise ValueError("Failed to parse content pattern comparison response")
