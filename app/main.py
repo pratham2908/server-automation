@@ -23,6 +23,7 @@ instagram_service_manager = None
 gemini_service = None
 _auto_publisher_task = None
 _youtube_uploader_task = None
+_velocity_booster_task = None
 _comment_analysis_task = None
 _comment_reply_task = None
 _sync_analysis_task = None
@@ -99,6 +100,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     _youtube_uploader_task = asyncio.create_task(run_youtube_uploader(db, r2_service))
     logger.info("Background YouTube uploader started")
 
+    # ---- Background Velocity Booster (auto-boost pace if engagement low) ----
+    from app.services.velocity_booster import run_velocity_booster
+
+    _velocity_booster_task = asyncio.create_task(run_velocity_booster(db))
+    logger.info("Background Velocity Booster started")
+
     # ---- Background comment analysis cron (24-hour cycle) ----
     from app.services.comment_analysis_cron import run_comment_analysis_cron
 
@@ -157,7 +164,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         except:
             pass
 
-    for task in (_auto_publisher_task, _youtube_uploader_task, _comment_analysis_task, _comment_reply_task, _metrics_persistence_task, _sync_analysis_task, _growth_tracking_task):
+    for task in (
+        _auto_publisher_task,
+        _youtube_uploader_task,
+        _velocity_booster_task,
+        _comment_analysis_task,
+        _comment_reply_task,
+        _metrics_persistence_task,
+        _sync_analysis_task,
+        _growth_tracking_task,
+    ):
         if task and not task.done():
             task.cancel()
             try:
@@ -283,6 +299,17 @@ async def api_schema():
                     "channel_id": "ch1",
                     "name": "My Tech Channel",
                     "platform": "youtube",
+                    "automation_config": {
+                        "velocity_booster": {
+                            "enabled": True,
+                            "min_hours_since_last_upload": 12,
+                            "min_views_threshold": 1000,
+                            "schedule_delay_minutes": 15
+                        }
+                    },
+                    "last_tasks": {
+                        "velocity_booster": "2026-03-06T19:53:30Z"
+                    },
                 },
             },
             {

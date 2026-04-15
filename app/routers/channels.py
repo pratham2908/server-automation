@@ -78,6 +78,7 @@ class ChannelUpdate(BaseModel):
     name: Optional[str] = None
     default_description: Optional[str] = None
     default_tags: Optional[list[str]] = None
+    automation_config: Optional[dict] = None
 
 
 # ------------------------------------------------------------------

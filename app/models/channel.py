@@ -85,6 +85,21 @@ class InstagramTokens(BaseModel):
     expires_at: Optional[str] = Field(None, description="ISO 8601 expiry datetime")
 
 
+class VelocityBoosterConfig(BaseModel):
+    """Configuration for the Velocity Booster automation."""
+
+    enabled: bool = Field(False, description="Whether to automatically boost uploading pace if engagement is low")
+    min_hours_since_last_upload: int = Field(12, description="Minimum hours to wait after the last upload before boosting")
+    min_views_threshold: int = Field(1000, description="If last video views are below this, boost is triggered")
+    schedule_delay_minutes: int = Field(15, description="How many minutes from now to schedule the boosted video")
+
+
+class AutomationConfig(BaseModel):
+    """Aggregate for all channel-level automation settings."""
+
+    velocity_booster: VelocityBoosterConfig = Field(default_factory=VelocityBoosterConfig)
+
+
 class Channel(BaseModel):
     """Represents a channel (YouTube or Instagram) managed by the automation system."""
 
@@ -95,5 +110,9 @@ class Channel(BaseModel):
     youtube_tokens: Optional[YouTubeTokens] = Field(None, description="YouTube OAuth tokens (excluded from API responses)")
     instagram_user_id: Optional[str] = Field(None, description="Instagram Graph API user ID (instagram only)")
     instagram_tokens: Optional[InstagramTokens] = Field(None, description="Instagram tokens (excluded from API responses)")
+    
+    automation_config: AutomationConfig = Field(default_factory=AutomationConfig)
+    last_tasks: dict[str, datetime] = Field(default_factory=dict, description="Last run timestamps for various background tasks")
+    
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)
