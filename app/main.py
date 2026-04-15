@@ -22,6 +22,7 @@ youtube_service_manager = None
 instagram_service_manager = None
 gemini_service = None
 _auto_publisher_task = None
+_youtube_uploader_task = None
 _comment_analysis_task = None
 _comment_reply_task = None
 _sync_analysis_task = None
@@ -88,9 +89,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     import asyncio
     from app.services.auto_publisher import run_auto_publisher
 
-    global _auto_publisher_task, _comment_analysis_task, _comment_reply_task, _sync_analysis_task
+    global _auto_publisher_task, _youtube_uploader_task, _comment_analysis_task, _comment_reply_task, _sync_analysis_task
     _auto_publisher_task = asyncio.create_task(run_auto_publisher(db, r2_service))
-    logger.info("Background auto-publisher started")
+    logger.info("Background auto-publisher (Instagram) started")
+
+    # ---- Background YouTube uploader (queued YouTube videos) ----
+    from app.services.youtube_uploader import run_youtube_uploader
+
+    _youtube_uploader_task = asyncio.create_task(run_youtube_uploader(db, r2_service))
+    logger.info("Background YouTube uploader started")
 
     # ---- Background comment analysis cron (24-hour cycle) ----
     from app.services.comment_analysis_cron import run_comment_analysis_cron
@@ -150,7 +157,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         except:
             pass
 
-    for task in (_auto_publisher_task, _comment_analysis_task, _comment_reply_task, _metrics_persistence_task, _sync_analysis_task, _growth_tracking_task):
+    for task in (_auto_publisher_task, _youtube_uploader_task, _comment_analysis_task, _comment_reply_task, _metrics_persistence_task, _sync_analysis_task, _growth_tracking_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -451,7 +458,7 @@ async def api_schema():
                 "path": "/api/v1/channels/{channel_id}/videos/",
                 "description": "List videos with sync status",
                 "query_params": {
-                    "status_filter": {"type": "string", "enum": ["todo", "ready", "scheduled", "published"], "optional": True},
+                    "status_filter": {"type": "string", "enum": ["todo", "ready", "queued", "scheduled", "published"], "optional": True},
                     "verification_status": {"type": "string", "enum": ["unverified", "verified", "missing"], "optional": True},
                     "suggest_n": {"type": "integer", "optional": True, "description": "Mark top N todo videos as suggested"},
                 },
@@ -587,7 +594,7 @@ async def api_schema():
                     "videos": [
                         {
                             "video_id": "550e8400-...",
-                            "status": "scheduled",
+                            "status": "queued",
                             "youtube_video_id": "dQw4w...",
                             "scheduled_at": "2026-03-10T10:00:00+05:30",
                         },

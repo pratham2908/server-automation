@@ -14,7 +14,8 @@ class VideoStatus(str, Enum):
 
     TODO = "todo"
     READY = "ready"
-    SCHEDULED = "scheduled"
+    QUEUED = "queued"       # In internal queue — background worker will upload to platform
+    SCHEDULED = "scheduled"  # Confirmed on platform (YouTube private+publishAt, or Instagram published)
     PUBLISHED = "published"
 
 

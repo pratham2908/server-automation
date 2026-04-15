@@ -101,12 +101,12 @@ async def trigger_retention_analysis(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Video {video_id} not found",
         )
-    allowed_statuses = {"ready", "scheduled", "published"}
+    allowed_statuses = {"ready", "queued", "scheduled", "published"}
     video_status = video.get("status", "")
     if video_status not in allowed_statuses:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Video must be in ready/scheduled/published status to analyze (current: '{video_status}')",
+            detail=f"Video must be in ready/queued/scheduled/published status to analyze (current: '{video_status}')",
         )
     if not video.get("r2_object_key"):
         raise HTTPException(

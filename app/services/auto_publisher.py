@@ -147,11 +147,17 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
     logger.info("Auto-publisher: checking schedule queue...")
     now = now_ist()
 
+    # Filter: only pick up Instagram-platform entries
     due_entries = await db.schedule_queue.find(
-        {"scheduled_at": {"$lte": now}}
+        {
+            "scheduled_at": {"$lte": now},
+            "$or": [{"platform": "instagram"}, {"platform": {"$exists": False}}],
+        }
     ).to_list(length=None)
 
-    total_count = await db.schedule_queue.count_documents({})
+    total_count = await db.schedule_queue.count_documents(
+        {"$or": [{"platform": "instagram"}, {"platform": {"$exists": False}}]}
+    )
 
     if total_count == 0:
         logger.info("Auto-publisher: schedule queue is empty.")
@@ -185,9 +191,10 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
             continue
 
-        if video_doc.get("status") != "scheduled":
+        # Accept both 'queued' (new) and 'scheduled' (migration compat for existing docs)
+        if video_doc.get("status") not in ("queued", "scheduled"):
             logger.warning(
-                "Auto-publisher: video '%s' status is '%s', not 'scheduled' — removing stale queue entry",
+                "Auto-publisher: video '%s' status is '%s', not 'queued' — removing stale queue entry",
                 video_id, video_doc.get("status"),
             )
             await db.schedule_queue.delete_one({"_id": entry["_id"]})

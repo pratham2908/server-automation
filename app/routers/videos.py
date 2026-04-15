@@ -376,6 +376,7 @@ async def _get_instagram_sync_status(channel_id: str, channel: dict, db) -> dict
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "todo": {"published"},
     "ready": {"todo", "published"},
+    "queued": {"todo", "ready"},   # Cancel: queued → ready restores posting_queue entry
     "scheduled": {"todo", "published"},
     "published": set(),
 }
@@ -391,7 +392,7 @@ async def update_video_status(
     """Change a video's lifecycle status.
 
     Valid transitions (other paths use dedicated endpoints like upload/schedule):
-      todo -> published | ready -> todo, published | scheduled -> todo, published
+      todo → published | ready → todo, published | queued → todo, ready | scheduled → todo, published
     ``published`` is terminal.
     """
     from app.services.todo_engine import recompute_category
@@ -429,6 +430,21 @@ async def update_video_status(
                 logger.warning(f"Failed to delete R2 object {r2_key} for video {video_id}: {exc}")
         await db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
         update_fields["r2_object_key"] = None
+
+    # Cleanup: leaving 'queued' — remove from schedule queue
+    if old_status == "queued":
+        await db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
+        update_fields["scheduled_at"] = None
+        # Rollback to ready: restore posting_queue entry so it can be re-scheduled
+        if new_status == "ready":
+            last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+            next_pos = (last["position"] + 1) if last else 1
+            await db.posting_queue.insert_one({
+                "channel_id": channel_id,
+                "video_id": video_id,
+                "position": next_pos,
+                "added_at": now_ist(),
+            })
 
     # Cleanup: leaving 'scheduled' — remove from schedule queue
     if old_status == "scheduled":
@@ -1228,7 +1244,7 @@ async def schedule_video(
     from app.config import get_settings
     from app.services.scheduler import compute_schedule_slots
     from app.services.schedule_operation import (
-        schedule_single_video,
+        enqueue_video_for_youtube,
         schedule_single_video_instagram,
     )
 
@@ -1244,21 +1260,14 @@ async def schedule_video(
 
     platform = channel_doc.get("platform", "youtube")
 
-    if platform == "youtube":
-        youtube_service, _ = await _get_services(channel_id)
-        if youtube_service is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"No YouTube token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/youtube-token",
-            )
-    elif platform == "instagram":
+    if platform == "instagram":
         ig_service = await _get_instagram_service(channel_id)
         if ig_service is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"No Instagram token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/instagram-token",
             )
-    else:
+    elif platform not in ("youtube", "instagram"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported platform '{platform}'",
@@ -1344,10 +1353,8 @@ async def schedule_video(
 
     for video_doc, slot_dt in zip(videos_to_schedule, slots):
         if platform == "youtube":
-            result = await schedule_single_video(
+            result = await enqueue_video_for_youtube(
                 db=db,
-                r2_service=r2_service,
-                youtube_service=youtube_service,
                 channel_id=channel_id,
                 video_doc=video_doc,
                 scheduled_at=slot_dt,
@@ -1360,13 +1367,13 @@ async def schedule_video(
                 scheduled_at=slot_dt,
             )
         results.append(result)
-        if result["status"] == "scheduled":
+        if result["status"] in ("queued", "scheduled"):
             scheduled += 1
         else:
             failed += 1
 
     platform_label = "YouTube" if platform == "youtube" else "Instagram"
-    logger.success("Scheduled %d video(s) for %s channel '%s' (%d failed)", scheduled, platform_label, channel_id, failed)
+    logger.success("Queued %d video(s) for %s channel '%s' (%d failed)", scheduled, platform_label, channel_id, failed)
 
     return {
         "ok": True,
