@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, File, s
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
-from app.database import get_db
+from app.database import get_db, update_channel_task_status
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 
@@ -1690,7 +1690,9 @@ async def sync_videos(
     platform = channel.get("platform", "youtube")
 
     if platform == "instagram":
-        return await _sync_instagram_reels(channel_id, channel, body, db)
+        res = await _sync_instagram_reels(channel_id, channel, body, db)
+        await update_channel_task_status(db, channel_id, "video_sync")
+        return res
 
     # --- YouTube sync ---
     youtube_service, gemini_service = await _get_services(channel_id)
@@ -2053,6 +2055,8 @@ async def sync_videos(
         f"({published_count} published, {scheduled_count} scheduled).",
         extra={"color": "BRIGHT_GREEN"}
     )
+
+    await update_channel_task_status(db, channel_id, "video_sync")
 
     return {
         "ok": True,
