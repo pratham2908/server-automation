@@ -14,8 +14,8 @@ async def migrate():
     profile_id = str(uuid.uuid4())
     salt = bcrypt.gensalt()
     
-    email = "admin@example.com"
-    password = "password123"
+    email = "youtube-analyzer@gmail.com"
+    password = "YoutubeAnalyzer2908"
     password_hash = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
     
     profile_doc = {
