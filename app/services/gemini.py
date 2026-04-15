@@ -444,6 +444,9 @@ When computing performance_rating 0-100, weight each factor as follows (total 10
 - **views_per_subscriber**: views / channel subscriber count — reach beyond existing audience. Above 1.0 means the video reached far beyond subscribers.
 - **subscriber_count_at_analysis**: The channel's total subscriber count when this analysis was run (for context).
 
+## Audience Retention
+If `audience_retention_curve` is passed within the video data, it maps the elapsed time ratio (0.0 to 1.0) to audience watch percent. Use this to pinpoint precisely where audience drops off.
+
 ## Scoring Weightage (use exactly these weights for performance_rating)
 When computing performance_rating 0-100, weight each factor as follows (total 100%):
 - **subscribers_gained**: 25%
@@ -477,6 +480,13 @@ Return a JSON object with exactly these keys:
     "Specific takeaway 1",
     "Specific takeaway 2",
     "Specific takeaway 3"
+  ],
+  "retention_drop_offs": [
+    {{
+      "elapsed_percentage": 15.0,
+      "drop_percentage": 5.5,
+      "reasoning": "Sharp drop observed at 15% elapsed time, likely right after the hook ended."
+    }}
   ]
 }}
 
@@ -484,7 +494,8 @@ Guidelines:
 - **performance_rating**: Score 0-100 using the exact weightage above. Compute a 0-100 score per dimension, then take the weighted sum. Be consistent so ratings are comparable across videos.
 - **what_worked**: Be specific — mention the title style, content_params choices, engagement patterns. Reference actual numbers.
 - **what_didnt**: Be honest and constructive. If the video underperformed on a metric, explain why that matters and what could change.
-- **key_learnings**: 2-4 concise, actionable takeaways. These will be aggregated across all videos to identify channel-wide patterns."""
+- **key_learnings**: 2-4 concise, actionable takeaways. These will be aggregated across all videos to identify channel-wide patterns.
+- **retention_drop_offs**: If the `audience_retention_curve` is provided in the video data, analyze it to identify any significant points where viewers click away. `elapsed_percentage` is the relative time in the video (0-100), `drop_percentage` is how much retention was lost at that point, and `reasoning` is your hypothesis for why it happened."""
 
     @staticmethod
     def _build_content_prompt(

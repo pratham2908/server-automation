@@ -296,6 +296,37 @@ class YouTubeService:
 
         return result
 
+    def get_audience_retention_curve(self, youtube_video_id: str) -> dict[float, float]:
+        """Fetch the audience retention curve for a specific video.
+        
+        Returns a dict mapping elapsedVideoTimeRatio (0.0 to 1.0) to audienceWatchRatio (0.0 to 1.0+).
+        """
+        if not self._youtube_analytics:
+            return {}
+
+        today = now_ist().strftime("%Y-%m-%d")
+        try:
+            response = (
+                self._youtube_analytics.reports()
+                .query(
+                    ids="channel==MINE",
+                    startDate="2005-01-01",
+                    endDate=today,
+                    dimensions="elapsedVideoTimeRatio",
+                    metrics="audienceWatchRatio",
+                    filters=f"video=={youtube_video_id}",
+                )
+                .execute()
+            )
+            
+            curve = {}
+            for row in response.get("rows", []):
+                curve[float(row[0])] = float(row[1])
+            return curve
+        except Exception as exc:
+            logger.warning("YouTube Analytics retention query failed for %s: %s", youtube_video_id, exc)
+            return {}
+
     def get_video_stats(
         self, youtube_video_ids: list[str]
     ) -> dict[str, dict[str, Any]]:

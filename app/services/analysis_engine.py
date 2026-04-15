@@ -196,11 +196,16 @@ async def run_analysis(
             round(views / subscriber_count, 4) if subscriber_count > 0 else 0
         )
 
+        curve = {}
+        if platform == "youtube" and youtube_service and v.get("youtube_video_id"):
+            curve = youtube_service.get_audience_retention_curve(v["youtube_video_id"])
+            
         video_data_for_gemini = {
             "title": v.get("title", ""),
             "category": v.get("category", ""),
             "content_params": v.get("content_params") or {},
             "stats": stats,
+            "audience_retention_curve": curve,
         }
 
         # Call Gemini for per-video analysis
