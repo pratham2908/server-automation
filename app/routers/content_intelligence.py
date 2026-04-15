@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db
+from app.database import get_db, get_channel_platform
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 
@@ -48,7 +48,7 @@ async def trigger_scan(
             detail="Gemini service not initialised",
         )
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
     results = []
 
     if source in (None, "competitor"):
@@ -103,7 +103,7 @@ async def generate_insights_endpoint(
             detail="Gemini service not initialised",
         )
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
 
     try:
         result = await generate_insights(

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
-from app.database import get_db
+from app.database import get_db, get_channel_platform
 from app.dependencies import verify_api_key, get_current_profile
 from app.models.profile import ProfileInDB
 from app.logger import get_logger
@@ -358,7 +358,7 @@ async def refresh_channel(
             detail=f"Channel '{channel_id}' not found",
         )
 
-    platform = doc.get("platform", "youtube")
+    platform = get_channel_platform(doc)
 
     if platform == "instagram":
         return await _refresh_instagram_channel(channel_id, doc, db)
@@ -650,7 +650,7 @@ async def add_competitor(
     if not channel:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
     comp_platform = "instagram" if body.instagram_username else "youtube"
 
     # -- Validate input --

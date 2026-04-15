@@ -5,7 +5,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db
+from app.database import get_db, get_channel_platform
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.timezone import IST, UTC
@@ -56,7 +56,7 @@ async def run_analysis_update(
             detail=f"Channel '{channel_id}' not found",
         )
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
 
     youtube_service, gemini_service = await _get_services(channel_id)
     instagram_service = await _get_instagram_service(channel_id)

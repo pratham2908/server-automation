@@ -10,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db
+from app.database import get_db, get_channel_platform
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.timezone import now_ist
@@ -57,7 +57,7 @@ async def create_preview_analysis(
                 detail=f"Previous preview '{previous_preview_id}' not found (may have expired)",
             )
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
     preview_id = str(uuid.uuid4())
     now = now_ist()
 

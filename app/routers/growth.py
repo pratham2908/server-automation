@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from typing import List, Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.database import get_db
+from app.database import get_db, get_channel_platform
 from app.services.growth_tracking import GrowthTrackingService
 from app.routers.observability import verify_api_key
 
@@ -63,7 +63,7 @@ async def trigger_growth_snapshot(
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
         
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
     subs, views = 0, 0
     metadata = {}
     

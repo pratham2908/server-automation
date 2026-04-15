@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, File, s
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
-from app.database import get_db, update_channel_task_status
+from app.database import get_db, update_channel_task_status, get_channel_platform
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 
@@ -275,7 +275,7 @@ async def _get_sync_status(channel_id: str, db) -> dict:
     if not channel:
         return {"available": False, "reason": "Channel not found"}
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
 
     if platform == "instagram":
         return await _get_instagram_sync_status(channel_id, channel, db)
@@ -674,7 +674,7 @@ async def repost_video(
             # For YouTube, we can upload immediately with publishAt.
             # For Instagram, it stays in the server queue for the auto-publisher.
             channel_doc = await db.channels.find_one({"channel_id": channel_id})
-            platform = channel_doc.get("platform", "youtube") if channel_doc else "youtube"
+            platform = get_channel_platform(channel_doc) if channel_doc else "youtube"
 
             if platform == "youtube":
                 from app.services.schedule_operation import schedule_single_video
@@ -1108,7 +1108,7 @@ async def create_video(
                 detail="content_params must be a valid JSON object",
             )
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
 
     # Parse tags (comma-separated or JSON array) - YouTube only
     parsed_tags: list[str] = []
@@ -1687,7 +1687,7 @@ async def sync_videos(
             detail=f"Channel '{channel_id}' not found",
         )
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
 
     if platform == "instagram":
         res = await _sync_instagram_reels(channel_id, channel, body, db)

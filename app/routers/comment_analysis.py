@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
-from app.database import get_db
+from app.database import get_db, get_channel_platform
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.timezone import now_ist
@@ -111,7 +111,7 @@ async def trigger_comment_analysis(
             detail=f"Channel '{channel_id}' not found",
         )
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
 
     from app.main import youtube_service_manager, instagram_service_manager, gemini_service  # type: ignore[import]
 

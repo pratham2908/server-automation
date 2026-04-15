@@ -183,3 +183,17 @@ async def update_channel_task_status(db: AsyncIOMotorDatabase, channel_id: str, 
         {"channel_id": channel_id},
         {"$set": {f"last_tasks.{task_name}": now_ist()}},
     )
+
+
+def get_channel_platform(channel: dict | None) -> str:
+    """Resolve the platform for a channel document, with graceful fallback.
+
+    If 'platform' is missing or 'youtube', but 'instagram_user_id' exists
+    and 'youtube_channel_id' is missing, it returns 'instagram'.
+    """
+    if not channel:
+        return "youtube"
+    platform = channel.get("platform", "youtube")
+    if platform == "youtube" and channel.get("instagram_user_id") and not channel.get("youtube_channel_id"):
+        return "instagram"
+    return platform

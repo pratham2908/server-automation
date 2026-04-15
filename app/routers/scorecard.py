@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db
+from app.database import get_db, get_channel_platform
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 
@@ -51,7 +51,7 @@ async def create_scorecard(
             detail="Gemini service not initialised",
         )
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
 
     from app.services.scorecard import generate_scorecard
 

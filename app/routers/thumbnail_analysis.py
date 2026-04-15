@@ -10,7 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db
+from app.database import get_db, get_channel_platform
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.timezone import now_ist
@@ -66,7 +66,7 @@ async def create_thumbnail_analysis(
                 detail=f"Previous analysis '{previous_analysis_id}' not found (may have expired)",
             )
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
     analysis_id = str(uuid.uuid4())
     now = now_ist()
 
@@ -149,7 +149,7 @@ async def create_video_thumbnail_analysis(
     if not video:
         raise HTTPException(status_code=404, detail=f"Video '{video_id}' not found")
 
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
 
     if previous_analysis_id:
         prev = await db.thumbnail_analysis.find_one({"analysis_id": previous_analysis_id})
