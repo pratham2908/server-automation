@@ -759,6 +759,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
    - **Description**: A search-optimized description. YouTube: SEO-rich, includes keywords. Instagram: Minimalist, hashtag strategy, viral caption.
    - **Tags**: A comprehensive list of tags/hashtags. (Strict: max 500 characters total for YT).
    - **Thumbnail Selection**: Identify the exact timestamp of the most visually "wow" or representative moment for a thumbnail. Provide reasoning.
+3. **Retention Curve Prediction**: Based on the pacing and narrative structure, predict the full retention curve. Provide a data point for every 5% interval (0.0, 0.05, 0.1, ..., 1.0) where 1.0 = 100% of viewers.
 
 ## Rules
 
@@ -807,10 +808,18 @@ Return a JSON object with exactly these keys:
     "thumbnail_reasoning": "Highest visual drama with primary subject clearly visible"
   }},
   "narrative_structure": "tutorial",
-  "recommendations": ["Add B-roll at 45s"]
+  "recommendations": ["Add B-roll at 45s"],
+  "predicted_retention_curve": {{
+    "0.0": 1.0,
+    "0.05": 0.85,
+    "0.1": 0.78,
+    "0.15": 0.75,
+    "0.2": 0.72,
+    "1.0": 0.35
+  }}
 }}
 
-Be thorough, objective, and data-driven."""
+Be thorough, objective, and data-driven. Predict the curve at 5% intervals exactly."""
 
     # ------------------------------------------------------------------
     # Comment sentiment classification (for auto-reply)
