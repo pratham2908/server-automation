@@ -199,15 +199,13 @@ class YouTubeService:
         retention, reach (impressions/CTR), and satisfaction (shares/subs).
         """
         if not self._youtube_analytics:
+            logger.warning("YouTube Analytics service not initialised for this channel.")
             return {}
 
         analytics: dict[str, dict[str, Any]] = {}
         today = now_ist().strftime("%Y-%m-%d")
 
-        # Metrics for 2026: including packaging (impressions) and quality (engaged views)
-        # Note: 'engagedViews' and 'impressions' might have slightly different names 
-        # based on API version/permissions, but 'impressions' and 'impressionClickThroughRate' 
-        # are standard.
+        # Standard metrics for deep video performance analysis
         metrics_list = [
             "averageViewPercentage",
             "averageViewDuration",
@@ -222,6 +220,7 @@ class YouTubeService:
         for i in range(0, len(youtube_video_ids), 40):
             batch = youtube_video_ids[i : i + 40]
             try:
+                logger.info(f"📊 Requesting Analytics report for batch of {len(batch)} videos...")
                 response = (
                     self._youtube_analytics.reports()
                     .query(
@@ -236,32 +235,43 @@ class YouTubeService:
                     .execute()
                 )
             except Exception as exc:
-                logger.warning(
-                    "YouTube Analytics query failed: %s — skipping analytics for this batch.",
-                    exc,
-                )
+                logger.error(f"❌ YouTube Analytics query failed: {exc}")
                 continue
 
             headers = [h["name"] for h in response.get("columnHeaders", [])]
-            for row in response.get("rows", []):
-                row_dict = dict(zip(headers, row))
-                vid = row_dict.get("video")
-                if vid:
-                    analytics[vid] = {
-                        "avg_percentage_viewed": round(
-                            float(row_dict.get("averageViewPercentage", 0)), 2
-                        ),
-                        "avg_view_duration_seconds": round(
-                            float(row_dict.get("averageViewDuration", 0))
-                        ),
-                        "estimated_minutes_watched": round(
-                            float(row_dict.get("estimatedMinutesWatched", 0)), 1
-                        ),
-                        "subscribers_gained": int(row_dict.get("subscribersGained", 0)),
-                        "shares": int(row_dict.get("shares", 0)),
-                        "impressions": int(row_dict.get("impressions", 0)),
-                        "ctr": round(float(row_dict.get("impressionClickThroughRate", 0)) * 100, 2),
-                    }
+            rows = response.get("rows", [])
+            
+            logger.info(f"✅ Analytics response received: {len(rows)} matching rows found for batch.")
+            
+            # Check for videos that were requested but didn't return a row
+            returned_vids = {row[0] if "video" in headers else None for row in rows}
+            missing_vids = [vid for vid in batch if vid not in returned_vids]
+            if missing_vids:
+                logger.warning(f"⚠️ Analytics data NOT READY for {len(missing_vids)} videos: {missing_vids}")
+
+            for row in rows:
+                try:
+                    row_dict = dict(zip(headers, row))
+                    vid = row_dict.get("video")
+                    if vid:
+                        # Use .get() + or 0 to handle cases where API returns None for a column
+                        analytics[vid] = {
+                            "avg_percentage_viewed": round(
+                                float(row_dict.get("averageViewPercentage") or 0), 2
+                            ),
+                            "avg_view_duration_seconds": round(
+                                float(row_dict.get("averageViewDuration") or 0)
+                            ),
+                            "estimated_minutes_watched": round(
+                                float(row_dict.get("estimatedMinutesWatched") or 0), 1
+                            ),
+                            "subscribers_gained": int(row_dict.get("subscribersGained") or 0),
+                            "shares": int(row_dict.get("shares") or 0),
+                            "impressions": int(row_dict.get("impressions") or 0),
+                            "ctr": round(float(row_dict.get("impressionClickThroughRate") or 0) * 100, 2),
+                        }
+                except (ValueError, TypeError) as parse_exc:
+                    logger.warning(f"Failed to parse analytics row for video {vid}: {parse_exc}")
 
         return analytics
 
