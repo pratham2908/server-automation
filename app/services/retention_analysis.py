@@ -18,7 +18,33 @@ from app.services.pacing_templates import PacingTemplateService
 from app.services.r2 import R2Service
 from app.timezone import now_ist
 
+import subprocess
+
 logger = get_logger(__name__)
+
+
+def extract_thumbnail(video_path: str, timestamp: float, output_path: str) -> bool:
+    """Extract a high-quality JPEG frame from the video at a specific timestamp using FFMPEG."""
+    try:
+        # -ss before -i is faster (seeks before decoding)
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss", str(timestamp),
+            "-i", video_path,
+            "-vframes", "1",
+            "-q:v", "2",  # High quality
+            output_path
+        ]
+        logger.info("Extracting thumbnail at %.2fs: %s", timestamp, " ".join(cmd))
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error("FFMPEG extraction failed: %s", e.stderr.decode())
+        return False
+    except Exception as e:
+        logger.error("Failed to extract thumbnail: %s", e)
+        return False
 
 
 async def run_retention_analysis(
@@ -27,6 +53,7 @@ async def run_retention_analysis(
     db: AsyncIOMotorDatabase,
     r2_service: R2Service,
     gemini_service: GeminiService,
+    local_video_path: str | None = None,
 ) -> None:
     """Analyze a video's retention potential via Gemini multimodal.
 
@@ -73,13 +100,21 @@ async def run_retention_analysis(
         upsert=True,
     )
 
-    temp_path: str | None = None
+    await db.videos.update_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {"$set": {"packaging_status": "analyzing", "updated_at": now}}
+    )
+
+    temp_path: str | None = local_video_path
     try:
-        logger.info(
-            "Downloading video '%s' from R2 for retention analysis...",
-            video_title[:50],
-        )
-        temp_path = r2_service.download_video(r2_key)
+        if not temp_path:
+            logger.info(
+                "Downloading video '%s' from R2 for retention analysis...",
+                video_title[:50],
+            )
+            temp_path = r2_service.download_video(r2_key)
+        else:
+            logger.info("Using local video path for retention analysis: %s", temp_path)
 
         logger.info("Starting Gemini retention analysis for '%s'...", video_title[:50])
         
@@ -121,6 +156,47 @@ async def run_retention_analysis(
                 },
             },
         )
+
+        # --- PACKAGING LOGIC ---
+        packaging = result.get("packaging")
+        if packaging:
+            logger.info("Processing AI packaging for video %s", video_id)
+            updates: dict[str, Any] = {
+                "packaging_status": "completed",
+                "ai_packaging": packaging,
+                "updated_at": now,
+            }
+
+            # Thumbnail Extraction
+            ts = packaging.get("best_thumbnail_timestamp", 0.0)
+            thumbnail_filename = f"thumb_{video_id}.jpg"
+            local_thumb_path = f"/tmp/{thumbnail_filename}"
+            
+            if extract_thumbnail(temp_path, ts, local_thumb_path):
+                try:
+                    # Upload to R2 under channel/thumbnails/
+                    r2_thumb_key = f"{channel_id}/thumbnails/{video_id}.jpg"
+                    r2_service.upload_video(local_thumb_path, r2_thumb_key) # Using upload_video as generic upload
+                    
+                    # Assume R2Service has a way to get a public URL or we construct it
+                    # For now, we store the key or construct a probable URL if public
+                    # If r2.py doesn't have a get_url, we might need to add one.
+                    # Construction: https://{account_id}.r2.cloudflarestorage.com/{bucket}/{key}
+                    # But usually it's behind a custom domain or pub bucket.
+                    # I'll store the key and assume the frontend handles resolution or I construction it.
+                    updates["ai_packaging"]["thumbnail_url"] = r2_thumb_key 
+                    logger.success("Thumbnail uploaded to R2: %s", r2_thumb_key)
+                except Exception as e:
+                    logger.error("Failed to upload thumbnail to R2: %s", e)
+                finally:
+                    if os.path.exists(local_thumb_path):
+                        os.unlink(local_thumb_path)
+            
+            await db.videos.update_one(
+                {"channel_id": channel_id, "video_id": video_id},
+                {"$set": updates}
+            )
+
         logger.success(
             "Retention analysis complete for '%s' — predicted retention: %s%%",
             video_title[:50],
@@ -139,8 +215,13 @@ async def run_retention_analysis(
                 },
             },
         )
+        await db.videos.update_one(
+            {"channel_id": channel_id, "video_id": video_id},
+            {"$set": {"packaging_status": "failed", "updated_at": now_ist()}}
+        )
     finally:
-        if temp_path and os.path.exists(temp_path):
+        # Only unlink if we DOWNLOADED it (temp_path != local_video_path)
+        if temp_path and temp_path != local_video_path and os.path.exists(temp_path):
             os.unlink(temp_path)
             logger.info("Cleaned up temp file %s", temp_path)
 

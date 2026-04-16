@@ -19,6 +19,15 @@ class VideoStatus(str, Enum):
     PUBLISHED = "published"
 
 
+class AIPackagingStatus(str, Enum):
+    """Status of the AI packaging (titles, thumbs, etc.) analysis."""
+
+    PENDING = "pending"
+    ANALYZING = "analyzing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class VideoMetadata(BaseModel):
     """Performance metrics (populated during sync / stats fetch).
 
@@ -59,6 +68,12 @@ class Video(BaseModel):
     youtube_video_id: Optional[str] = None
     instagram_media_id: Optional[str] = None
     r2_object_key: Optional[str] = None
+    thumbnail_url: Optional[str] = Field(None, description="Direct URL to the video thumbnail")
+    packaging_status: AIPackagingStatus = AIPackagingStatus.PENDING
+    ai_packaging: Optional[dict] = Field(
+        None,
+        description="Gemini-generated content packaging (suggested_titles, suggested_description, suggested_tags, best_thumbnail_timestamp, thumbnail_url, reasoning)",
+    )
     metadata: VideoMetadata = Field(default_factory=VideoMetadata)
     content_params: Optional[dict[str, str]] = Field(
         None,

@@ -12,6 +12,10 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, File, s
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
+import os
+import shutil
+import tempfile
+
 from app.database import get_db, update_channel_task_status, get_channel_platform
 from app.dependencies import verify_api_key
 from app.logger import get_logger
@@ -43,6 +47,7 @@ def _trigger_retention_analysis(
     channel_id: str,
     video_id: str,
     db: "AsyncIOMotorDatabase",
+    local_video_path: str | None = None,
 ) -> None:
     """Fire a background task for video retention analysis."""
     import asyncio
@@ -54,7 +59,10 @@ def _trigger_retention_analysis(
         return
 
     asyncio.create_task(
-        run_retention_analysis(channel_id, video_id, db, r2_service, gemini_service)
+        run_retention_analysis(
+            channel_id, video_id, db, r2_service, gemini_service, 
+            local_video_path=local_video_path
+        )
     )
 
 
@@ -1019,8 +1027,14 @@ async def upload_video(
     r2 = _get_r2()
     r2_key = f"{channel_id}/{video_id}.mp4"
 
-    # Stream file to R2.
-    r2.upload_video(file.file, r2_key)
+    # Save to temp file for early analysis
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        temp_path = tmp.name
+
+    # Stream file to R2 from local temp
+    with open(temp_path, "rb") as f:
+        r2.upload_video(f, r2_key)
 
     now = now_ist()
 
@@ -1060,7 +1074,7 @@ async def upload_video(
     logger.success("📤 Uploaded video '%s' to R2 — queue position %d", video.get("title", video_id)[:50], next_pos)
 
     # Fire background retention analysis
-    _trigger_retention_analysis(channel_id, video_id, db)
+    _trigger_retention_analysis(channel_id, video_id, db, local_video_path=temp_path)
 
     return {"ok": True, "video": updated_video, "queue_position": next_pos}
 
@@ -1142,7 +1156,15 @@ async def create_video(
     vid_id = str(uuid.uuid4())
     r2 = _get_r2()
     r2_key = f"{channel_id}/{vid_id}.mp4"
-    r2.upload_video(file.file, r2_key)
+    
+    # Save to temp file for early analysis
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        temp_path = tmp.name
+
+    # Stream file to R2 from local temp
+    with open(temp_path, "rb") as f:
+        r2.upload_video(f, r2_key)
 
     now = now_ist()
     doc = {
@@ -1207,7 +1229,13 @@ async def create_video(
 
     # Fire background retention analysis if the video is ready (has R2 file)
     if doc["status"] == "ready":
-        _trigger_retention_analysis(channel_id, vid_id, db)
+        _trigger_retention_analysis(channel_id, vid_id, db, local_video_path=temp_path)
+    else:
+        # If not "ready" (e.g. scheduled immediately), we still might want analysis? 
+        # For now, following original logic of only trigger if status=="ready".
+        # But we should probably delete the temp file if we DON'T trigger analysis.
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
     return {"ok": True, "video": doc, "queue_position": next_pos}
 
@@ -1381,6 +1409,53 @@ async def schedule_video(
         "failed": failed,
         "videos": results,
     }
+
+
+# ------------------------------------------------------------------
+# PATCH /{video_id}/metadata  –  bulk update video metadata
+# ------------------------------------------------------------------
+
+class MetadataUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
+    tag_mode: Optional[str] = "replace" # or "append"
+    category: Optional[str] = None
+
+@router.patch("/{video_id}/metadata")
+async def update_video_metadata(
+    channel_id: str,
+    video_id: str,
+    body: MetadataUpdateRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """General endpoint to update video title, description, tags, or category."""
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+
+    upd: dict = {"updated_at": now_ist()}
+    if body.title is not None:
+        upd["title"] = body.title
+    if body.description is not None:
+        upd["description"] = body.description
+    if body.category is not None:
+        upd["category"] = body.category
+    
+    if body.tags is not None:
+        if body.tag_mode == "append":
+            current_tags = video.get("tags") or []
+            new_tags = list(set(current_tags + body.tags))
+            upd["tags"] = new_tags
+        else:
+            upd["tags"] = body.tags
+
+    await db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
+    logger.success("Updated metadata for video '%s'", video.get("title", video_id)[:50])
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------

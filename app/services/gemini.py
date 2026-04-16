@@ -741,7 +741,9 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                 "in a way that might hurt retention."
             )
 
-        return f"""You are an elite Video Retention Analyst and AI Content Auditor. Your objective is to analyze this video file to reverse-engineer its engagement structure and predict audience retention.
+        return f"""You are an elite Video Strategist and AI Content Auditor. Your objective is twofold:
+1. **Retention Analysis**: Analyze this video file to reverse-engineer its engagement structure and predict audience retention.
+2. **"God Mode" Packaging**: Generate high-conversion packaging (Titles, Description, Tags) and identify the single best frame for a thumbnail.
 
 ## Video Context
 - **Title**: "{video_title}"
@@ -749,21 +751,24 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 - {platform_context}
 {template_section}
 
-## Analysis Task
+## Analysis Tasks
 
-Perform a deep-dive analysis on the pacing, visual hooks, and overall narrative or structural flow of this video. Extract exact timestamps of significant visual changes, score the hook, and predict audience retention.
+1. **Retention Analysis**: Perform a deep-dive analysis on pacing, visual hooks, and narrative flow. Extract exact timestamps of significant visual changes, score the hook, and predict audience retention.
+2. **Packaging Optimization**: 
+   - **Titles**: Generate 3-5 high-CTR title options. For YouTube, prioritize search intent vs. curiosity gap. For Instagram, prioritize punchy, shareable hooks.
+   - **Description**: A search-optimized description. YouTube: SEO-rich, includes keywords. Instagram: Minimalist, hashtag strategy, viral caption.
+   - **Tags**: A comprehensive list of tags/hashtags. (Strict: max 500 characters total for YT).
+   - **Thumbnail Selection**: Identify the exact timestamp of the most visually "wow" or representative moment for a thumbnail. Provide reasoning.
 
 ## Rules
 
-1. **The 5-Second Rule**: Be hyper-critical of the first 5 seconds. If there is no significant visual change, motion, or compelling audio hook in this window, flag it as HIGH RISK. Score the hook ruthlessly.
-
-2. **Visual Pacing**: Measure the frequency of scene cuts, major on-screen motion, or prominent visual transitions. Note every significant visual change with its exact timestamp.
-
-3. **Objective Extraction**: Do NOT provide subjective praise. Focus on structural data: what happens, when it happens, and how long it takes. Be specific with timestamps.
-
-4. **Drop-Off Prediction**: Identify moments where viewers are most likely to leave. Common causes: slow pacing, repetitive content, confusing narrative, long static shots, weak payoff after buildup.
-
-5. **Retention Prediction**: Based on the video's structure, pacing, hook quality, and content flow, predict the average percentage of the video that viewers will watch.
+1. **Character Limits (CRITICAL)**:
+   - YouTube Title: Max 100 characters.
+   - YouTube Tags: Total combined length under 500 characters.
+   - Instagram Caption: Optimized for the "more" click.
+2. **The 5-Second Rule**: Be hyper-critical of the first 5 seconds. Flag it as HIGH RISK if no visual change occurs.
+3. **Objective Data**: Focus on structural data: what happens, when, and how long.
+4. **Thumbnail Reasoning**: Explain why that specific timestamp is the best "click-bait" frame (e.g., "High-action collision at 12.4s").
 
 ## Required Output Format
 
@@ -774,71 +779,38 @@ Return a JSON object with exactly these keys:
   "predicted_drop_off_points": [
     {{
       "timestamp_seconds": 8.5,
-      "reason": "Static talking head with no visual change for 6 seconds after hook",
+      "reason": "Static talking head with no visual change",
       "severity": 7
     }}
   ],
   "hook_analysis": {{
     "score": 72,
     "risk_level": "medium",
-    "first_frame_description": "Close-up of product on white background with bold text overlay",
-    "visual_change_within_5s": true,
-    "audio_hook_present": true,
-    "text_overlay_present": true,
-    "notes": [
-      "Strong opening visual but audio hook could be sharper",
-      "Text overlay appears at 1.2s — good for grabbing scanning viewers"
-    ]
+    "notes": ["Strong visual opening at 0.5s"]
   }},
   "pacing_analysis": {{
     "total_scene_cuts": 24,
     "avg_cut_interval_seconds": 3.2,
-    "longest_static_segment_seconds": 8.5,
     "pacing_score": 68,
     "visual_change_timestamps": [
-      {{
-        "timestamp_seconds": 0.0,
-        "description": "Opening frame — product reveal with zoom-in",
-        "transition_type": "zoom"
-      }},
-      {{
-        "timestamp_seconds": 2.8,
-        "description": "Cut to presenter speaking to camera",
-        "transition_type": "hard_cut"
-      }}
+      {{ "timestamp_seconds": 0.0, "description": "Intro", "transition_type": "zoom" }}
     ]
   }},
-  "narrative_structure": "problem-solution",
-  "strengths": [
-    "Strong opening hook with immediate visual interest",
-    "Good pacing in first 30 seconds with frequent cuts"
-  ],
-  "weaknesses": [
-    "Middle section (45s-70s) has extended talking head with no B-roll",
-    "No clear payoff or callback to the hook's promise"
-  ],
-  "recommendations": [
-    "Add B-roll or visual overlays during the explanation section (45s-70s)",
-    "Insert a pattern interrupt around the 60-second mark to recapture attention",
-    "Tighten the ending — current outro drags and will cause late drop-offs"
-  ]
+  "packaging": {{
+    "suggested_titles": [
+      "I built a $1,000,000 PC in 24 hours",
+      "Why your PC is slow (and how to fix it)"
+    ],
+    "suggested_description": "In this video, we break down...",
+    "suggested_tags": ["pc building", "tech", "gaming"],
+    "best_thumbnail_timestamp": 12.4,
+    "thumbnail_reasoning": "Highest visual drama with primary subject clearly visible"
+  }},
+  "narrative_structure": "tutorial",
+  "recommendations": ["Add B-roll at 45s"]
 }}
 
-## Field Guidelines
-
-- **predicted_avg_retention_percent**: Your best estimate (0-100) of what percentage of the video the average viewer will watch. Be realistic — most YouTube videos average 40-60%. Only exceptional videos hit 70%+.
-- **predicted_drop_off_points**: List specific timestamps where significant viewer loss is predicted. Include the reason and severity (1-10). Focus on the 3-5 most impactful points.
-- **hook_analysis**: Deep analysis of the first 5 seconds.
-  - `score`: 0-100. Below 50 = high risk of immediate bounce. Above 80 = excellent hook.
-  - `risk_level`: "low" (score >= 70), "medium" (40-69), "high" (< 40).
-  - Include every observable element: what's on screen, audio, text overlays.
-- **pacing_analysis**: Every significant visual change gets a timestamp entry.
-  - `transition_type`: one of hard_cut, fade, dissolve, zoom, pan, whip, slide, motion_change, other.
-  - `pacing_score`: 0-100 based on variety, rhythm, and appropriateness for the content type.
-- **narrative_structure**: One of: linear, problem-solution, listicle, tutorial, montage, story-arc, vlog, comparison, reveal, other.
-- **strengths / weaknesses / recommendations**: 2-5 items each. Be specific with timestamps. No generic advice.
-
-Be thorough, objective, and data-driven. Every claim must reference a specific moment in the video."""
+Be thorough, objective, and data-driven."""
 
     # ------------------------------------------------------------------
     # Comment sentiment classification (for auto-reply)
