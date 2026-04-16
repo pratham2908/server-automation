@@ -1421,6 +1421,7 @@ class MetadataUpdateRequest(BaseModel):
     tags: Optional[list[str]] = None
     tag_mode: Optional[str] = "replace" # or "append"
     category: Optional[str] = None
+    thumbnail_url: Optional[str] = None
 
 @router.patch("/{video_id}/metadata")
 async def update_video_metadata(
@@ -1429,7 +1430,7 @@ async def update_video_metadata(
     body: MetadataUpdateRequest,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """General endpoint to update video title, description, tags, or category."""
+    """General endpoint to update video title, description, tags, category, or thumbnail."""
     video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
     if not video:
         raise HTTPException(
@@ -1444,6 +1445,8 @@ async def update_video_metadata(
         upd["description"] = body.description
     if body.category is not None:
         upd["category"] = body.category
+    if body.thumbnail_url is not None:
+        upd["thumbnail_url"] = body.thumbnail_url
     
     if body.tags is not None:
         if body.tag_mode == "append":

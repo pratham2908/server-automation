@@ -176,16 +176,14 @@ async def run_retention_analysis(
                 try:
                     # Upload to R2 under channel/thumbnails/
                     r2_thumb_key = f"{channel_id}/thumbnails/{video_id}.jpg"
-                    r2_service.upload_video(local_thumb_path, r2_thumb_key) # Using upload_video as generic upload
                     
-                    # Assume R2Service has a way to get a public URL or we construct it
-                    # For now, we store the key or construct a probable URL if public
-                    # If r2.py doesn't have a get_url, we might need to add one.
-                    # Construction: https://{account_id}.r2.cloudflarestorage.com/{bucket}/{key}
-                    # But usually it's behind a custom domain or pub bucket.
-                    # I'll store the key and assume the frontend handles resolution or I construction it.
-                    updates["ai_packaging"]["thumbnail_url"] = r2_thumb_key 
-                    logger.success("Thumbnail uploaded to R2: %s", r2_thumb_key)
+                    with open(local_thumb_path, "rb") as f:
+                        r2_service.upload_video(f, r2_thumb_key)
+                    
+                    # Generate a presigned URL for the frontend to render
+                    thumb_url = r2_service.generate_presigned_url(r2_thumb_key, expires_in=604800) # 7 days
+                    updates["ai_packaging"]["thumbnail_url"] = thumb_url
+                    logger.success("Thumbnail uploaded and URL generated: %s", thumb_url)
                 except Exception as e:
                     logger.error("Failed to upload thumbnail to R2: %s", e)
                 finally:
