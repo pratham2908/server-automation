@@ -27,15 +27,11 @@ _DEFAULT_HOUR = 3  # 03:00 IST
 _INTERVAL_SECONDS = 86_400  # 24 hours
 
 
-async def _get_analysis_hour(db: AsyncIOMotorDatabase) -> int:
+async def _get_config(db: AsyncIOMotorDatabase) -> dict:
     """Read the configured analysis hour from the ``config`` collection.
-
-    Returns an int 0-23 (IST).  Falls back to ``_DEFAULT_HOUR`` if not set.
     """
     doc = await db.config.find_one({"key": "comment_analysis_config"})
-    if doc:
-        return int(doc.get("analysis_hour", _DEFAULT_HOUR))
-    return _DEFAULT_HOUR
+    return doc or {}
 
 
 def _seconds_until_hour(target_hour: int) -> float:
@@ -62,17 +58,26 @@ async def run_comment_analysis_cron(
     logger.info("Comment analysis cron started (default hour: %02d:00 IST)", _DEFAULT_HOUR)
 
     while True:
-        target_hour = await _get_analysis_hour(db)
+        config = await _get_config(db)
+        target_hour = int(config.get("analysis_hour", _DEFAULT_HOUR))
+        enabled = config.get("enabled", True)
+        
         wait_seconds = _seconds_until_hour(target_hour)
 
         next_run = now_ist() + timedelta(seconds=wait_seconds)
         logger.info(
-            "⏰ Comment analysis cron: next run at %s IST (in %.0f min)",
+            "⏰ Comment analysis cron: next run at %s IST (in %.0f min, enabled=%s)",
             next_run.strftime("%Y-%m-%d %H:%M"),
             wait_seconds / 60,
+            enabled,
         )
 
         await asyncio.sleep(wait_seconds)
+        
+        if not enabled:
+            logger.info("Comment analysis cron: disabled via config — skipping this cycle")
+            continue
+            
         from app.services.metrics import metrics_service
 
         try:

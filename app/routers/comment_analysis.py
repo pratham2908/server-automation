@@ -35,6 +35,7 @@ config_router = APIRouter(
 
 class CommentAnalysisConfigUpdate(BaseModel):
     analysis_hour: int = Field(..., ge=0, le=23, description="Hour of day (0-23) in IST when the cron runs")
+    enabled: Optional[bool] = Field(None, description="Whether the automated daily analysis is enabled")
 
 
 @config_router.get("/")
@@ -50,6 +51,7 @@ async def get_comment_analysis_config(
     return {
         "key": "comment_analysis_config",
         "analysis_hour": 3,
+        "enabled": True,
         "description": "Default — not yet customised. Cron runs daily at 03:00 IST.",
     }
 
@@ -69,13 +71,17 @@ async def update_comment_analysis_config(
     The cron reads this value before each sleep cycle, so changes
     take effect from the next scheduled run (no server restart needed).
     """
+    update_fields: dict = {
+        "key": "comment_analysis_config",
+        "analysis_hour": body.analysis_hour,
+        "updated_at": now_ist(),
+    }
+    if body.enabled is not None:
+        update_fields["enabled"] = body.enabled
+
     await db.config.update_one(
         {"key": "comment_analysis_config"},
-        {"$set": {
-            "key": "comment_analysis_config",
-            "analysis_hour": body.analysis_hour,
-            "updated_at": now_ist(),
-        }},
+        {"$set": update_fields},
         upsert=True,
     )
 
