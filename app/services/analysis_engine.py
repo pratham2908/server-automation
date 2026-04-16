@@ -267,7 +267,7 @@ async def run_analysis(
                     "actual_views_per_subscriber": stats.get("views_per_subscriber"),
                     "actual_performance_rating": (ai_insight or {}).get("performance_rating"),
                     "actual_stats_snapshot": stats,
-                    "actual_retention_curve": curve,
+                    "actual_retention_curve": {str(k): v for k, v in (curve or {}).items()},
                     "actuals_populated_at": now_ist(),
                     "updated_at": now_ist(),
                 }},

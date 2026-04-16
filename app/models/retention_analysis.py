@@ -85,7 +85,7 @@ class RetentionPrediction(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     weaknesses: list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
-    predicted_retention_curve: Optional[dict[float, float]] = Field(
+    predicted_retention_curve: Optional[dict[str, float]] = Field(
         None,
         description="Gemini-predicted retention curve (ratio to percentage)",
     )
@@ -124,7 +124,10 @@ class RetentionAnalysis(BaseModel):
     actual_views_per_subscriber: Optional[float] = None
     actual_performance_rating: Optional[float] = None
     actual_stats_snapshot: Optional[dict[str, Any]] = None
-    actual_retention_curve: Optional[dict[float, float]] = None
+    actual_retention_curve: Optional[dict[str, float]] = Field(
+        None,
+        description="Actual retention curve from YouTube/Instagram",
+    )
     actuals_populated_at: Optional[datetime] = None
 
     created_at: datetime = Field(default_factory=now_ist)
