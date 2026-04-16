@@ -172,6 +172,23 @@ async def run_retention_analysis(
             thumbnail_filename = f"thumb_{video_id}.jpg"
             local_thumb_path = f"/tmp/{thumbnail_filename}"
             
+            # Auto-sync metadata to primary fields so it's persisted permanently
+            titles = packaging.get("suggested_titles")
+            if titles and isinstance(titles, list) and len(titles) > 0:
+                updates["title"] = titles[0]
+            
+            desc = packaging.get("suggested_description")
+            if desc:
+                updates["description"] = desc
+                
+            tags = packaging.get("suggested_tags")
+            if tags:
+                # Video model expects list[str]
+                if isinstance(tags, str):
+                    updates["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+                else:
+                    updates["tags"] = tags
+
             if extract_thumbnail(temp_path, ts, local_thumb_path):
                 try:
                     # Upload to R2 under channel/thumbnails/
