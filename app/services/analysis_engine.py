@@ -171,11 +171,11 @@ async def run_analysis(
                         "views", "likes", "comments", "duration_seconds",
                         "engagement_rate", "like_rate", "comment_rate",
                         "avg_percentage_viewed", "avg_view_duration_seconds",
-                        "estimated_minutes_watched",
+                        "estimated_minutes_watched", "subscribers_gained",
+                        "shares", "impressions", "ctr", "engaged_views",
                     )
                     if meta.get(k) is not None
                 }
-            stats["subscribers_gained"] = (v.get("metadata") or {}).get("subscribers_gained", 0)
         else:
             ig_id = v.get("instagram_media_id")
             meta = v.get("metadata") or {}

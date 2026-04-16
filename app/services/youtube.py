@@ -195,17 +195,28 @@ class YouTubeService:
     ) -> dict[str, dict[str, Any]]:
         """Fetch per-video analytics from the YouTube Analytics API.
 
-        Returns a dict keyed by ``youtube_video_id`` with sub-keys
-        ``avg_percentage_viewed``, ``avg_view_duration_seconds``,
-        ``estimated_minutes_watched``.
-
-        Returns an empty dict if the analytics client is unavailable.
+        Returns a dict keyed by ``youtube_video_id`` with metrics including
+        retention, reach (impressions/CTR), and satisfaction (shares/subs).
         """
         if not self._youtube_analytics:
             return {}
 
         analytics: dict[str, dict[str, Any]] = {}
         today = now_ist().strftime("%Y-%m-%d")
+
+        # Metrics for 2026: including packaging (impressions) and quality (engaged views)
+        # Note: 'engagedViews' and 'impressions' might have slightly different names 
+        # based on API version/permissions, but 'impressions' and 'impressionClickThroughRate' 
+        # are standard.
+        metrics_list = [
+            "averageViewPercentage",
+            "averageViewDuration",
+            "estimatedMinutesWatched",
+            "subscribersGained",
+            "shares",
+            "impressions",
+            "impressionClickThroughRate",
+        ]
 
         # Batch by 40 IDs to stay within filter-string limits.
         for i in range(0, len(youtube_video_ids), 40):
@@ -218,7 +229,7 @@ class YouTubeService:
                         startDate="2005-01-01",
                         endDate=today,
                         dimensions="video",
-                        metrics="averageViewPercentage,averageViewDuration,estimatedMinutesWatched",
+                        metrics=",".join(metrics_list),
                         filters=f"video=={','.join(batch)}",
                         maxResults=200,
                     )
@@ -246,55 +257,14 @@ class YouTubeService:
                         "estimated_minutes_watched": round(
                             float(row_dict.get("estimatedMinutesWatched", 0)), 1
                         ),
+                        "subscribers_gained": int(row_dict.get("subscribersGained", 0)),
+                        "shares": int(row_dict.get("shares", 0)),
+                        "impressions": int(row_dict.get("impressions", 0)),
+                        "ctr": round(float(row_dict.get("impressionClickThroughRate", 0)) * 100, 2),
                     }
 
         return analytics
 
-    def get_subscribers_gained(
-        self, youtube_video_ids: list[str]
-    ) -> dict[str, int]:
-        """Fetch subscribers gained per video from the YouTube Analytics API.
-
-        Returns a dict keyed by ``youtube_video_id`` with the number of
-        subscribers gained by each video. Returns an empty dict if the
-        analytics client is unavailable.
-        """
-        if not self._youtube_analytics:
-            return {}
-
-        result: dict[str, int] = {}
-        today = now_ist().strftime("%Y-%m-%d")
-
-        for i in range(0, len(youtube_video_ids), 40):
-            batch = youtube_video_ids[i : i + 40]
-            try:
-                response = (
-                    self._youtube_analytics.reports()
-                    .query(
-                        ids="channel==MINE",
-                        startDate="2005-01-01",
-                        endDate=today,
-                        dimensions="video",
-                        metrics="subscribersGained",
-                        filters=f"video=={','.join(batch)}",
-                        maxResults=200,
-                    )
-                    .execute()
-                )
-            except Exception as exc:
-                logger.warning(
-                    "YouTube Analytics subscribersGained query failed: %s", exc
-                )
-                continue
-
-            headers = [h["name"] for h in response.get("columnHeaders", [])]
-            for row in response.get("rows", []):
-                row_dict = dict(zip(headers, row))
-                vid = row_dict.get("video")
-                if vid:
-                    result[vid] = int(row_dict.get("subscribersGained", 0))
-
-        return result
 
     def get_audience_retention_curve(self, youtube_video_id: str) -> dict[float, float]:
         """Fetch the audience retention curve for a specific video.

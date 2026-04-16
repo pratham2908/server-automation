@@ -1478,6 +1478,13 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
             stats = item.get("statistics", {})
             content = item.get("contentDetails", {})
             yt_status = item.get("status", {})
+            
+            thumbnails = snippet.get("thumbnails", {})
+            thumbnail_url = (
+                thumbnails.get("maxres", {}).get("url") or 
+                thumbnails.get("high", {}).get("url") or 
+                thumbnails.get("default", {}).get("url", "")
+            )
 
             views = int(stats.get("viewCount", 0))
             likes = int(stats.get("likeCount", 0))
@@ -1494,6 +1501,7 @@ def _fetch_all_youtube_videos(yt, youtube_channel_id: str):
                     "published_at": snippet.get("publishedAt", ""),
                     "privacy_status": yt_status.get("privacyStatus", ""),
                     "publish_at": yt_status.get("publishAt"),
+                    "thumbnail_url": thumbnail_url,
                     "views": views,
                     "likes": likes,
                     "comments": comments,
@@ -1719,17 +1727,12 @@ async def sync_videos(
     # Fetch all YouTube videos (Data API: snippet + statistics + contentDetails).
     all_yt_videos = _fetch_all_youtube_videos(youtube_service, youtube_channel_id)
 
-    # Enrich with Analytics API data (avg_percentage_viewed, avg_view_duration, etc.)
+    # Enrich with Analytics API data (retention, reach, satisfaction)
     all_yt_ids = [v["youtube_video_id"] for v in all_yt_videos]
     analytics_data = youtube_service.get_video_analytics(all_yt_ids)
     for v in all_yt_videos:
         extra = analytics_data.get(v["youtube_video_id"], {})
         v.update(extra)
-
-    # Fetch subscribers gained per video from YouTube Analytics API.
-    subs_gained = youtube_service.get_subscribers_gained(all_yt_ids)
-    for v in all_yt_videos:
-        v["subscribers_gained"] = subs_gained.get(v["youtube_video_id"], 0)
 
     # Build a lookup from youtube_video_id → fresh stats for quick access.
     yt_stats_lookup = {v["youtube_video_id"]: v for v in all_yt_videos}
@@ -1752,6 +1755,7 @@ async def sync_videos(
             {"_id": doc["_id"]},
             {
                 "$set": {
+                    "thumbnail_url": fresh.get("thumbnail_url"),
                     "metadata.views": fresh.get("views"),
                     "metadata.likes": fresh.get("likes"),
                     "metadata.comments": fresh.get("comments"),
@@ -1763,6 +1767,10 @@ async def sync_videos(
                     "metadata.avg_view_duration_seconds": fresh.get("avg_view_duration_seconds"),
                     "metadata.estimated_minutes_watched": fresh.get("estimated_minutes_watched"),
                     "metadata.subscribers_gained": fresh.get("subscribers_gained", 0),
+                    "metadata.shares": fresh.get("shares", 0),
+                    "metadata.impressions": fresh.get("impressions", 0),
+                    "metadata.ctr": fresh.get("ctr", 0),
+                    "metadata.engaged_views": fresh.get("engaged_views", 0),
                     "updated_at": now_ist(),
                 }
             },
@@ -1977,6 +1985,7 @@ async def sync_videos(
             "suggested": False,
             "youtube_video_id": yt_id,
             "r2_object_key": None,
+            "thumbnail_url": v.get("thumbnail_url"),
             "metadata": {
                 "views": v.get("views"),
                 "likes": v.get("likes"),
@@ -1989,6 +1998,10 @@ async def sync_videos(
                 "avg_view_duration_seconds": v.get("avg_view_duration_seconds"),
                 "estimated_minutes_watched": v.get("estimated_minutes_watched"),
                 "subscribers_gained": v.get("subscribers_gained", 0),
+                "shares": v.get("shares", 0),
+                "impressions": v.get("impressions", 0),
+                "ctr": v.get("ctr", 0),
+                "engaged_views": v.get("engaged_views", 0),
             },
             "content_params": extracted_params if extracted_params else None,
             "verification_status": "unverified" if extracted_params else None,
