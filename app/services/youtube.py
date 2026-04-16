@@ -8,6 +8,7 @@ written back to the DB.
 """
 
 from datetime import datetime, timezone
+import json
 from typing import Any
 
 from app.timezone import now_ist
@@ -235,7 +236,16 @@ class YouTubeService:
                     .execute()
                 )
             except Exception as exc:
-                logger.error(f"❌ YouTube Analytics query failed: {exc}")
+                error_msg = str(exc)
+                if hasattr(exc, "content"):
+                    try:
+                        jb = json.loads(exc.content.decode())
+                        if isinstance(jb.get("error"), dict):
+                            error_msg = jb["error"].get("message", error_msg)
+                        elif "error_description" in jb:
+                            error_msg = jb["error_description"]
+                    except: pass
+                logger.error(f"❌ YouTube Analytics query for batch failed: {error_msg}")
                 continue
 
             headers = [h["name"] for h in response.get("columnHeaders", [])]
@@ -304,7 +314,14 @@ class YouTubeService:
                 curve[float(row[0])] = float(row[1])
             return curve
         except Exception as exc:
-            logger.warning("YouTube Analytics retention query failed for %s: %s", youtube_video_id, exc)
+            error_msg = str(exc)
+            if hasattr(exc, "content"):
+                try:
+                    jb = json.loads(exc.content.decode())
+                    if isinstance(jb.get("error"), dict):
+                        error_msg = jb["error"].get("message", error_msg)
+                except: pass
+            logger.warning("⚠️ YouTube Analytics curve query failed for %s: %s", youtube_video_id, error_msg)
             return {}
 
     def get_video_stats(
@@ -429,7 +446,6 @@ class YouTubeService:
         )
 
         from googleapiclient.errors import ResumableUploadError
-        import json
 
         response = None
         try:
