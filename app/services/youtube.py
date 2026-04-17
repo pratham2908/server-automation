@@ -316,8 +316,8 @@ class YouTubeService:
                 "ctr": round(float(row_dict.get("impressionClickThroughRate") or 0) * 100, 2),
                 "impressions": int(row_dict.get("impressions") or 0),
             }
-        except Exception as exc:
-            logger.error(f"❌ YouTube Reach Analytics failed for {youtube_video_id}: {exc}")
+        except Exception:
+            logger.exception(f"❌ YouTube Reach Analytics failed for {youtube_video_id}")
             return {}
 
     def get_audience_retention_curve(self, youtube_video_id: str) -> dict[float, float]:

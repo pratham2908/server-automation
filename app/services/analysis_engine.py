@@ -231,9 +231,24 @@ async def run_analysis(
         )
 
         # Upsert into videos.performance (one sub-doc per video, idempotent)
+        performance_data = {
+            "title": v.get("title", ""),
+            "category": v.get("category", ""),
+            "content_params": v.get("content_params"),
+            "published_at": v.get("published_at"),
+            "stats_snapshot": stats,
+            "ai_insight": ai_insight,
+            "status": "completed",
+            "analyzed_at": now_ist(),
+        }
+        if platform == "youtube" and v.get("youtube_video_id"):
+            performance_data["youtube_video_id"] = v["youtube_video_id"]
+        elif platform == "instagram" and v.get("instagram_media_id"):
+            performance_data["instagram_media_id"] = v["instagram_media_id"]
+
         await db.videos.update_one(
             {"channel_id": channel_id, "video_id": v["video_id"]},
-            {"$set": {"performance": history_set}}
+            {"$set": {"performance": performance_data}}
         )
 
         # Backfill actual metrics into videos.retention (if a prediction exists)
