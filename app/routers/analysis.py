@@ -150,6 +150,7 @@ async def get_latest_analysis(
     return {
         **doc,
         "analysis_status": {
+            "analyzed_count": len(already_analysed_ids),
             "ready_for_analysis": ready_for_analysis,
             "unverified": unverified,
             "not_ready_yet": not_ready_yet,
