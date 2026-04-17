@@ -94,10 +94,10 @@ async def run_analysis(
     ).to_list(length=None)
 
     already_analysed_ids: set[str] = set()
-    async for doc in db.analysis_history.find(
-        {"channel_id": channel_id}, {"video_id": 1}
+    async for v_doc in db.videos.find(
+        {"channel_id": channel_id, "performance": {"$ne": None}}, {"video_id": 1}
     ):
-        already_analysed_ids.add(doc["video_id"])
+        already_analysed_ids.add(v_doc["video_id"])
 
     new_videos = [
         v for v in done_videos if v["video_id"] not in already_analysed_ids
@@ -230,50 +230,32 @@ async def run_analysis(
             extra={"color": "MAGENTA"},
         )
 
-        # Upsert into analysis_history (one doc per video, idempotent)
-        history_set: dict[str, Any] = {
-            "title": v.get("title", ""),
-            "category": v.get("category", ""),
-            "content_params": v.get("content_params"),
-            "published_at": v.get("published_at"),
-            "stats_snapshot": stats,
-            "ai_insight": ai_insight,
-            "analyzed_at": now_ist(),
-        }
-        if platform == "youtube":
-            history_set["youtube_video_id"] = v.get("youtube_video_id")
-        else:
-            history_set["instagram_media_id"] = v.get("instagram_media_id")
-
-        await db.analysis_history.update_one(
+        # Upsert into videos.performance (one sub-doc per video, idempotent)
+        await db.videos.update_one(
             {"channel_id": channel_id, "video_id": v["video_id"]},
-            {"$set": history_set},
-            upsert=True,
+            {"$set": {"performance": history_set}}
         )
 
-        # Backfill actual metrics into retention_analysis (if a prediction exists)
-        retention_doc = await db.retention_analysis.find_one(
-            {"channel_id": channel_id, "video_id": v["video_id"]}
-        )
-        if retention_doc and not retention_doc.get("actuals_populated_at"):
-            await db.retention_analysis.update_one(
+        # Backfill actual metrics into videos.retention (if a prediction exists)
+        if v.get("retention") and not v["retention"].get("actuals_populated_at"):
+            await db.videos.update_one(
                 {"channel_id": channel_id, "video_id": v["video_id"]},
                 {"$set": {
-                    "actual_avg_percentage_viewed": stats.get("avg_percentage_viewed"),
-                    "actual_engagement_rate": stats.get("engagement_rate"),
-                    "actual_views": stats.get("views"),
-                    "actual_like_rate": stats.get("like_rate"),
-                    "actual_comment_rate": stats.get("comment_rate"),
-                    "actual_views_per_subscriber": stats.get("views_per_subscriber"),
-                    "actual_performance_rating": (ai_insight or {}).get("performance_rating"),
-                    "actual_stats_snapshot": stats,
-                    "actual_retention_curve": {str(k): v for k, v in (curve or {}).items()},
-                    "actuals_populated_at": now_ist(),
-                    "updated_at": now_ist(),
+                    "retention.actual_avg_percentage_viewed": stats.get("avg_percentage_viewed"),
+                    "retention.actual_engagement_rate": stats.get("engagement_rate"),
+                    "retention.actual_views": stats.get("views"),
+                    "retention.actual_like_rate": stats.get("like_rate"),
+                    "retention.actual_comment_rate": stats.get("comment_rate"),
+                    "retention.actual_views_per_subscriber": stats.get("views_per_subscriber"),
+                    "retention.actual_performance_rating": (ai_insight or {}).get("performance_rating"),
+                    "retention.actual_stats_snapshot": stats,
+                    "retention.actual_retention_curve": {str(k): v_curve for k, v_curve in (curve or {}).items()},
+                    "retention.actuals_populated_at": now_ist(),
+                    "retention.updated_at": now_ist(),
                 }},
             )
             logger.info(
-                "Backfilled actual metrics into retention_analysis for '%s'",
+                "Backfilled actual metrics into retention for '%s'",
                 v.get("title", v["video_id"])[:50],
             )
 
@@ -283,8 +265,8 @@ async def run_analysis(
     # ------------------------------------------------------------------
     # Step 2: Channel summary
     # ------------------------------------------------------------------
-    all_per_video = await db.analysis_history.find(
-        {"channel_id": channel_id}
+    all_per_video = await db.videos.find(
+        {"channel_id": channel_id, "performance": {"$ne": None}}
     ).to_list(length=None)
 
     if not all_per_video:
@@ -295,13 +277,14 @@ async def run_analysis(
     all_analysed_ids: list[str] = []
 
     for pv in all_per_video:
+        perf = pv.get("performance") or {}
         all_analysed_ids.append(pv["video_id"])
         video_summaries.append({
-            "title": pv.get("title", ""),
-            "category": pv.get("category", ""),
-            "content_params": pv.get("content_params") or {},
-            "stats": pv.get("stats_snapshot", {}),
-            "ai_insight": pv.get("ai_insight", {}),
+            "title": pv.get("title") or perf.get("title", ""),
+            "category": pv.get("category") or perf.get("category", ""),
+            "content_params": pv.get("content_params") or perf.get("content_params") or {},
+            "stats": perf.get("stats_snapshot", {}),
+            "ai_insight": perf.get("ai_insight", {}),
         })
 
     logger.info(
@@ -407,9 +390,9 @@ async def _update_content_param_scores(
     if not param_docs:
         return
 
-    all_history = await db.analysis_history.find(
-        {"channel_id": channel_id},
-        {"content_params": 1, "ai_insight.performance_rating": 1},
+    all_history = await db.videos.find(
+        {"channel_id": channel_id, "performance": {"$ne": None}},
+        {"content_params": 1, "performance.content_params": 1, "performance.ai_insight.performance_rating": 1},
     ).to_list(length=None)
 
     for pdoc in param_docs:
@@ -417,14 +400,15 @@ async def _update_content_param_scores(
         value_stats: dict[str, dict] = {}
 
         for entry in all_history:
-            cp = entry.get("content_params") or {}
+            perf = entry.get("performance") or {}
+            cp = entry.get("content_params") or perf.get("content_params") or {}
             vid_value = cp.get(param_name)
             if vid_value is None:
                 continue
 
             if vid_value not in value_stats:
                 value_stats[vid_value] = {"total_rating": 0.0, "count": 0}
-            rating = (entry.get("ai_insight") or {}).get("performance_rating", 0)
+            rating = (perf.get("ai_insight") or {}).get("performance_rating", 0)
             value_stats[vid_value]["total_rating"] += rating
             value_stats[vid_value]["count"] += 1
 

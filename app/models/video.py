@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_serializer
+from typing import Any, dict
 
 from app.timezone import now_ist, to_ist_iso
 
@@ -91,6 +92,17 @@ class Video(BaseModel):
         None,
         description="When the video was published on the platform. Null until published.",
     )
+    
+    # Unified Analytics Data
+    retention: Optional[dict[str, Any]] = Field(
+        None,
+        description="Pre-publish multimodal analysis and predicted retention curve."
+    )
+    performance: Optional[dict[str, Any]] = Field(
+        None,
+        description="Post-publish metric analysis and actual performance rating."
+    )
+    
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)
 

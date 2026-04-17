@@ -32,17 +32,28 @@ async def list_retention_analyses(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """List retention analyses for a channel, newest first."""
-    query: dict = {"channel_id": channel_id}
+    query: dict = {
+        "channel_id": channel_id,
+        "retention": {"$ne": None}
+    }
     if status_filter:
-        query["status"] = status_filter
+        query["retention.status"] = status_filter
 
-    cursor = db.retention_analysis.find(query).sort("created_at", -1).limit(limit)
+    cursor = db.videos.find(
+        query,
+        {"retention": 1, "video_id": 1, "channel_id": 1}
+    ).sort("retention.created_at", -1).limit(limit)
+    
     docs = await cursor.to_list(length=limit)
-
+    results = []
     for d in docs:
-        d["_id"] = str(d["_id"])
+        ret = d.get("retention", {})
+        # Map back to expected structure for compatibility
+        ret["video_id"] = d["video_id"]
+        ret["channel_id"] = d["channel_id"]
+        results.append(ret)
 
-    return docs
+    return results
 
 
 # ------------------------------------------------------------------
@@ -56,21 +67,20 @@ async def get_retention_analysis(
     video_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Get the retention analysis for a specific video.
-
-    If actual metrics have been backfilled, includes a ``comparison``
-    sub-object with deviation and accuracy metrics.
-    """
-    doc = await db.retention_analysis.find_one(
-        {"channel_id": channel_id, "video_id": video_id}
+    """Get the retention analysis for a specific video."""
+    video = await db.videos.find_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {"retention": 1, "video_id": 1, "channel_id": 1}
     )
-    if not doc:
+    if not video or not video.get("retention"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No retention analysis found for video {video_id}",
         )
 
-    doc["_id"] = str(doc["_id"])
+    doc = video["retention"]
+    doc["video_id"] = video["video_id"]
+    doc["channel_id"] = video["channel_id"]
 
     from app.services.retention_analysis import compute_comparison
     doc["comparison"] = compute_comparison(doc)
@@ -147,10 +157,11 @@ async def delete_retention_analysis(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Delete the retention analysis for a specific video."""
-    result = await db.retention_analysis.delete_one(
-        {"channel_id": channel_id, "video_id": video_id}
+    result = await db.videos.update_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {"$unset": {"retention": ""}}
     )
-    if result.deleted_count == 0:
+    if result.modified_count == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No retention analysis found for video {video_id}",

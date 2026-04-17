@@ -193,7 +193,10 @@ async def list_videos(
                 {"$set": {"suggested": True, "updated_at": now_ist()}},
             )
 
-    videos = await db.videos.find(query).to_list(length=None)
+    # Use projection to exclude heavy analytics blobs in the list view
+    projection = {"retention": 0, "performance": 0}
+    
+    videos = await db.videos.find(query, projection).to_list(length=None)
 
     # Strip Mongo _id and serialize datetimes in GMT+5:30 (IST) for API response.
     for v in videos:

@@ -34,23 +34,14 @@ async def _compute_category_metadata(
     """Aggregate performance metrics for published videos in a category that
     have been analyzed (exist in analysis_history).
     """
-    # Only include videos whose analysis has been completed
-    analysed_video_ids: set[str] = set()
-    async for doc in db.analysis_history.find(
-        {"channel_id": channel_id},
-        {"video_id": 1},
-    ):
-        analysed_video_ids.add(doc["video_id"])
-
-    all_published = await db.videos.find(
+    videos = await db.videos.find(
         {
             "channel_id": channel_id,
             "category": category_name,
             "status": "published",
+            "performance": {"$ne": None},
         }
     ).to_list(length=None)
-
-    videos = [v for v in all_published if v["video_id"] in analysed_video_ids]
 
     if not videos:
         return {"total_videos": 0, "video_ids": []}

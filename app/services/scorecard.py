@@ -18,16 +18,14 @@ logger = get_logger(__name__)
 
 
 async def _gather_retention_signal(
-    db: AsyncIOMotorDatabase, channel_id: str, video_id: str,
+    video: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Pull the latest retention analysis for the video, if available."""
-    doc = await db.retention_analysis.find_one(
-        {"channel_id": channel_id, "video_id": video_id, "status": "completed"},
-    )
-    if not doc or not doc.get("analysis"):
+    """Pull the latest retention analysis from the video document, if available."""
+    retention = video.get("retention")
+    if not retention or retention.get("status") != "completed":
         return None
 
-    a = doc["analysis"]
+    a = retention.get("analysis")
     return {
         "predicted_avg_retention_percent": a.get("predicted_avg_retention_percent"),
         "hook_score": (a.get("hook_analysis") or {}).get("score"),
@@ -160,7 +158,7 @@ async def generate_scorecard(
     if not video:
         raise ValueError(f"Video '{video_id}' not found for channel '{channel_id}'")
 
-    retention = await _gather_retention_signal(db, channel_id, video_id)
+    retention = await _gather_retention_signal(video)
     thumbnail = await _gather_thumbnail_signal(db, channel_id, video_id)
     channel_patterns = await _gather_channel_patterns(db, channel_id)
     content_alignment = _build_content_alignment_signal(video, channel_patterns)

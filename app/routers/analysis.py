@@ -109,10 +109,10 @@ async def get_latest_analysis(
 
     # 2. Calculate analysis_status (ready/unverified/waiting)
     already_analysed_ids: set[str] = set()
-    async for h in db.analysis_history.find(
-        {"channel_id": channel_id}, {"video_id": 1}
+    async for v_doc in db.videos.find(
+        {"channel_id": channel_id, "performance": {"$ne": None}}, {"video_id": 1}
     ):
-        already_analysed_ids.add(h["video_id"])
+        already_analysed_ids.add(v_doc["video_id"])
 
     now = now_ist()
     three_days_ago = now - timedelta(days=3)
@@ -180,8 +180,11 @@ async def delete_analysis(
     # 1. Delete channel summary
     await db.analysis.delete_one({"channel_id": channel_id})
 
-    # 2. Delete all per-video analysis records
-    hist_result = await db.analysis_history.delete_many({"channel_id": channel_id})
+    # 2. Unset performance sub-docs in all videos
+    await db.videos.update_many(
+        {"channel_id": channel_id},
+        {"$unset": {"performance": ""}}
+    )
 
     # 3. Reset categories: score, video_count, video_ids, metadata
     cat_result = await db.categories.update_many(
@@ -224,7 +227,6 @@ async def delete_analysis(
         "ok": True,
         "channel_id": channel_id,
         "analysis_deleted": True,
-        "analysis_history_deleted": hist_result.deleted_count,
         "categories_reset": cat_result.modified_count,
         "content_params_reset": len(param_docs),
     }
@@ -295,14 +297,23 @@ async def get_analysis_history(
             date_filter["$gte"] = from_dt
         if to_dt:
             date_filter["$lte"] = to_dt
-        query["published_at"] = date_filter
+        query["performance.published_at"] = date_filter
 
-    cursor = db.analysis_history.find(query).sort("published_at", -1)
+    cursor = db.videos.find(
+        {**query, "performance": {"$ne": None}},
+        {"performance": 1, "video_id": 1, "channel_id": 1}
+    ).sort("performance.published_at", -1)
     if limit is not None:
         cursor = cursor.limit(limit)
-    results = await cursor.to_list(length=limit if limit is not None else None)
-    for doc in results:
-        doc.pop("_id", None)
+    
+    docs = await cursor.to_list(length=limit if limit is not None else None)
+    results = []
+    for doc in docs:
+        perf = doc.get("performance", {})
+        # Map back to history format for compatibility
+        perf["video_id"] = doc["video_id"]
+        perf["channel_id"] = doc["channel_id"]
+        results.append(perf)
     return results
 
 
@@ -317,16 +328,19 @@ async def get_video_analysis(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Return the per-video analysis for a specific video."""
-    doc = await db.analysis_history.find_one(
-        {"channel_id": channel_id, "video_id": video_id}
+    video = await db.videos.find_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {"performance": 1, "video_id": 1, "channel_id": 1}
     )
-    if not doc:
+    if not video or not video.get("performance"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No analysis found for video '{video_id}' in channel '{channel_id}'",
         )
-    doc.pop("_id", None)
-    return doc
+    perf = video["performance"]
+    perf["video_id"] = video["video_id"]
+    perf["channel_id"] = video["channel_id"]
+    return perf
 
 
 # ------------------------------------------------------------------
@@ -349,12 +363,14 @@ async def compare_periods(
     """
 
     async def _aggregate_period(start: datetime, end: datetime) -> dict[str, Any]:
-        docs = await db.analysis_history.find(
+        cursor = db.videos.find(
             {
                 "channel_id": channel_id,
-                "analyzed_at": {"$gte": start, "$lte": end},
-            }
-        ).to_list(length=None)
+                "performance.analyzed_at": {"$gte": start, "$lte": end},
+            },
+            {"performance": 1}
+        )
+        docs = await cursor.to_list(length=None)
 
         if not docs:
             return {
@@ -375,14 +391,14 @@ async def compare_periods(
         total = len(docs)
 
         def _safe_avg(key: str) -> float:
-            vals = [d.get("stats_snapshot", {}).get(key, 0) for d in docs]
+            vals = [d.get("performance", {}).get("stats_snapshot", {}).get(key, 0) for d in docs]
             return round(sum(vals) / total, 2) if total else 0
 
         total_subs = sum(
-            d.get("stats_snapshot", {}).get("subscribers_gained", 0) for d in docs
+            d.get("performance", {}).get("stats_snapshot", {}).get("subscribers_gained", 0) for d in docs
         )
         avg_rating = round(
-            sum(d.get("ai_insight", {}).get("performance_rating", 0) for d in docs) / total, 1
+            sum(d.get("performance", {}).get("ai_insight", {}).get("performance_rating", 0) for d in docs) / total, 1
         )
 
         return {

@@ -39,6 +39,8 @@ async def connect_db(
         [("channel_id", 1), ("status", 1)],
     )
     await _db.videos.create_index("video_id", unique=True)
+    await _db.videos.create_index("retention.status")
+    await _db.videos.create_index("performance.analyzed_at")
     await _db.posting_queue.create_index(
         [("channel_id", 1), ("position", 1)],
     )

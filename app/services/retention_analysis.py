@@ -81,28 +81,22 @@ async def run_retention_analysis(
     platform = (channel_doc or {}).get("platform", "youtube")
 
     now = now_ist()
-    await db.retention_analysis.update_one(
+    await db.videos.update_one(
         {"channel_id": channel_id, "video_id": video_id},
         {
             "$set": {
-                "status": "analyzing",
-                "video_title": video_title,
-                "platform": platform,
-                "error_message": None,
+                "retention.status": "analyzing",
+                "retention.video_title": video_title,
+                "retention.platform": platform,
+                "retention.error_message": None,
+                "retention.updated_at": now,
+                "packaging_status": "analyzing",
                 "updated_at": now,
             },
             "$setOnInsert": {
-                "channel_id": channel_id,
-                "video_id": video_id,
-                "created_at": now,
+                "retention.created_at": now,
             },
         },
-        upsert=True,
-    )
-
-    await db.videos.update_one(
-        {"channel_id": channel_id, "video_id": video_id},
-        {"$set": {"packaging_status": "analyzing", "updated_at": now}}
     )
 
     temp_path: str | None = local_video_path
@@ -141,18 +135,18 @@ async def run_retention_analysis(
             logger.warning("Failed to compute pacing matches: %s", e)
 
         now = now_ist()
-        await db.retention_analysis.update_one(
+        await db.videos.update_one(
             {"channel_id": channel_id, "video_id": video_id},
             {
                 "$set": {
-                    "status": "completed",
-                    "analysis": result,
-                    "duration_seconds": result.get("pacing_analysis", {}).get(
+                    "retention.status": "completed",
+                    "retention.analysis": result,
+                    "retention.duration_seconds": result.get("pacing_analysis", {}).get(
                         "visual_change_timestamps", [{}]
                     )[-1].get("timestamp_seconds") if result.get("pacing_analysis", {}).get("visual_change_timestamps") else None,
-                    "analyzed_at": now,
-                    "error_message": None,
-                    "updated_at": now,
+                    "retention.analyzed_at": now,
+                    "retention.error_message": None,
+                    "retention.updated_at": now,
                 },
             },
         )
@@ -220,19 +214,18 @@ async def run_retention_analysis(
 
     except Exception as exc:
         logger.error("Retention analysis failed for '%s': %s", video_title[:50], exc)
-        await db.retention_analysis.update_one(
+        now = now_ist()
+        await db.videos.update_one(
             {"channel_id": channel_id, "video_id": video_id},
             {
                 "$set": {
-                    "status": "failed",
-                    "error_message": str(exc),
-                    "updated_at": now_ist(),
+                    "retention.status": "failed",
+                    "retention.error_message": str(exc),
+                    "retention.updated_at": now,
+                    "packaging_status": "failed",
+                    "updated_at": now,
                 },
             },
-        )
-        await db.videos.update_one(
-            {"channel_id": channel_id, "video_id": video_id},
-            {"$set": {"packaging_status": "failed", "updated_at": now_ist()}}
         )
     finally:
         # Only unlink if we DOWNLOADED it (temp_path != local_video_path)
@@ -241,17 +234,18 @@ async def run_retention_analysis(
             logger.info("Cleaned up temp file %s", temp_path)
 
 
-def compute_comparison(doc: dict[str, Any]) -> dict[str, Any] | None:
-    """Compute predicted-vs-actual deviation from a retention_analysis document.
+def compute_comparison(video: dict[str, Any]) -> dict[str, Any] | None:
+    """Compute predicted-vs-actual deviation from a video document.
 
-    Returns ``None`` if actuals haven't been backfilled yet.
+    Returns ``None`` if actuals haven't been backfilled into `video.retention` yet.
     """
-    if not doc.get("actuals_populated_at"):
+    retention = video.get("retention") or {}
+    if not retention.get("actuals_populated_at"):
         return None
 
-    analysis = doc.get("analysis") or {}
+    analysis = retention.get("analysis") or {}
     predicted_retention = analysis.get("predicted_avg_retention_percent")
-    actual_retention = doc.get("actual_avg_percentage_viewed")
+    actual_retention = retention.get("actual_avg_percentage_viewed")
 
     retention_deviation: float | None = None
     retention_accuracy_pct: float | None = None
@@ -259,9 +253,9 @@ def compute_comparison(doc: dict[str, Any]) -> dict[str, Any] | None:
         retention_deviation = round(predicted_retention - actual_retention, 2)
         retention_accuracy_pct = round(100 - abs(retention_deviation), 2)
 
-    actual_engagement = doc.get("actual_engagement_rate")
-    actual_views = doc.get("actual_views")
-    actual_views_per_sub = doc.get("actual_views_per_subscriber")
+    actual_engagement = retention.get("actual_engagement_rate")
+    actual_views = retention.get("actual_views")
+    actual_views_per_sub = retention.get("actual_views_per_subscriber")
 
     # Determine qualitative prediction quality
     quality = "unknown"
@@ -281,9 +275,9 @@ def compute_comparison(doc: dict[str, Any]) -> dict[str, Any] | None:
         "actual_engagement_rate": actual_engagement,
         "actual_views": actual_views,
         "actual_views_per_subscriber": actual_views_per_sub,
-        "actual_performance_rating": doc.get("actual_performance_rating"),
+        "actual_performance_rating": retention.get("actual_performance_rating"),
         "hook_score": analysis.get("hook_analysis", {}).get("score"),
         "pacing_score": analysis.get("pacing_analysis", {}).get("score"),
         "prediction_quality": quality,
-        "actuals_populated_at": doc.get("actuals_populated_at"),
+        "actuals_populated_at": retention.get("actuals_populated_at"),
     }

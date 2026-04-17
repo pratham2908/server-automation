@@ -39,11 +39,11 @@ class PacingTemplateService:
         """
         logger.info("Discovering pacing templates for channel: %s", channel_id)
         
-        # 1. Fetch top-performing videos with retention analysis
-        cursor = self.db.retention_analysis.find({
+        # 1. Fetch top-performing videos with retention analysis from unified videos collection
+        cursor = self.db.videos.find({
             "channel_id": channel_id,
-            "status": "completed",
-            "actual_performance_rating": {"$gte": 75},
+            "retention.status": "completed",
+            "retention.actual_performance_rating": {"$gte": 75},
         })
         
         candidate_analyses = await cursor.to_list(length=100)
@@ -54,7 +54,9 @@ class PacingTemplateService:
         # 2. Group by narrative structure (or cluster)
         groups = defaultdict(list)
         for doc in candidate_analyses:
-            structure = doc.get("analysis", {}).get("narrative_structure", "other")
+            # Check retention sub-object
+            retention = doc.get("retention") or {}
+            structure = retention.get("analysis", {}).get("narrative_structure", "other")
             groups[structure].append(doc)
 
         templates = []
@@ -71,13 +73,14 @@ class PacingTemplateService:
             aggregate_density = [0.0] * 10
             
             for doc in docs:
-                total_perf += doc.get("actual_performance_rating", 0)
-                pacing = doc.get("analysis", {}).get("pacing_analysis") or {}
+                retention = doc.get("retention") or {}
+                total_perf += retention.get("actual_performance_rating", 0)
+                pacing = retention.get("analysis", {}).get("pacing_analysis") or {}
                 total_avg_interval += pacing.get("avg_cut_interval_seconds", 0)
                 total_pacing_score += pacing.get("pacing_score", 0)
                 
                 # Compute cut density distribution
-                duration = doc.get("duration_seconds")
+                duration = retention.get("duration_seconds")
                 cuts = pacing.get("visual_change_timestamps", [])
                 if duration and duration > 0 and cuts:
                     for cut in cuts:
