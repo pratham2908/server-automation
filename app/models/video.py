@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_serializer
-from typing import Any, dict
+from typing import Any
 
 from app.timezone import now_ist, to_ist_iso
 
