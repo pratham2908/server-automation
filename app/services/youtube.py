@@ -207,14 +207,15 @@ class YouTubeService:
         today = now_ist().strftime("%Y-%m-%d")
 
         # Standard metrics for deep video performance analysis
+        # Reach metrics (impressions, impressionClickThroughRate) are strictly SINGLE-VIDEO metrics 
+        # in the YouTube Analytics API. Including them in a batch query with multiple video filters 
+        # (dimensions=video) causes an "Unknown identifier" error.
         metrics_list = [
             "averageViewPercentage",
             "averageViewDuration",
             "estimatedMinutesWatched",
             "subscribersGained",
             "shares",
-            "impressions",
-            "impressionClickThroughRate",
         ]
 
         # Batch by 40 IDs to stay within filter-string limits.
@@ -277,14 +278,47 @@ class YouTubeService:
                             ),
                             "subscribers_gained": int(row_dict.get("subscribersGained") or 0),
                             "shares": int(row_dict.get("shares") or 0),
-                            "impressions": int(row_dict.get("impressions") or 0),
-                            "ctr": round(float(row_dict.get("impressionClickThroughRate") or 0) * 100, 2),
                         }
                 except (ValueError, TypeError) as parse_exc:
                     logger.warning(f"Failed to parse analytics row for video {vid}: {parse_exc}")
 
         return analytics
 
+
+    def get_video_reach_analytics(self, youtube_video_id: str) -> dict:
+        """Fetch impressions and CTR for a single video (limited by YT API)"""
+        if not self._youtube_analytics:
+            return {}
+            
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            result = (
+                self._youtube_analytics.reports()
+                .query(
+                    ids="channel==MINE",
+                    startDate="2005-01-01",
+                    endDate=today,
+                    dimensions="video",
+                    metrics="impressions,impressionClickThroughRate",
+                    filters=f"video=={youtube_video_id}",
+                )
+                .execute()
+            )
+
+            rows = result.get("rows", [])
+            headers = [h["name"] for h in result.get("columnHeaders", [])]
+
+            if not rows:
+                return {}
+
+            row_dict = dict(zip(headers, rows[0]))
+            return {
+                "ctr": round(float(row_dict.get("impressionClickThroughRate") or 0) * 100, 2),
+                "impressions": int(row_dict.get("impressions") or 0),
+            }
+        except Exception as exc:
+            logger.error(f"❌ YouTube Reach Analytics failed for {youtube_video_id}: {exc}")
+            return {}
 
     def get_audience_retention_curve(self, youtube_video_id: str) -> dict[float, float]:
         """Fetch the audience retention curve for a specific video.
@@ -375,7 +409,19 @@ class YouTubeService:
                 }
 
         # Merge analytics data (avg_percentage_viewed, avg_view_duration, etc.)
+        # Merge core analytics data
         analytics = self.get_video_analytics(youtube_video_ids)
+        
+        # Reach metrics (impressions/CTR) must be fetched for each video individually.
+        # We only do this for small batches to avoid burning excessive quota or latency.
+        if len(youtube_video_ids) <= 10:
+            for vid in youtube_video_ids:
+                reach_data = self.get_video_reach_analytics(vid)
+                if vid in analytics:
+                    analytics[vid].update(reach_data)
+                else:
+                    analytics[vid] = reach_data
+
         for vid, adata in analytics.items():
             if vid in stats:
                 stats[vid].update(adata)
