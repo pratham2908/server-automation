@@ -298,7 +298,6 @@ class YouTubeService:
                     ids="channel==MINE",
                     startDate="2005-01-01",
                     endDate=today,
-                    dimensions="video",
                     metrics="videoThumbnailImpressions,videoThumbnailImpressionsClickRate",
                     filters=f"video=={youtube_video_id}",
                 )
