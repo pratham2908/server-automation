@@ -169,10 +169,11 @@ async def delete_analysis(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Delete all analysis data for *channel_id* and reset derived scores.
-
-    Removes the channel summary (``analysis``), all per-video records
-    (``analysis_history``), resets every category's score / video_count /
-    video_ids / metadata, and zeros out content-param value scores.
+    
+    Removes the channel summary (``analysis``), resets every category's 
+    score / video_count / video_ids / metadata, and zeros out 
+    content-param value scores. It also unsets the ``performance`` field
+    in all videos for this channel.
     The next ``POST /update`` will re-analyse everything from scratch.
     """
     from app.timezone import now_ist
@@ -181,7 +182,7 @@ async def delete_analysis(
     await db.analysis.delete_one({"channel_id": channel_id})
 
     # 2. Unset performance sub-docs in all videos
-    await db.videos.update_many(
+    v_result = await db.videos.update_many(
         {"channel_id": channel_id},
         {"$unset": {"performance": ""}}
     )
@@ -216,9 +217,9 @@ async def delete_analysis(
         )
 
     logger.success(
-        "🗑️ Deleted analysis for channel '%s': %d history records, %d categories reset, %d content params reset",
+        "🗑️ Deleted analysis for channel '%s': %d history records cleared, %d categories reset, %d content params reset",
         channel_id,
-        hist_result.deleted_count,
+        v_result.modified_count,
         cat_result.modified_count,
         len(param_docs),
     )
@@ -227,6 +228,8 @@ async def delete_analysis(
         "ok": True,
         "channel_id": channel_id,
         "analysis_deleted": True,
+        "analysis_history_deleted": True,
+        "history_cleared": v_result.modified_count,
         "categories_reset": cat_result.modified_count,
         "content_params_reset": len(param_docs),
     }
@@ -357,9 +360,10 @@ async def compare_periods(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Compare channel performance across two time periods.
-
-    Aggregates per-video analyses from ``analysis_history`` filtered
-    by ``analyzed_at`` for each period, returning side-by-side averages.
+    
+    Aggregates per-video analyses from the unified ``videos`` collection 
+    (under the ``performance`` field) filtered by ``analyzed_at`` for 
+    each period, returning side-by-side averages.
     """
 
     async def _aggregate_period(start: datetime, end: datetime) -> dict[str, Any]:
