@@ -299,7 +299,7 @@ class YouTubeService:
                     startDate="2005-01-01",
                     endDate=today,
                     dimensions="video",
-                    metrics="impressions,impressionClickThroughRate",
+                    metrics="videoThumbnailImpressions,videoThumbnailImpressionsClickRate",
                     filters=f"video=={youtube_video_id}",
                 )
                 .execute()
@@ -313,8 +313,8 @@ class YouTubeService:
 
             row_dict = dict(zip(headers, rows[0]))
             return {
-                "ctr": round(float(row_dict.get("impressionClickThroughRate") or 0) * 100, 2),
-                "impressions": int(row_dict.get("impressions") or 0),
+                "ctr": round(float(row_dict.get("videoThumbnailImpressionsClickRate") or 0) * 100, 2),
+                "impressions": int(row_dict.get("videoThumbnailImpressions") or 0),
             }
         except Exception as exc:
             import json
