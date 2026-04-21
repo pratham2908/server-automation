@@ -447,6 +447,7 @@ class YouTubeService:
         tags: list[str],
         category_id: str = "22",  # "People & Blogs" default
         publish_at: str | None = None,
+        privacy_status: str = "private",
     ) -> str:
         """Upload a video file to YouTube via resumable upload.
 
@@ -460,9 +461,10 @@ class YouTubeService:
 
         Returns the ``youtube_video_id`` of the newly created video.
         """
-        video_status: dict = {"privacyStatus": "private"}
+        video_status: dict = {"privacyStatus": privacy_status}
         if publish_at:
             video_status["publishAt"] = publish_at
+            video_status["privacyStatus"] = "private"  # Must be private if scheduled on YT side
 
         # Sanitize tags: YouTube allows up to 500 characters total for all tags.
         # It also disallows certain characters like '<' or '>'.

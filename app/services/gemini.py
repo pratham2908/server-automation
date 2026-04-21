@@ -862,6 +862,43 @@ Classify every comment. Do not skip any."""
         except (json.JSONDecodeError, TypeError):
             return []
 
+    async def generate_comment_reply(
+        self,
+        comment_text: str,
+        video_title: str,
+        platform: str = "youtube",
+    ) -> str:
+        """Generate a polite, engaging reply to a positive comment.
+
+        Aims to acknowledge the comment and politely encourage a subscription or a follow-up question.
+        Returns the raw reply string.
+        """
+        if platform == "instagram":
+            cta = "politely encourage them to follow for more reels like this or ask a question to drive more engagement"
+        else:
+            cta = "politely encourage them to subscribe for more videos like this or ask a question to drive more engagement"
+
+        prompt = f"""Generate a short, polite, and engaging reply to the following comment.
+
+Video Title: "{video_title}"
+Comment: "{comment_text}"
+
+Guidelines:
+1. **Acknowledge**: Start by acknowledging the user's specific comment or sentiment.
+2. **Action Item**: {cta}.
+3. **Tone**: Be very polite, friendly, and authentic. Not generic or "bot-like".
+4. **Length**: Keep it concise (1-2 sentences).
+
+Return a JSON object:
+{{"reply": "..."}}"""
+
+        text = await self._generate(prompt)
+        try:
+            result = json.loads(text)
+            return result.get("reply", "")
+        except (json.JSONDecodeError, TypeError):
+            return ""
+
     # ------------------------------------------------------------------
     # Comment sentiment & demand analysis
     # ------------------------------------------------------------------

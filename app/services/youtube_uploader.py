@@ -67,7 +67,7 @@ async def _upload_one_video(
             title=video_doc.get("title", ""),
             description=video_doc.get("description", ""),
             tags=video_doc.get("tags", []),
-            publish_at=publish_at_str,
+            privacy_status="public",
         )
 
         now = now_ist()
@@ -153,13 +153,18 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
     logger.info("YouTube uploader: checking schedule queue...")
 
-    # Only pick up entries explicitly marked as youtube (or missing platform for legacy compat)
+    now = now_ist()
+    # Only pick up entries explicitly marked as youtube (or missing platform) 
+    # AND where the scheduled time has arrived.
     queued_entries = await db.schedule_queue.find(
-        {"$or": [{"platform": "youtube"}, {"platform": {"$exists": False}}]}
+        {
+            "$or": [{"platform": "youtube"}, {"platform": {"$exists": False}}],
+            "scheduled_at": {"$lte": now}
+        }
     ).to_list(length=None)
 
     if not queued_entries:
-        logger.info("YouTube uploader: no queued YouTube entries.")
+        logger.info("YouTube uploader: no due YouTube entries.")
         return
 
     logger.info("YouTube uploader: found %d queued YouTube entry(s)", len(queued_entries))

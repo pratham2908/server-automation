@@ -95,7 +95,7 @@ def _trigger_repost_download(
 
             # If it has a scheduled time in the future, put it in schedule_queue
             if video.get("scheduled_at") and video["scheduled_at"] > now:
-                update_fields["status"] = "scheduled"
+                update_fields["status"] = "queued"
                 await db.videos.update_one({"_id": video["_id"]}, {"$set": update_fields})
 
                 last = await db.schedule_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
@@ -109,7 +109,7 @@ def _trigger_repost_download(
                 })
                 logger.success(f"Downloaded repost and queued to schedule_queue: {new_video_id}")
             else:
-                update_fields["status"] = "ready"
+                update_fields["status"] = "queued"
                 await db.videos.update_one({"_id": video["_id"]}, {"$set": update_fields})
 
                 last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
@@ -642,7 +642,7 @@ async def repost_video(
             r2 = _get_r2()
             logger.info("Instant Repost: copying R2 object...")
             r2.copy_video(r2_key, new_r2_key)
-            final_status = "scheduled" if body.scheduled_at else "ready"
+            final_status = "queued"
         except Exception as exc:
             logger.error(f"Failed to copy R2 object for video {video_id}: {exc}")
             raise HTTPException(
@@ -682,50 +682,18 @@ async def repost_video(
     # 3. Handle Queueing or Background Processing
     if is_instant:
         if body.scheduled_at:
-            # For YouTube, we can upload immediately with publishAt.
-            # For Instagram, it stays in the server queue for the auto-publisher.
-            channel_doc = await db.channels.find_one({"channel_id": channel_id})
-            platform = get_channel_platform(channel_doc) if channel_doc else "youtube"
-
-            if platform == "youtube":
-                from app.services.schedule_operation import schedule_single_video
-                youtube_service, _ = await _get_services(channel_id)
-                r2_service = _get_r2()
-                
-                if youtube_service:
-                    logger.info("🔄 Instant Repost (YouTube): Auto-triggering platform upload...")
-                    # This handles the R2 download, YT upload, and queue updates internally
-                    # Pass the NEW doc to skip re-fetching
-                    await schedule_single_video(
-                        db=db,
-                        r2_service=r2_service,
-                        youtube_service=youtube_service,
-                        channel_id=channel_id,
-                        video_doc=new_video_doc,
-                        scheduled_at=body.scheduled_at
-                    )
-                    logger.success("🔄 Instant Repost: Successfully scheduled on YouTube (%s)", new_video_id)
-                else:
-                    logger.warning("No YouTube service for instant repost scheduling — falling back to internal queue only")
-                    await db.schedule_queue.insert_one({
-                        "channel_id": channel_id,
-                        "video_id": new_video_id,
-                        "position": 1,
-                        "scheduled_at": body.scheduled_at,
-                        "added_at": now,
-                    })
-            else:
-                # Instagram or others: just queue internally
-                last = await db.schedule_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
-                next_pos = (last["position"] + 1) if last else 1
-                await db.schedule_queue.insert_one({
-                    "channel_id": channel_id,
-                    "video_id": new_video_id,
-                    "position": next_pos,
-                    "scheduled_at": body.scheduled_at,
-                    "added_at": now,
-                })
-                logger.success("🔄 Instant Repost: Queued to internal schedule_queue (%s)", new_video_id)
+            # All platforms: queue internally in schedule_queue.
+            # The background uploader/auto-publisher will handle the actual platform post when due.
+            last = await db.schedule_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+            next_pos = (last["position"] + 1) if last else 1
+            await db.schedule_queue.insert_one({
+                "channel_id": channel_id,
+                "video_id": new_video_id,
+                "position": next_pos,
+                "scheduled_at": body.scheduled_at,
+                "added_at": now,
+            })
+            logger.success("🔄 Instant Repost: Queued to internal schedule_queue (%s)", new_video_id)
         else:
             # No schedule time: just put in the ready (posting) queue
             last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])

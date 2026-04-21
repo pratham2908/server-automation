@@ -211,7 +211,20 @@ async def run_comment_reply_cycle(
             if total_replies >= max_replies:
                 break
 
-            reply_text = _pick_template(templates)
+            # AI-generated reply first
+            reply_text = ""
+            try:
+                reply_text = await gemini_service.generate_comment_reply(
+                    comment_text=c.get("text", ""),
+                    video_title=video.get("title", ""),
+                    platform=platform
+                )
+            except Exception as exc:
+                logger.warning("AI reply generation failed, falling back to template: %s", exc)
+
+            # Fallback to template if AI failed or returned empty
+            if not reply_text:
+                reply_text = _pick_template(templates)
             try:
                 if platform == "youtube" and yt_svc:
                     reply_id = yt_svc.reply_to_comment(c["comment_id"], reply_text)
