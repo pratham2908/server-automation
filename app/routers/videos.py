@@ -71,6 +71,7 @@ def _trigger_repost_download(
     youtube_video_id: str,
     new_video_id: str,
     db: "AsyncIOMotorDatabase",
+    target_channel_id: Optional[str] = None,
 ) -> None:
     """Fire a background task to download a YouTube video and upload it to R2."""
     import asyncio
@@ -83,10 +84,11 @@ def _trigger_repost_download(
 
     async def _download_job():
         try:
-            r2_key = await download_youtube_video_to_r2(youtube_video_id, channel_id, r2_service)
+            target_id = target_channel_id or channel_id
+            r2_key = await download_youtube_video_to_r2(youtube_video_id, target_id, r2_service)
             
             # Re-fetch document to get current scheduled time
-            video = await db.videos.find_one({"channel_id": channel_id, "video_id": new_video_id})
+            video = await db.videos.find_one({"channel_id": target_id, "video_id": new_video_id})
             if not video:
                 return
 
@@ -98,10 +100,10 @@ def _trigger_repost_download(
                 update_fields["status"] = "queued"
                 await db.videos.update_one({"_id": video["_id"]}, {"$set": update_fields})
 
-                last = await db.schedule_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+                last = await db.schedule_queue.find_one({"channel_id": target_id}, sort=[("position", -1)])
                 next_pos = (last["position"] + 1) if last else 1
                 await db.schedule_queue.insert_one({
-                    "channel_id": channel_id,
+                    "channel_id": target_id,
                     "video_id": new_video_id,
                     "position": next_pos,
                     "scheduled_at": video["scheduled_at"],
@@ -112,10 +114,10 @@ def _trigger_repost_download(
                 update_fields["status"] = "queued"
                 await db.videos.update_one({"_id": video["_id"]}, {"$set": update_fields})
 
-                last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+                last = await db.posting_queue.find_one({"channel_id": target_id}, sort=[("position", -1)])
                 next_pos = (last["position"] + 1) if last else 1
                 await db.posting_queue.insert_one({
-                    "channel_id": channel_id,
+                    "channel_id": target_id,
                     "video_id": new_video_id,
                     "position": next_pos,
                     "added_at": now,
@@ -589,6 +591,7 @@ class RepostRequest(BaseModel):
     description: str = Field("", description="New description")
     tags: list[str] = Field(default_factory=list, description="New tags")
     scheduled_at: Optional[datetime] = Field(None, description="Optional future publish time for the reposted video")
+    target_channel_id: Optional[str] = Field(None, description="Optional different channel to repost to")
 
 
 @router.post("/{video_id}/repost")
@@ -635,9 +638,10 @@ async def repost_video(
     is_instant = False
 
     # 2. Check if we can instant repost via R2 Copy
+    target_id = body.target_channel_id or channel_id
     if r2_key:
         is_instant = True
-        new_r2_key = f"{channel_id}/{new_video_id}.mp4"
+        new_r2_key = f"{target_id}/{new_video_id}.mp4"
         try:
             r2 = _get_r2()
             logger.info("Instant Repost: copying R2 object...")
@@ -651,7 +655,7 @@ async def repost_video(
             )
 
     new_video_doc = {
-        "channel_id": channel_id,
+        "channel_id": target_id,
         "video_id": new_video_id,
         "title": body.title,
         "description": body.description,
@@ -684,10 +688,10 @@ async def repost_video(
         if body.scheduled_at:
             # All platforms: queue internally in schedule_queue.
             # The background uploader/auto-publisher will handle the actual platform post when due.
-            last = await db.schedule_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+            last = await db.schedule_queue.find_one({"channel_id": target_id}, sort=[("position", -1)])
             next_pos = (last["position"] + 1) if last else 1
             await db.schedule_queue.insert_one({
-                "channel_id": channel_id,
+                "channel_id": target_id,
                 "video_id": new_video_id,
                 "position": next_pos,
                 "scheduled_at": body.scheduled_at,
@@ -696,10 +700,10 @@ async def repost_video(
             logger.success("🔄 Instant Repost: Queued to internal schedule_queue (%s)", new_video_id)
         else:
             # No schedule time: just put in the ready (posting) queue
-            last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+            last = await db.posting_queue.find_one({"channel_id": target_id}, sort=[("position", -1)])
             next_pos = (last["position"] + 1) if last else 1
             await db.posting_queue.insert_one({
-                "channel_id": channel_id,
+                "channel_id": target_id,
                 "video_id": new_video_id,
                 "position": next_pos,
                 "added_at": now,
@@ -713,7 +717,7 @@ async def repost_video(
         }
     else:
         # Launch background task to download the .mp4 from YouTube
-        _trigger_repost_download(channel_id, youtube_video_id, new_video_id, db)
+        _trigger_repost_download(channel_id, youtube_video_id, new_video_id, db, target_id)
         logger.success("🔄 Initiated background auto-download repost → %s", new_video_id)
 
         return {
