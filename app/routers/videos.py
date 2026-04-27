@@ -2563,6 +2563,74 @@ async def purge_storage(
         "days_old": days_old
     }
 
+@router.get("/storage/stats")
+async def get_storage_stats(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Get high-level storage stats for the channel."""
+    # Count videos with R2 keys
+    query = {"channel_id": channel_id, "r2_object_key": {"$ne": None}}
+    
+    # Breakdown by status
+    pipeline = [
+        {"$match": query},
+        {"$group": {
+            "_id": "$status",
+            "count": {"$sum": 1},
+            "estimated_bytes": {"$sum": {"$multiply": [{"$ifNull": ["$metadata.duration_seconds", 30]}, 0.5 * 1024 * 1024]}}
+        }}
+    ]
+    
+    cursor = db.videos.aggregate(pipeline)
+    breakdown = await cursor.to_list(length=None)
+    
+    total_count = sum(b["count"] for b in breakdown)
+    total_bytes = sum(b["estimated_bytes"] for b in breakdown)
+    
+    return {
+        "ok": True,
+        "total_count": total_count,
+        "total_estimated_bytes": total_bytes,
+        "breakdown": breakdown
+    }
+
+@router.get("/storage/files")
+async def get_storage_files(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Get list of all videos that have R2 files, with their metadata."""
+    query = {"channel_id": channel_id, "r2_object_key": {"$ne": None}}
+    
+    videos = await db.videos.find(
+        query, 
+        {"title": 1, "video_id": 1, "status": 1, "published_at": 1, "created_at": 1, "r2_object_key": 1, "metadata.duration_seconds": 1}
+    ).sort("created_at", -1).to_list(length=1000)
+    
+    # For a few files, we could theoretically get actual size from R2,
+    # but for now we'll stick to estimated size to keep it snappy.
+    # In a real system, we'd store file_size_bytes in the DB during upload.
+    
+    file_list = []
+    for v in videos:
+        duration = v.get("metadata", {}).get("duration_seconds", 30)
+        est_size = int(duration * 0.5 * 1024 * 1024)
+        
+        file_list.append({
+            "video_id": v["video_id"],
+            "title": v["title"],
+            "status": v["status"],
+            "r2_key": v["r2_object_key"],
+            "size_bytes": est_size,
+            "date": v.get("published_at") or v.get("created_at")
+        })
+        
+    return {
+        "ok": True,
+        "files": file_list
+    }
+
 
 # ------------------------------------------------------------------
 # DELETE /{video_id}  –  remove a video and its assets
