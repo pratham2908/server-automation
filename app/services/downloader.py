@@ -23,11 +23,10 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
         temp_path = os.path.join(temp_dir, "video.%(ext)s")
         
         ydl_opts = {
-            "format": "bestvideo+bestaudio/best",
+            "format": "best",
             "outtmpl": temp_path,
             "quiet": True,
             "no_warnings": True,
-            "merge_output_format": "mp4",
         }
 
         # Look for cookies.txt in the automation-server root (the current working directory)
@@ -44,17 +43,16 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
             # This downloads the file
             ydl.download([video_url])
             
-        # The actual filename might have '.mp4' replacing the %(ext)s
-        final_mp4_path = os.path.join(temp_dir, "video.mp4")
-        if not os.path.exists(final_mp4_path):
-            # In case it downloaded as something else or merge failed, find the video file
-            files = os.listdir(temp_dir)
-            if not files:
-                raise RuntimeError("yt-dlp completed but no file was written")
-            final_mp4_path = os.path.join(temp_dir, files[0])
+        # The actual filename might have any extension
+        files = os.listdir(temp_dir)
+        if not files:
+            raise RuntimeError("yt-dlp completed but no file was written")
+        
+        # Take the first file that isn't a part/temp file
+        final_video_path = os.path.join(temp_dir, files[0])
             
         # Stream the downloaded file to R2
-        with open(final_mp4_path, "rb") as f:
+        with open(final_video_path, "rb") as f:
             r2_service.upload_video(f, r2_key)
             
     return r2_key
