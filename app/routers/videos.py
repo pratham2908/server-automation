@@ -1387,6 +1387,58 @@ async def schedule_video(
 
 
 # ------------------------------------------------------------------
+# PATCH /{video_id}/reschedule  –  change schedule time for a queued video
+# ------------------------------------------------------------------
+
+class RescheduleRequest(BaseModel):
+    scheduled_at: datetime = Field(..., description="The new publish time (ISO string)")
+
+@router.patch("/{video_id}/reschedule")
+async def reschedule_video(
+    channel_id: str,
+    video_id: str,
+    body: RescheduleRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Reschedule a video that is currently in the queued state."""
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+
+    if video.get("status") != "queued":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Video must be in 'queued' status to reschedule (current: {video.get('status')})",
+        )
+    
+    now = now_ist()
+    new_time = body.scheduled_at
+
+    # Update the videos collection
+    await db.videos.update_one(
+        {"_id": video["_id"]},
+        {"$set": {"scheduled_at": new_time, "updated_at": now}}
+    )
+
+    # Update the schedule_queue collection
+    result = await db.schedule_queue.update_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {"$set": {"scheduled_at": new_time}}
+    )
+
+    if result.matched_count == 0:
+        logger.warning(f"Video {video_id} was 'queued' but not found in schedule_queue")
+
+    logger.success("Rescheduled video '%s' to %s", video.get("title", video_id)[:50], new_time)
+    
+    from app.timezone import to_ist_iso
+    return {"ok": True, "scheduled_at": to_ist_iso(new_time)}
+
+
+# ------------------------------------------------------------------
 # PATCH /{video_id}/metadata  –  bulk update video metadata
 # ------------------------------------------------------------------
 
