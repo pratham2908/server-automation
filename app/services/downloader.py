@@ -30,14 +30,13 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
             "merge_output_format": "mp4",
         }
 
-        # Check for cookies.txt in the automation-server root
-        # Base dir is /Users/anjaligarg/anjali/Insta/Code/automation-server
-        cookies_path = "/Users/anjaligarg/anjali/Insta/Code/automation-server/cookies.txt"
+        # Look for cookies.txt in the automation-server root (the current working directory)
+        cookies_path = os.path.join(os.getcwd(), "cookies.txt")
         if os.path.exists(cookies_path):
             ydl_opts["cookiefile"] = cookies_path
             print(f"Using cookies from {cookies_path}")
         else:
-            print("No cookies.txt found, continuing without auth")
+            print(f"No cookies.txt found at {cookies_path}, continuing without auth")
         
         video_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
         
