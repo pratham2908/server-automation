@@ -33,6 +33,12 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         }
 
+        # Optional proxy – set YTDLP_PROXY=socks5://user:pass@host:port in .env
+        proxy = os.environ.get("YTDLP_PROXY")
+        if proxy:
+            ydl_opts["proxy"] = proxy
+            print(f"Using proxy: {proxy}")
+
         # Look for cookies.txt in the automation-server root (the current working directory)
         cookies_path = os.path.join(os.getcwd(), "cookies.txt")
         if os.path.exists(cookies_path):
