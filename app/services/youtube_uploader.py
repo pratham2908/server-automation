@@ -49,14 +49,16 @@ async def _upload_one_video(
         return False
 
     # Convert scheduled_at to UTC ISO string for YouTube's publishAt.
+    publish_at_str = None
     if scheduled_at:
         if scheduled_at.tzinfo is not None:
             utc_dt = scheduled_at.astimezone(pytz.utc)
         else:
             utc_dt = scheduled_at.replace(tzinfo=IST).astimezone(pytz.utc)
-        publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    else:
-        publish_at_str = None
+        
+        # Only set publish_at if it's actually in the future.
+        if utc_dt > now_ist().astimezone(pytz.utc):
+            publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tmp_path = None
     try:
@@ -67,7 +69,8 @@ async def _upload_one_video(
             title=video_doc.get("title", ""),
             description=video_doc.get("description", ""),
             tags=video_doc.get("tags", []),
-            privacy_status="public",
+            privacy_status="public" if not publish_at_str else "private",
+            publish_at=publish_at_str,
         )
 
         now = now_ist()
@@ -153,13 +156,11 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
     logger.info("YouTube uploader: checking schedule queue...")
 
-    now = now_ist()
-    # Only pick up entries explicitly marked as youtube (or missing platform) 
-    # AND where the scheduled time has arrived.
+    # Only pick up entries explicitly marked as youtube (or missing platform).
+    # We pick them up immediately so we can schedule them natively on YouTube.
     queued_entries = await db.schedule_queue.find(
         {
-            "$or": [{"platform": "youtube"}, {"platform": {"$exists": False}}],
-            "scheduled_at": {"$lte": now}
+            "$or": [{"platform": "youtube"}, {"platform": {"$exists": False}}]
         }
     ).to_list(length=None)
 
