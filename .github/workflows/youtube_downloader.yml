@@ -1,0 +1,50 @@
+name: YouTube Downloader
+
+on:
+  repository_dispatch:
+    types: [download_video]
+
+jobs:
+  download_and_upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install yt-dlp boto3
+
+      - name: Download Video
+        run: |
+          # Try best single file format, fallback to best overall if not available
+          yt-dlp -f "22/18/best" -o "video.mp4" "${{ github.event.client_payload.youtube_url }}"
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_KEY: ${{ github.event.client_payload.r2_key }}
+        run: |
+          python -c "
+          import boto3
+          import os
+
+          s3 = boto3.client(
+              's3',
+              endpoint_url=f'https://{os.environ[\"R2_ACCOUNT_ID\"]}.r2.cloudflarestorage.com',
+              aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+              region_name='auto'
+          )
+
+          s3.upload_file('video.mp4', os.environ['BUCKET_NAME'], os.environ['R2_KEY'])
+          "

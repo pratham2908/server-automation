@@ -15,56 +15,42 @@ if TYPE_CHECKING:
 
 def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R2Service") -> str:
     """Download video from YouTube using yt-dlp and upload to R2 synchronously."""
-    import yt_dlp
-    
-    # We download to a temporary directory so we can clean up easily
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Define the output path in the temp dir
-        temp_path = os.path.join(temp_dir, "video.%(ext)s")
-        
-        ydl_opts = {
-            # Force legacy single-file formats (22 is 720p MP4, 18 is 360p MP4)
-            # This bypasses the fragment-based bot detection
-            "format": "22/18/best",
-            "outtmpl": temp_path,
-            "quiet": True,
-            "no_warnings": True,
-            "source_address": "0.0.0.0",  # Force IPv4
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    import requests
+
+    # The video URL
+    video_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
+
+    # Get GitHub credentials from environment
+    github_token = os.environ.get("GITHUB_TOKEN")
+    github_repo = os.environ.get("GITHUB_REPO") # Format: owner/repo
+
+    if not github_token or not github_repo:
+        raise RuntimeError("GITHUB_TOKEN or GITHUB_REPO environment variables not set. Cannot trigger GitHub Action.")
+
+    # Trigger the GitHub Action
+    api_url = f"https://api.github.com/repos/{github_repo}/dispatches"
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"token {github_token}",
+    }
+    data = {
+        "event_type": "download_video",
+        "client_payload": {
+            "youtube_url": video_url,
+            "r2_key": r2_key
         }
+    }
 
-        # Optional proxy – set YTDLP_PROXY=socks5://user:pass@host:port in .env
-        proxy = os.environ.get("YTDLP_PROXY")
-        if proxy:
-            ydl_opts["proxy"] = proxy
-            print(f"Using proxy: {proxy}")
+    print(f"Triggering GitHub Action for {video_url} with key {r2_key}")
+    response = requests.post(api_url, headers=headers, json=data)
 
-        # Look for cookies.txt in the automation-server root (the current working directory)
-        cookies_path = os.path.join(os.getcwd(), "cookies.txt")
-        if os.path.exists(cookies_path):
-            ydl_opts["cookiefile"] = cookies_path
-            print(f"Using cookies from {cookies_path}")
-        else:
-            print(f"No cookies.txt found at {cookies_path}, continuing without auth")
-        
-        video_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # This downloads the file
-            ydl.download([video_url])
-            
-        # The actual filename might have any extension
-        files = os.listdir(temp_dir)
-        if not files:
-            raise RuntimeError("yt-dlp completed but no file was written")
-        
-        # Take the first file that isn't a part/temp file
-        final_video_path = os.path.join(temp_dir, files[0])
-            
-        # Stream the downloaded file to R2
-        with open(final_video_path, "rb") as f:
-            r2_service.upload_video(f, r2_key)
-            
+    if response.status_code != 204:
+        raise RuntimeError(f"Failed to trigger GitHub Action: {response.status_code} {response.text}")
+
+    print("GitHub Action triggered successfully.")
+    
+    # We return the key immediately, but the file won't be available until the action finishes
+    # In a fully robust system, you'd poll R2 or wait for a webhook callback
     return r2_key
 
 
