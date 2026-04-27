@@ -2473,6 +2473,98 @@ async def generate_todos(
 
 
 # ------------------------------------------------------------------
+# Storage Management  –  purge old R2 files to save space
+# ------------------------------------------------------------------
+
+@router.get("/storage/purge-estimate")
+async def get_purge_estimate(
+    channel_id: str,
+    days_old: int = 30,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Estimate how many files and how much data will be cleared."""
+    from datetime import timedelta
+    cutoff = now_ist() - timedelta(days=days_old)
+    
+    # Query: status=published, r2_object_key exists, published_at < cutoff
+    query = {
+        "channel_id": channel_id,
+        "status": "published",
+        "r2_object_key": {"$ne": None},
+        "published_at": {"$lt": cutoff}
+    }
+    
+    videos = await db.videos.find(query, {"metadata.duration_seconds": 1}).to_list(length=None)
+    count = len(videos)
+    
+    # Estimate size: 0.5MB per second, or 15MB flat if duration missing
+    total_estimated_bytes = 0
+    for v in videos:
+        duration = v.get("metadata", {}).get("duration_seconds")
+        if duration:
+            total_estimated_bytes += int(duration * 0.5 * 1024 * 1024)
+        else:
+            total_estimated_bytes += 15 * 1024 * 1024
+            
+    return {
+        "ok": True,
+        "count": count,
+        "estimated_bytes": total_estimated_bytes,
+        "days_old": days_old
+    }
+
+@router.post("/storage/purge")
+async def purge_storage(
+    channel_id: str,
+    days_old: int = 30,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Bulk delete R2 files for old published videos."""
+    from datetime import timedelta
+    cutoff = now_ist() - timedelta(days=days_old)
+    
+    query = {
+        "channel_id": channel_id,
+        "status": "published",
+        "r2_object_key": {"$ne": None},
+        "published_at": {"$lt": cutoff}
+    }
+    
+    videos = await db.videos.find(query).to_list(length=None)
+    
+    r2 = _get_r2()
+    purged_count = 0
+    errors = 0
+    
+    for v in videos:
+        r2_key = v.get("r2_object_key")
+        if not r2_key:
+            continue
+            
+        try:
+            r2.delete_video(r2_key)
+            # Update ALL videos that might be pointing to this same key
+            # (Though our current repost logic creates unique UUID keys, this is safer)
+            await db.videos.update_many(
+                {"channel_id": channel_id, "r2_object_key": r2_key},
+                {"$set": {"r2_object_key": None, "updated_at": now_ist()}}
+            )
+            purged_count += 1
+        except Exception as exc:
+            logger.error(f"Failed to purge R2 key {r2_key}: {exc}")
+            errors += 1
+            
+    logger.success(f"📦 Bulk Purge: Deleted {purged_count} files for channel {channel_id} (>{days_old} days old)")
+    
+    return {
+        "ok": True,
+        "purged_count": purged_count,
+        "errors": errors,
+        "days_old": days_old
+    }
+
+
+# ------------------------------------------------------------------
 # DELETE /{video_id}  –  remove a video and its assets
 # ------------------------------------------------------------------
 
@@ -2497,6 +2589,11 @@ async def delete_video(
         try:
             r2 = _get_r2()
             r2.delete_video(r2_key)
+            # Nullify this key on any other videos that might be sharing it
+            await db.videos.update_many(
+                {"channel_id": channel_id, "r2_object_key": r2_key},
+                {"$set": {"r2_object_key": None, "updated_at": now_ist()}}
+            )
         except Exception as exc:
             logger.warning(f"Failed to delete R2 object {r2_key} for video {video_id}: {exc}")
 
