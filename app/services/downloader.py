@@ -23,7 +23,9 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
         temp_path = os.path.join(temp_dir, "video.%(ext)s")
         
         ydl_opts = {
-            "format": "best",
+            # Force legacy single-file formats (22 is 720p MP4, 18 is 360p MP4)
+            # This bypasses the fragment-based bot detection
+            "format": "22/18/best",
             "outtmpl": temp_path,
             "quiet": True,
             "no_warnings": True,
