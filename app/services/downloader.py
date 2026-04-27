@@ -23,7 +23,7 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
         temp_path = os.path.join(temp_dir, "video.%(ext)s")
         
         ydl_opts = {
-            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "format": "bestvideo+bestaudio/best",
             "outtmpl": temp_path,
             "quiet": True,
             "no_warnings": True,
