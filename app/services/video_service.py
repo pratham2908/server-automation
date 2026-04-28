@@ -348,7 +348,7 @@ class VideoService:
             yt = await self._get_youtube_service(channel_id)
             if not yt: raise ValueError("No YouTube token")
             yt_vids = self._fetch_all_youtube_videos(yt, channel["youtube_channel_id"])
-            db_ids = {doc["youtube_video_id"] async for doc in self.db.videos.find({"channel_id": channel_id}, {"youtube_video_id": 1})}
+            db_ids = {doc["youtube_video_id"] async for doc in self.db.videos.find({"channel_id": channel_id, "youtube_video_id": {"$ne": None}}, {"youtube_video_id": 1})}
             new_vids = [v for v in yt_vids if v["youtube_video_id"] not in db_ids]
             for v in [v for v in yt_vids if v["youtube_video_id"] in db_ids]:
                 await self.db.videos.update_one({"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]}, {"$set": {"title": v["title"], "description": v["description"], "metadata.views": v["views"], "updated_at": now_ist()}})
