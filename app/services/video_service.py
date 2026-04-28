@@ -312,8 +312,10 @@ class VideoService:
         if len(slots) < len(vids): raise ValueError("Not enough slots")
         res = []
         for v_doc, slot in zip(vids, slots):
-            if platform == "youtube": r = await enqueue_video_for_youtube(self.db, channel_id, v_doc, slot)
-            else: r = await schedule_single_video_instagram(self.db, channel_id, v_doc, slot)
+            if platform == "youtube":
+                r = await enqueue_video_for_youtube(db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot)
+            else:
+                r = await schedule_single_video_instagram(db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot)
             res.append(r)
         return {"ok": True, "videos": res}
 
