@@ -38,13 +38,31 @@ class MetricsService:
         self.ai_model_usage = {} # model -> count
         self.ai_last_calls = deque(maxlen=20) # Last 20 AI calls
         
+        # External API metrics (YouTube, Instagram, etc.)
+        self.external_calls = 0
+        self.external_errors = 0
+        self.external_total_latency = 0.0
+        self.external_platform_usage = {} # platform -> count
+        self.external_last_calls = deque(maxlen=20) # Last 20 external calls
+
         # Endpoint stats
         self.endpoint_stats: Dict[str, Dict] = {} # key: "METHOD PATH" -> {count, avg_ms, errors}
 
     def record_request(self, method: str, path: str, status: int, duration_ms: float):
         """Records an HTTP request's metrics, excluding meta-endpoints."""
-        # Define endpoints to exclude from analytics
-        exclude_list = ["/observability/metrics", "/dashboard", "/logs/stream", "/health"]
+        # Define endpoints to exclude from analytics (system/internal/monitoring)
+        exclude_list = [
+            "/observability/metrics", 
+            "/dashboard", 
+            "/logs", 
+            "/health", 
+            "/api/schema",
+            "/favicon.ico",
+            "/robots.txt",
+            "/docs",
+            "/redoc",
+            "/openapi.json"
+        ]
         if any(ex in path for ex in exclude_list):
             return
 
@@ -84,7 +102,15 @@ class MetricsService:
 
     def cleanse_legacy_metrics(self):
         """Wipes monitoring calls from the history that were recorded before the exclusion fix."""
-        exclude_list = ["/observability/metrics", "/dashboard", "/logs/stream", "/health"]
+        exclude_list = [
+            "/observability/metrics", 
+            "/dashboard", 
+            "/logs", 
+            "/health", 
+            "/api/schema",
+            "/favicon.ico",
+            "/robots.txt"
+        ]
         with self.lock:
             # Rebuild the deque filtering out meta-endpoints (legacy data)
             new_history = deque([r for r in self.last_requests if not any(ex in r["path"] for ex in exclude_list)], maxlen=20)
@@ -103,6 +129,22 @@ class MetricsService:
             self.ai_last_calls.append({
                 "time": datetime.now(timezone.utc).isoformat(),
                 "model": model,
+                "duration_ms": round(duration_ms, 2),
+                "status": status
+            })
+
+    def record_external_call(self, platform: str, duration_ms: float, status: str = "success"):
+        """Records an external API (YouTube, Instagram) call metrics."""
+        with self.lock:
+            self.external_calls += 1
+            self.external_total_latency += duration_ms
+            self.external_platform_usage[platform] = self.external_platform_usage.get(platform, 0) + 1
+            if status != "success":
+                self.external_errors += 1
+            
+            self.external_last_calls.append({
+                "time": datetime.now(timezone.utc).isoformat(),
+                "platform": platform,
                 "duration_ms": round(duration_ms, 2),
                 "status": status
             })
@@ -183,6 +225,14 @@ class MetricsService:
                     "model_usage": self.ai_model_usage,
                     "history": list(self.ai_last_calls)
                 },
+                "external": {
+                    "total_calls": self.external_calls,
+                    "avg_latency_ms": round(self.external_total_latency / self.external_calls, 2) if self.external_calls > 0 else 0,
+                    "errors": self.external_errors,
+                    "error_rate": round(self.external_errors / self.external_calls * 100, 2) if self.external_calls > 0 else 0,
+                    "platform_usage": self.external_platform_usage,
+                    "history": list(self.external_last_calls)
+                },
                 "endpoints": {
                     k: {
                         "count": v["count"],
@@ -214,6 +264,8 @@ class MetricsService:
             summary["requests"]["recent"] = []
         if "ai" in summary:
             summary["ai"]["history"] = []
+        if "external" in summary:
+            summary["external"]["history"] = []
         
         await db.metrics_history.insert_one(summary)
         logger.info("Persisted metrics snapshot to DB")

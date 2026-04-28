@@ -317,6 +317,29 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                 <div id="ai-error-rate" class="stat-value" style="font-size: 1.5rem">0.0%</div>
             </div>
 
+            <!-- External Platforms -->
+            <div class="card">
+                <div class="stat-header">
+                    <div class="stat-title">Platform Calls</div>
+                    <div class="stat-icon" style="color: var(--accent)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg></div>
+                </div>
+                <div id="ext-total-calls" class="stat-value" style="font-size: 1.5rem">0</div>
+            </div>
+            <div class="card">
+                <div class="stat-header">
+                    <div class="stat-title">Ext Latency</div>
+                    <div class="stat-icon" style="color: var(--accent)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="12 6 12 12 16 14"></polyline></svg></div>
+                </div>
+                <div id="ext-avg-latency" class="stat-value" style="font-size: 1.5rem">0ms</div>
+            </div>
+            <div class="card">
+                <div class="stat-header">
+                    <div class="stat-title">Ext Err Rate</div>
+                    <div class="stat-icon" style="color: var(--error)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></div>
+                </div>
+                <div id="ext-error-rate" class="stat-value" style="font-size: 1.5rem">0.0%</div>
+            </div>
+
             <div class="card">
                 <div class="stat-header">
                     <div class="stat-title">Active Workers</div>
@@ -533,7 +556,12 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                             modelChart.update();
                         }
                     }
-                } catch (e) { console.warn('Stats: AI section error', e); }
+                    if (data.external) {
+                        safeSet('ext-total-calls', data.external.total_calls || 0);
+                        safeSet('ext-avg-latency', (data.external.avg_latency_ms || 0).toFixed(0) + 'ms');
+                        safeSet('ext-error-rate', (data.external.error_rate || 0).toFixed(1) + '%');
+                    }
+                } catch (e) { console.warn('Stats: AI/External section error', e); }
 
                 try {
                     const statusCounts = data.requests.status_counts || {};

@@ -35,22 +35,37 @@ class InstagramService:
         self._channel_id = channel_id
 
     def _get(self, endpoint: str, params: dict | None = None) -> dict:
+        import time
+        from app.services.metrics import metrics_service
+        
         headers = {"Authorization": f"Bearer {self._token}"}
-        resp = requests.get(
-            f"{_GRAPH_BASE}/{endpoint}",
-            params=params,
-            headers=headers,
-            timeout=30,
-        )
-        if not resp.ok:
-            try:
-                error_data = resp.json()
-                logger.error("Instagram API GET failed (%d): %s", resp.status_code, error_data)
-                # If it's a 400, the error_data usually contains important details like "(#10) Permission error"
-            except Exception:
-                logger.error("Instagram API GET failed (%d): %s", resp.status_code, resp.text)
-        resp.raise_for_status()
-        return resp.json()
+        start_time = time.time()
+        try:
+            resp = requests.get(
+                f"{_GRAPH_BASE}/{endpoint}",
+                params=params,
+                headers=headers,
+                timeout=30,
+            )
+            duration = (time.time() - start_time) * 1000
+            
+            if not resp.ok:
+                metrics_service.record_external_call("instagram", duration, "error")
+                try:
+                    error_data = resp.json()
+                    logger.error("Instagram API GET failed (%d): %s", resp.status_code, error_data)
+                except Exception:
+                    logger.error("Instagram API GET failed (%d): %s", resp.status_code, resp.text)
+            else:
+                metrics_service.record_external_call("instagram", duration, "success")
+                
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if not isinstance(e, requests.HTTPError):
+                duration = (time.time() - start_time) * 1000
+                metrics_service.record_external_call("instagram", duration, "error")
+            raise e
 
     # ------------------------------------------------------------------
     # Account info
@@ -264,22 +279,38 @@ class InstagramService:
     # ------------------------------------------------------------------
 
     def _post(self, endpoint: str, params: dict | None = None) -> dict:
+        import time
+        from app.services.metrics import metrics_service
+        
         payload = params or {}
         headers = {"Authorization": f"Bearer {self._token}"}
-        resp = requests.post(
-            f"{_GRAPH_BASE}/{endpoint}",
-            data=payload,
-            headers=headers,
-            timeout=60,
-        )
-        if not resp.ok:
-            try:
-                error_data = resp.json()
-                logger.error("Instagram API POST failed (%d): %s", resp.status_code, error_data)
-            except Exception:
-                logger.error("Instagram API POST failed (%d): %s", resp.status_code, resp.text)
-        resp.raise_for_status()
-        return resp.json()
+        start_time = time.time()
+        try:
+            resp = requests.post(
+                f"{_GRAPH_BASE}/{endpoint}",
+                data=payload,
+                headers=headers,
+                timeout=60,
+            )
+            duration = (time.time() - start_time) * 1000
+            
+            if not resp.ok:
+                metrics_service.record_external_call("instagram", duration, "error")
+                try:
+                    error_data = resp.json()
+                    logger.error("Instagram API POST failed (%d): %s", resp.status_code, error_data)
+                except Exception:
+                    logger.error("Instagram API POST failed (%d): %s", resp.status_code, resp.text)
+            else:
+                metrics_service.record_external_call("instagram", duration, "success")
+                
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if not isinstance(e, requests.HTTPError):
+                duration = (time.time() - start_time) * 1000
+                metrics_service.record_external_call("instagram", duration, "error")
+            raise e
 
     def create_reel_container(
         self,

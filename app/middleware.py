@@ -20,8 +20,18 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         query = str(request.query_params)
         
-        # Metadata for exclusion
-        is_meta_endpoint = "/observability/metrics" in path or "/dashboard" in path or "/logs/stream" in path or "/health" in path
+        # Metadata for exclusion (don't track system/internal monitoring in business metrics)
+        is_meta_endpoint = any(ex in path for ex in [
+            "/observability/metrics", 
+            "/dashboard", 
+            "/logs", 
+            "/health", 
+            "/api/schema",
+            "/favicon.ico",
+            "/robots.txt",
+            "/docs",
+            "/redoc"
+        ])
         
         # Don't log large binary uploads or logs/stream
         if "/logs/stream" in path or "/upload" in path or "/create" in path or "/dashboard" in path:

@@ -140,6 +140,22 @@ class YouTubeService:
         except RuntimeError:
             asyncio.run(_write())
 
+    def _execute(self, request: Any) -> Any:
+        """Helper to execute a YouTube API request with metrics tracking."""
+        import time
+        from app.services.metrics import metrics_service
+        
+        start_time = time.time()
+        try:
+            response = request.execute()
+            duration = (time.time() - start_time) * 1000
+            metrics_service.record_external_call("youtube", duration, "success")
+            return response
+        except Exception as e:
+            duration = (time.time() - start_time) * 1000
+            metrics_service.record_external_call("youtube", duration, "error")
+            raise e
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -150,10 +166,9 @@ class YouTubeService:
         Returns a dict with: ``name``, ``description``, ``subscriber_count``,
         ``video_count``, ``thumbnail_url``, ``custom_url``.
         """
-        response = (
+        response = self._execute(
             self._youtube.channels()
             .list(part="snippet,statistics", id=youtube_channel_id)
-            .execute()
         )
 
         items = response.get("items", [])
@@ -223,7 +238,7 @@ class YouTubeService:
             batch = youtube_video_ids[i : i + 40]
             try:
                 logger.info(f"📊 Requesting Analytics report for batch of {len(batch)} videos...")
-                response = (
+                response = self._execute(
                     self._youtube_analytics.reports()
                     .query(
                         ids="channel==MINE",
@@ -234,7 +249,6 @@ class YouTubeService:
                         filters=f"video=={','.join(batch)}",
                         maxResults=200,
                     )
-                    .execute()
                 )
             except Exception as exc:
                 error_msg = str(exc)
@@ -292,7 +306,7 @@ class YouTubeService:
             
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            result = (
+            result = self._execute(
                 self._youtube_analytics.reports()
                 .query(
                     ids="channel==MINE",
@@ -301,7 +315,6 @@ class YouTubeService:
                     metrics="videoThumbnailImpressions,videoThumbnailImpressionsClickRate",
                     filters=f"video=={youtube_video_id}",
                 )
-                .execute()
             )
 
             rows = result.get("rows", [])
@@ -339,7 +352,7 @@ class YouTubeService:
 
         today = now_ist().strftime("%Y-%m-%d")
         try:
-            response = (
+            response = self._execute(
                 self._youtube_analytics.reports()
                 .query(
                     ids="channel==MINE",
@@ -349,7 +362,6 @@ class YouTubeService:
                     metrics="audienceWatchRatio",
                     filters=f"video=={youtube_video_id}",
                 )
-                .execute()
             )
             
             curve = {}
@@ -379,13 +391,12 @@ class YouTubeService:
 
         for i in range(0, len(youtube_video_ids), 50):
             batch = youtube_video_ids[i : i + 50]
-            response = (
+            response = self._execute(
                 self._youtube.videos()
                 .list(
                     part="snippet,statistics,contentDetails",
                     id=",".join(batch),
                 )
-                .execute()
             )
             for item in response.get("items", []):
                 snippet = item.get("snippet", {})
@@ -507,7 +518,15 @@ class YouTubeService:
         response = None
         try:
             while response is None:
-                _, response = request.next_chunk()
+                start_time = time.time()
+                try:
+                    _, response = request.next_chunk()
+                    duration = (time.time() - start_time) * 1000
+                    metrics_service.record_external_call("youtube", duration, "success")
+                except Exception as e:
+                    duration = (time.time() - start_time) * 1000
+                    metrics_service.record_external_call("youtube", duration, "error")
+                    raise e
         except ResumableUploadError as exc:
             error_msg = str(exc)
             try:
@@ -542,14 +561,13 @@ class YouTubeService:
         """
         uploads_playlist_id = "UU" + youtube_channel_id[2:]
 
-        response = (
+        response = self._execute(
             self._youtube.playlistItems()
             .list(
                 part="snippet,contentDetails",
                 playlistId=uploads_playlist_id,
                 maxResults=min(max_results, 50),
             )
-            .execute()
         )
 
         videos: list[dict[str, Any]] = []
@@ -568,10 +586,9 @@ class YouTubeService:
         if video_ids:
             for i in range(0, len(video_ids), 50):
                 batch = video_ids[i : i + 50]
-                stats_resp = (
+                stats_resp = self._execute(
                     self._youtube.videos()
                     .list(part="statistics", id=",".join(batch))
-                    .execute()
                 )
                 stats_map = {
                     it["id"]: int(it.get("statistics", {}).get("commentCount", 0))
@@ -613,7 +630,7 @@ class YouTubeService:
 
             try:
                 response = (
-                    self._youtube.commentThreads().list(**kwargs).execute()
+                    self._execute(self._youtube.commentThreads().list(**kwargs))
                 )
             except Exception as exc:
                 logger.warning(
@@ -685,7 +702,7 @@ class YouTubeService:
 
             try:
                 response = (
-                    self._youtube.commentThreads().list(**kwargs).execute()
+                    self._execute(self._youtube.commentThreads().list(**kwargs))
                 )
             except Exception as exc:
                 logger.warning(
@@ -730,7 +747,7 @@ class YouTubeService:
 
         Returns the ID of the newly created reply comment.
         """
-        response = self._youtube.comments().insert(
+        response = self._execute(self._youtube.comments().insert(
             part="snippet",
             body={
                 "snippet": {
@@ -738,7 +755,7 @@ class YouTubeService:
                     "textOriginal": text,
                 }
             },
-        ).execute()
+        ))
         return response["id"]
 
 
