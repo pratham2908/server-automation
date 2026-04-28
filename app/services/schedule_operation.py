@@ -13,7 +13,7 @@ from typing import Any
 import pytz
 
 from app.logger import get_logger
-from app.timezone import IST, now_ist, to_ist_iso
+from app.timezone import IST, UTC, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
@@ -165,9 +165,10 @@ async def schedule_single_video(
 
     # Convert scheduled_at to UTC ISO string for YouTube's publishAt.
     if scheduled_at.tzinfo is not None:
-        utc_dt = scheduled_at.astimezone(pytz.utc)
+        utc_dt = scheduled_at.astimezone(UTC)
     else:
-        utc_dt = scheduled_at.replace(tzinfo=IST).astimezone(pytz.utc)
+        # Naive datetimes are assumed UTC.
+        utc_dt = scheduled_at.replace(tzinfo=UTC)
     publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tmp_path = None

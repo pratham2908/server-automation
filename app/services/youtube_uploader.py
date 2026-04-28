@@ -18,7 +18,7 @@ from typing import Any
 import pytz
 
 from app.logger import get_logger
-from app.timezone import IST, now_ist, to_ist_iso
+from app.timezone import IST, UTC, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
@@ -52,12 +52,13 @@ async def _upload_one_video(
     publish_at_str = None
     if scheduled_at:
         if scheduled_at.tzinfo is not None:
-            utc_dt = scheduled_at.astimezone(pytz.utc)
+            utc_dt = scheduled_at.astimezone(UTC)
         else:
-            utc_dt = scheduled_at.replace(tzinfo=IST).astimezone(pytz.utc)
+            # MongoDB stores naive datetimes as UTC.
+            utc_dt = scheduled_at.replace(tzinfo=UTC)
         
         # Only set publish_at if it's actually in the future.
-        if utc_dt > now_ist().astimezone(pytz.utc):
+        if utc_dt > now_ist().astimezone(UTC):
             publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tmp_path = None
