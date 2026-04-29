@@ -35,6 +35,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 "/robots.txt",
                 "/docs",
                 "/redoc",
+                "/api/errors",
             ]
         )
 
@@ -56,31 +57,33 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception as e:
-            # Log the crash to the Error Queue
-            try:
-                from app.database import get_db
-                from app.services.errors import get_error_service
+            # Log the crash to the Error Queue (only for non-meta endpoints)
+            if not is_meta_endpoint:
+                try:
+                    from app.database import get_db
+                    from app.services.errors import get_error_service
 
-                db = get_db()
-                error_service = get_error_service(db)
-                # Normalize path to group crashes by endpoint (remove numeric/UUID IDs)
-                import re
-                normalized_path = re.sub(r"\/[0-9a-f-]{8,}", "/{id}", path) # UUIDs
-                normalized_path = re.sub(r"\/[0-9]+", "/{id}", normalized_path) # Numeric IDs
-                
-                await error_service.log_error(
-                    feature=f"API: {method} {normalized_path}",
-                    message=f"Unhandled exception: {str(e)}",
-                    exception=e,
-                    context={
-                        "method": method,
-                        "path": path,
-                        "request_id": request_id,
-                        "query": query,
-                    },
-                )
-            except Exception as log_err:
-                logger.error(f"Failed to log API crash to Error Queue: {log_err}")
+                    db = get_db()
+                    error_service = get_error_service(db)
+                    
+                    # Normalize path to group crashes by endpoint (remove numeric/UUID IDs)
+                    import re
+                    normalized_path = re.sub(r"\/[0-9a-f-]{8,}", "/{id}", path) # UUIDs
+                    normalized_path = re.sub(r"\/[0-9]+", "/{id}", normalized_path) # Numeric IDs
+                    
+                    await error_service.log_error(
+                        feature=f"API: {method} {normalized_path}",
+                        message=f"Unhandled exception: {str(e)}",
+                        exception=e,
+                        context={
+                            "method": method,
+                            "path": path,
+                            "request_id": request_id,
+                            "query": query,
+                        },
+                    )
+                except Exception as log_err:
+                    logger.error(f"Failed to log API crash to Error Queue: {log_err}")
 
             # Log the crash for console/journalctl
             duration = (time.time() - start_time) * 1000
