@@ -1,13 +1,20 @@
 import asyncio
 import os
+import sys
+
+# Add the current directory to sys.path to allow importing from app
+sys.path.append(os.getcwd())
+
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timedelta, timezone
+from app.config import get_settings
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
 async def migrate_errors():
-    mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-    db_name = os.getenv("MONGODB_DB_NAME", "youtube_automation")
+    settings = get_settings()
+    mongodb_uri = settings.MONGODB_URI
+    db_name = settings.MONGODB_DB_NAME
     
     print(f"Connecting to {mongodb_uri}, DB: {db_name}")
     client = AsyncIOMotorClient(mongodb_uri)
