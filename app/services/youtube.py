@@ -9,6 +9,7 @@ written back to the DB.
 
 from datetime import datetime, timezone
 import json
+import time
 from typing import Any
 
 from app.timezone import now_ist
@@ -142,7 +143,6 @@ class YouTubeService:
 
     def _execute(self, request: Any) -> Any:
         """Helper to execute a YouTube API request with metrics tracking."""
-        import time
         from app.services.metrics import metrics_service
         
         start_time = time.time()
