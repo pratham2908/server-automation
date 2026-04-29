@@ -1,7 +1,6 @@
 """Preview analysis router -- ephemeral video retention predictions."""
 
 import asyncio
-import os
 import tempfile
 import uuid
 from datetime import timedelta
@@ -10,7 +9,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db, get_channel_platform
+from app.database import get_channel_platform, get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.timezone import now_ist
@@ -62,7 +61,9 @@ async def create_preview_analysis(
     now = now_ist()
 
     tmp = tempfile.NamedTemporaryFile(
-        delete=False, suffix=".mp4", prefix=f"preview_{preview_id}_",
+        delete=False,
+        suffix=".mp4",
+        prefix=f"preview_{preview_id}_",
     )
     try:
         contents = await file.read()
@@ -99,7 +100,13 @@ async def create_preview_analysis(
 
     asyncio.create_task(
         run_preview_analysis(
-            preview_id, channel_id, tmp_path, title, platform, db, main_mod.gemini_service,
+            preview_id,
+            channel_id,
+            tmp_path,
+            title,
+            platform,
+            db,
+            main_mod.gemini_service,
         )
     )
 
@@ -128,9 +135,7 @@ async def get_preview_analysis(
     analysis still exists, a ``version_comparison`` object is computed
     showing score deltas.
     """
-    doc = await db.preview_analysis.find_one(
-        {"channel_id": channel_id, "preview_id": preview_id}
-    )
+    doc = await db.preview_analysis.find_one({"channel_id": channel_id, "preview_id": preview_id})
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -145,6 +150,7 @@ async def get_preview_analysis(
         prev_doc = await db.preview_analysis.find_one({"preview_id": prev_id})
         if prev_doc:
             from app.services.preview_analysis import compute_version_comparison
+
             version_comparison = compute_version_comparison(doc, prev_doc)
 
     doc["version_comparison"] = version_comparison
@@ -163,9 +169,12 @@ async def list_preview_analyses(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """List all active (not yet expired) preview analyses for a channel."""
-    docs = await db.preview_analysis.find(
-        {"channel_id": channel_id}
-    ).sort("created_at", -1).limit(limit).to_list(length=limit)
+    docs = (
+        await db.preview_analysis.find({"channel_id": channel_id})
+        .sort("created_at", -1)
+        .limit(limit)
+        .to_list(length=limit)
+    )
 
     for d in docs:
         d.pop("_id", None)

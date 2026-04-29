@@ -60,8 +60,12 @@ class R2Service:
 
     def generate_presigned_url(self, key: str, expires_in: int = 3600) -> str:
         """Generate a temporary public URL for *key* (default 1 hour)."""
-        return self._client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self._bucket, "Key": key},
-            ExpiresIn=expires_in,
+        from typing import cast
+        return cast(
+            str,
+            self._client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self._bucket, "Key": key},
+                ExpiresIn=expires_in,
+            ),
         )

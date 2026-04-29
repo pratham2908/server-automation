@@ -1,27 +1,29 @@
-import time
-import psutil
-import os
-from collections import deque
-from threading import Lock
-from typing import Dict, List, Optional
-from datetime import datetime, timezone
 import logging
+import os
+import time
+from collections import deque
+from datetime import datetime, timezone
+from threading import Lock
+from typing import Dict
+
+import psutil
 
 logger = logging.getLogger(__name__)
 
+
 class MetricsService:
     """Service to track in-memory metrics for the automation server."""
-    
+
     def __init__(self):
         self.lock = Lock()
         self.start_time = time.time()
-        
+
         # Requests metrics
         self.total_requests = 0
         self.status_codes = {200: 0, 201: 0, 400: 0, 401: 0, 403: 0, 404: 0, 500: 0}
-        self.request_durations = deque(maxlen=1000) # Last 1000 request durations (ms)
-        self.last_requests = deque(maxlen=20) # Last 20 request metadata
-        
+        self.request_durations = deque(maxlen=1000)  # Last 1000 request durations (ms)
+        self.last_requests = deque(maxlen=20)  # Last 20 request metadata
+
         # Background tasks metrics
         self.tasks: Dict[str, Dict] = {
             "auto_publisher": {"status": "idle", "last_run": None, "count": 0, "errors": 0},
@@ -35,33 +37,33 @@ class MetricsService:
         self.ai_calls = 0
         self.ai_errors = 0
         self.ai_total_latency = 0.0
-        self.ai_model_usage = {} # model -> count
-        self.ai_last_calls = deque(maxlen=20) # Last 20 AI calls
-        
+        self.ai_model_usage = {}  # model -> count
+        self.ai_last_calls = deque(maxlen=20)  # Last 20 AI calls
+
         # External API metrics (YouTube, Instagram, etc.)
         self.external_calls = 0
         self.external_errors = 0
         self.external_total_latency = 0.0
-        self.external_platform_usage = {} # platform -> count
-        self.external_last_calls = deque(maxlen=20) # Last 20 external calls
+        self.external_platform_usage = {}  # platform -> count
+        self.external_last_calls = deque(maxlen=20)  # Last 20 external calls
 
         # Endpoint stats
-        self.endpoint_stats: Dict[str, Dict] = {} # key: "METHOD PATH" -> {count, avg_ms, errors}
+        self.endpoint_stats: Dict[str, Dict] = {}  # key: "METHOD PATH" -> {count, avg_ms, errors}
 
     def record_request(self, method: str, path: str, status: int, duration_ms: float):
         """Records an HTTP request's metrics, excluding meta-endpoints."""
         # Define endpoints to exclude from analytics (system/internal/monitoring)
         exclude_list = [
-            "/observability/metrics", 
-            "/dashboard", 
-            "/logs", 
-            "/health", 
+            "/observability/metrics",
+            "/dashboard",
+            "/logs",
+            "/health",
             "/api/schema",
             "/favicon.ico",
             "/robots.txt",
             "/docs",
             "/redoc",
-            "/openapi.json"
+            "/openapi.json",
         ]
         if any(ex in path for ex in exclude_list):
             return
@@ -70,13 +72,15 @@ class MetricsService:
             self.total_requests += 1
             self.status_codes[status] = self.status_codes.get(status, 0) + 1
             self.request_durations.append(duration_ms)
-            self.last_requests.append({
-                "time": datetime.now(timezone.utc).isoformat(),
-                "method": method,
-                "path": path,
-                "status": status,
-                "duration_ms": round(duration_ms, 2)
-            })
+            self.last_requests.append(
+                {
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "method": method,
+                    "path": path,
+                    "status": status,
+                    "duration_ms": round(duration_ms, 2),
+                }
+            )
 
             # Record per-endpoint stats
             # Normalize path to group by generic endpoint if it contains IDs
@@ -89,12 +93,12 @@ class MetricsService:
                     if len(segments) >= 5:
                         norm_path += f"/{segments[4]}"
                 elif len(segments) == 3:
-                     norm_path = f"/api/v1/{segments[2]}"
-            
+                    norm_path = f"/api/v1/{segments[2]}"
+
             key = f"{method} {norm_path}"
             if key not in self.endpoint_stats:
                 self.endpoint_stats[key] = {"count": 0, "total_ms": 0.0, "errors": 0}
-            
+
             self.endpoint_stats[key]["count"] += 1
             self.endpoint_stats[key]["total_ms"] += duration_ms
             if status >= 400:
@@ -103,17 +107,20 @@ class MetricsService:
     def cleanse_legacy_metrics(self):
         """Wipes monitoring calls from the history that were recorded before the exclusion fix."""
         exclude_list = [
-            "/observability/metrics", 
-            "/dashboard", 
-            "/logs", 
-            "/health", 
+            "/observability/metrics",
+            "/dashboard",
+            "/logs",
+            "/health",
             "/api/schema",
             "/favicon.ico",
-            "/robots.txt"
+            "/robots.txt",
         ]
         with self.lock:
             # Rebuild the deque filtering out meta-endpoints (legacy data)
-            new_history = deque([r for r in self.last_requests if not any(ex in r["path"] for ex in exclude_list)], maxlen=20)
+            new_history = deque(
+                [r for r in self.last_requests if not any(ex in r["path"] for ex in exclude_list)],
+                maxlen=20,
+            )
             self.last_requests = new_history
             logger.info("Cleansed monitoring calls from request history.")
 
@@ -125,29 +132,35 @@ class MetricsService:
             self.ai_model_usage[model] = self.ai_model_usage.get(model, 0) + 1
             if status != "success":
                 self.ai_errors += 1
-            
-            self.ai_last_calls.append({
-                "time": datetime.now(timezone.utc).isoformat(),
-                "model": model,
-                "duration_ms": round(duration_ms, 2),
-                "status": status
-            })
+
+            self.ai_last_calls.append(
+                {
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "model": model,
+                    "duration_ms": round(duration_ms, 2),
+                    "status": status,
+                }
+            )
 
     def record_external_call(self, platform: str, duration_ms: float, status: str = "success"):
         """Records an external API (YouTube, Instagram) call metrics."""
         with self.lock:
             self.external_calls += 1
             self.external_total_latency += duration_ms
-            self.external_platform_usage[platform] = self.external_platform_usage.get(platform, 0) + 1
+            self.external_platform_usage[platform] = (
+                self.external_platform_usage.get(platform, 0) + 1
+            )
             if status != "success":
                 self.external_errors += 1
-            
-            self.external_last_calls.append({
-                "time": datetime.now(timezone.utc).isoformat(),
-                "platform": platform,
-                "duration_ms": round(duration_ms, 2),
-                "status": status
-            })
+
+            self.external_last_calls.append(
+                {
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "platform": platform,
+                    "duration_ms": round(duration_ms, 2),
+                    "status": status,
+                }
+            )
 
     def track_task_start(self, task_name: str):
         """Marks a background task as running."""
@@ -172,23 +185,23 @@ class MetricsService:
             # CPU
             cpu_percent = psutil.cpu_percent(interval=None)
             cpu_count = psutil.cpu_count()
-            
+
             # Memory
             mem = psutil.virtual_memory()
-            mem_total = mem.total / (1024 ** 3) # GB
+            mem_total = mem.total / (1024**3)  # GB
             mem_used = mem.percent
-            
+
             # Disk
-            disk = psutil.disk_usage('/')
-            disk_total = disk.total / (1024 ** 3) # GB
+            disk = psutil.disk_usage("/")
+            disk_total = disk.total / (1024**3)  # GB
             disk_used = disk.percent
-            
+
             # Process specific
             process = psutil.Process(os.getpid())
-            proc_mem = process.memory_info().rss / (1024 ** 2) # MB
+            proc_mem = process.memory_info().rss / (1024**2)  # MB
             proc_cpu = process.cpu_percent(interval=None)
             uptime = time.time() - self.start_time
-            
+
             return {
                 "cpu": {"percent": cpu_percent, "cores": cpu_count},
                 "mem": {"percent": mem_used, "total_gb": round(mem_total, 2)},
@@ -196,8 +209,8 @@ class MetricsService:
                 "process": {
                     "mem_mb": round(proc_mem, 2),
                     "cpu_percent": proc_cpu,
-                    "uptime_seconds": int(uptime)
-                }
+                    "uptime_seconds": int(uptime),
+                },
             }
         except Exception as e:
             logger.error(f"Failed to fetch system stats: {e}")
@@ -206,8 +219,12 @@ class MetricsService:
     def get_summary(self) -> Dict:
         """Returns a full summary of dashboard data."""
         with self.lock:
-            avg_duration = sum(self.request_durations) / len(self.request_durations) if self.request_durations else 0
-            
+            avg_duration = (
+                sum(self.request_durations) / len(self.request_durations)
+                if self.request_durations
+                else 0
+            )
+
             return {
                 "server_time": datetime.now(timezone.utc).isoformat(),
                 "uptime_human": self._format_uptime(time.time() - self.start_time),
@@ -215,35 +232,47 @@ class MetricsService:
                     "total": self.total_requests,
                     "status_counts": self.status_codes,
                     "avg_duration_ms": round(avg_duration, 2),
-                    "recent": list(self.last_requests)
+                    "recent": list(self.last_requests),
                 },
                 "ai": {
                     "total_calls": self.ai_calls,
-                    "avg_latency_ms": round(self.ai_total_latency / self.ai_calls, 2) if self.ai_calls > 0 else 0,
+                    "avg_latency_ms": round(self.ai_total_latency / self.ai_calls, 2)
+                    if self.ai_calls > 0
+                    else 0,
                     "errors": self.ai_errors,
-                    "error_rate": round(self.ai_errors / self.ai_calls * 100, 2) if self.ai_calls > 0 else 0,
+                    "error_rate": round(self.ai_errors / self.ai_calls * 100, 2)
+                    if self.ai_calls > 0
+                    else 0,
                     "model_usage": self.ai_model_usage,
-                    "history": list(self.ai_last_calls)
+                    "history": list(self.ai_last_calls),
                 },
                 "external": {
                     "total_calls": self.external_calls,
-                    "avg_latency_ms": round(self.external_total_latency / self.external_calls, 2) if self.external_calls > 0 else 0,
+                    "avg_latency_ms": round(self.external_total_latency / self.external_calls, 2)
+                    if self.external_calls > 0
+                    else 0,
                     "errors": self.external_errors,
-                    "error_rate": round(self.external_errors / self.external_calls * 100, 2) if self.external_calls > 0 else 0,
+                    "error_rate": round(self.external_errors / self.external_calls * 100, 2)
+                    if self.external_calls > 0
+                    else 0,
                     "platform_usage": self.external_platform_usage,
-                    "history": list(self.external_last_calls)
+                    "history": list(self.external_last_calls),
                 },
                 "endpoints": {
                     k: {
                         "count": v["count"],
                         "avg_ms": round(v["total_ms"] / v["count"], 2) if v["count"] > 0 else 0,
                         "errors": v["errors"],
-                        "error_rate": round(v["errors"] / v["count"] * 100, 1) if v["count"] > 0 else 0
+                        "error_rate": round(v["errors"] / v["count"] * 100, 1)
+                        if v["count"] > 0
+                        else 0,
                     }
-                    for k, v in sorted(self.endpoint_stats.items(), key=lambda item: item[1]["count"], reverse=True)[:10]
+                    for k, v in sorted(
+                        self.endpoint_stats.items(), key=lambda item: item[1]["count"], reverse=True
+                    )[:10]
                 },
                 "tasks": self.tasks,
-                "system": self.get_system_stats()
+                "system": self.get_system_stats(),
             }
 
     def _format_uptime(self, seconds: float) -> str:
@@ -266,9 +295,10 @@ class MetricsService:
             summary["ai"]["history"] = []
         if "external" in summary:
             summary["external"]["history"] = []
-        
+
         await db.metrics_history.insert_one(summary)
         logger.info("Persisted metrics snapshot to DB")
+
 
 # Global instance
 metrics_service = MetricsService()

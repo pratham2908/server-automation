@@ -21,11 +21,21 @@ class HookAnalysis(BaseModel):
         "medium",
         description="One of: low, medium, high",
     )
-    first_frame_description: str = Field("", description="What the viewer sees in the very first frame")
-    visual_change_within_5s: bool = Field(False, description="Whether a significant visual change occurs in the first 5 seconds")
-    audio_hook_present: bool = Field(False, description="Whether a compelling audio hook exists in the first 5 seconds")
-    text_overlay_present: bool = Field(False, description="Whether text overlay / captions appear in the first 5 seconds")
-    notes: list[str] = Field(default_factory=list, description="Specific observations about the hook")
+    first_frame_description: str = Field(
+        "", description="What the viewer sees in the very first frame"
+    )
+    visual_change_within_5s: bool = Field(
+        False, description="Whether a significant visual change occurs in the first 5 seconds"
+    )
+    audio_hook_present: bool = Field(
+        False, description="Whether a compelling audio hook exists in the first 5 seconds"
+    )
+    text_overlay_present: bool = Field(
+        False, description="Whether text overlay / captions appear in the first 5 seconds"
+    )
+    notes: list[str] = Field(
+        default_factory=list, description="Specific observations about the hook"
+    )
 
 
 class SceneCut(BaseModel):
@@ -44,7 +54,9 @@ class PacingAnalysis(BaseModel):
 
     total_scene_cuts: int = Field(0, ge=0)
     avg_cut_interval_seconds: float = Field(0, ge=0, description="Average seconds between cuts")
-    longest_static_segment_seconds: float = Field(0, ge=0, description="Longest stretch without a visual change")
+    longest_static_segment_seconds: float = Field(
+        0, ge=0, description="Longest stretch without a visual change"
+    )
     pacing_score: int = Field(0, ge=0, le=100, description="Overall pacing quality 0-100")
     visual_change_timestamps: list[SceneCut] = Field(default_factory=list)
 
@@ -63,20 +75,26 @@ class PacingMatch(BaseModel):
     template_id: str
     template_name: str
     match_score: int = Field(..., ge=0, le=100, description="How closely it matches 0-100")
-    deviations: list[str] = Field(default_factory=list, description="Specific ways it differs from the template")
-    recommendations: list[str] = Field(default_factory=list, description="How to better align with the template")
+    deviations: list[str] = Field(
+        default_factory=list, description="Specific ways it differs from the template"
+    )
+    recommendations: list[str] = Field(
+        default_factory=list, description="How to better align with the template"
+    )
 
 
 class RetentionPrediction(BaseModel):
     """Full structured output from Gemini's video retention analysis."""
 
     predicted_avg_retention_percent: float = Field(
-        0, ge=0, le=100,
+        0,
+        ge=0,
+        le=100,
         description="Predicted average percentage of video watched",
     )
     predicted_drop_off_points: list[DropOffPoint] = Field(default_factory=list)
-    hook_analysis: HookAnalysis = Field(default_factory=HookAnalysis)
-    pacing_analysis: PacingAnalysis = Field(default_factory=PacingAnalysis)
+    hook_analysis: HookAnalysis = Field(default_factory=lambda: HookAnalysis())
+    pacing_analysis: PacingAnalysis = Field(default_factory=lambda: PacingAnalysis())
     pacing_matches: list[PacingMatch] = Field(default_factory=list)
     narrative_structure: str = Field(
         "",
@@ -112,7 +130,7 @@ class RetentionAnalysis(BaseModel):
     error_message: Optional[str] = None
 
     # Predicted (populated by Gemini video analysis)
-    analysis: RetentionPrediction = Field(default_factory=RetentionPrediction)
+    analysis: RetentionPrediction = Field(default_factory=lambda: RetentionPrediction())
     analyzed_at: Optional[datetime] = None
 
     # Actual metrics (backfilled from analysis_history after publish)
@@ -137,10 +155,12 @@ class RetentionAnalysis(BaseModel):
 class PacingTemplate(BaseModel):
     """A reusable pacing pattern derived from top-performing videos."""
 
-    template_id: str = Field(..., description="Unique ID for the template (e.g. 'fast-cut-montage')")
+    template_id: str = Field(
+        ..., description="Unique ID for the template (e.g. 'fast-cut-montage')"
+    )
     name: str = Field(..., description="Human-readable name")
     description: str = Field("", description="What this pacing style feels like")
-    
+
     # Target metrics
     target_avg_cut_interval: float = Field(..., description="Ideal seconds per cut")
     target_pacing_score: int = Field(..., description="Minimum pacing score for this template")
@@ -148,14 +168,12 @@ class PacingTemplate(BaseModel):
         default_factory=list,
         description="Percentage of cuts in each decile of the video duration",
     )
-    
-    # Performance context
-    avg_performance_rating: float = Field(0, description="Average performance of videos using this template")
-    video_count: int = Field(0, description="Number of videos used to define this template")
-    
-    created_at: datetime = Field(default_factory=now_ist)
-    updated_at: datetime = Field(default_factory=now_ist)
 
+    # Performance context
+    avg_performance_rating: float = Field(
+        0, description="Average performance of videos using this template"
+    )
+    video_count: int = Field(0, description="Number of videos used to define this template")
 
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)

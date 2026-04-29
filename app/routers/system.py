@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Request, HTTPException, status, Query, Depends
-from fastapi.responses import HTMLResponse
 import asyncio
-import os
 import shutil
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import HTMLResponse
+
 from app.config import get_settings
 
 router = APIRouter(tags=["system"])
+
 
 async def verify_api_key(api_key: str = Query(...)):
     settings = get_settings()
@@ -16,28 +18,30 @@ async def verify_api_key(api_key: str = Query(...)):
         )
     return api_key
 
+
 def has_systemctl():
     return shutil.which("systemctl") is not None
+
 
 async def run_shell_command(command: list[str]) -> tuple[int, str, str]:
     if not command:
         return 1, "", "No command provided"
-        
+
     try:
         process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
         return process.returncode or 0, stdout.decode().strip(), stderr.decode().strip()
     except Exception as e:
         return 1, "", str(e)
 
+
 @router.get("/system", response_class=HTMLResponse)
 async def system_dashboard(api_key: str = Depends(verify_api_key)):
     """A premium dashboard to manage the automation server."""
-    html_content = """
+    html_content = (
+        """
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -290,7 +294,9 @@ async def system_dashboard(api_key: str = Depends(verify_api_key)):
                 <div>&copy; 2026 YouTube Automation</div>
                 <div class="links">
                     <a href="/docs">Docs</a>
-                    <a href="/logs?api_key=""" + api_key + """">Logs</a>
+                    <a href="/logs?api_key="""
+        + api_key
+        + """">Logs</a>
                     <a href="/health">Health</a>
                 </div>
             </footer>
@@ -299,7 +305,9 @@ async def system_dashboard(api_key: str = Depends(verify_api_key)):
         <div id="toast" class="toast">Action updated successfully</div>
 
         <script>
-            const apiKey = '""" + api_key + """';
+            const apiKey = '"""
+        + api_key
+        + """';
             const consoleEl = document.getElementById('console');
             const statusBadge = document.getElementById('status-badge');
             const statusText = document.getElementById('status-text');
@@ -384,45 +392,52 @@ async def system_dashboard(api_key: str = Depends(verify_api_key)):
     </body>
     </html>
     """
+    )
     return HTMLResponse(content=html_content)
+
 
 @router.get("/api/system/status")
 async def get_status(api_key: str = Depends(verify_api_key)):
     if not has_systemctl():
-        return {"ok": True, "active": True, "status": "mock", "raw": "Running on development environment (no systemctl)."}
-    
+        return {
+            "ok": True,
+            "active": True,
+            "status": "mock",
+            "raw": "Running on development environment (no systemctl).",
+        }
+
     code, stdout, stderr = await run_shell_command(["systemctl", "is-active", "automation-server"])
     is_active = stdout == "active"
-    
+
     _, full_status, _ = await run_shell_command(["systemctl", "status", "automation-server"])
-    
-    return {
-        "ok": True, 
-        "active": is_active, 
-        "status": stdout, 
-        "raw": full_status
-    }
+
+    return {"ok": True, "active": is_active, "status": stdout, "raw": full_status}
+
 
 @router.post("/api/system/restart")
 async def restart_server(api_key: str = Depends(verify_api_key)):
     if not has_systemctl():
         return {"ok": False, "error": "Not supported on this OS"}
-    
+
     asyncio.create_task(run_shell_command(["sudo", "systemctl", "restart", "automation-server"]))
     return {"ok": True, "message": "Restart command sent"}
+
 
 @router.post("/api/system/stop")
 async def stop_server(api_key: str = Depends(verify_api_key)):
     if not has_systemctl():
         return {"ok": False, "error": "Not supported on this OS"}
-    
+
     asyncio.create_task(run_shell_command(["sudo", "systemctl", "stop", "automation-server"]))
     return {"ok": True, "message": "Stop command sent"}
+
 
 @router.post("/api/system/start")
 async def start_server(api_key: str = Depends(verify_api_key)):
     if not has_systemctl():
         return {"ok": False, "error": "Not supported on this OS"}
-    
-    code, stdout, stderr = await run_shell_command(["sudo", "systemctl", "start", "automation-server"])
+
+    code, stdout, stderr = await run_shell_command(
+        ["sudo", "systemctl", "start", "automation-server"]
+    )
     return {"ok": code == 0, "message": "Start command executed", "output": stdout, "error": stderr}

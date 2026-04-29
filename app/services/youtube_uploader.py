@@ -15,15 +15,13 @@ import asyncio
 import os
 from typing import Any
 
-import pytz
-
 from app.logger import get_logger
-from app.timezone import IST, UTC, now_ist, to_ist_iso
 from app.services.errors import get_error_service
+from app.timezone import UTC, now_ist
 
 logger = get_logger(__name__)
 
-_POLL_INTERVAL_SECONDS = 300   # 5 minutes
+_POLL_INTERVAL_SECONDS = 300  # 5 minutes
 _MAX_UPLOAD_ATTEMPTS = 5
 
 
@@ -57,7 +55,7 @@ async def _upload_one_video(
         else:
             # MongoDB stores naive datetimes as UTC.
             utc_dt = scheduled_at.replace(tzinfo=UTC)
-        
+
         # Only set publish_at if it's actually in the future.
         if utc_dt > now_ist().astimezone(UTC):
             publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -113,11 +111,7 @@ async def _upload_one_video(
             feature="YouTube Uploader",
             message=f"Failed to upload video '{video_doc.get('title', video_id)}' (Attempt {attempts}/{_MAX_UPLOAD_ATTEMPTS})",
             exception=e,
-            context={
-                "video_id": video_id,
-                "channel_id": channel_id,
-                "attempt": attempts
-            }
+            context={"video_id": video_id, "channel_id": channel_id, "attempt": attempts},
         )
 
         if attempts >= _MAX_UPLOAD_ATTEMPTS:
@@ -173,9 +167,7 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
     # Only pick up entries explicitly marked as youtube (or missing platform).
     # We pick them up immediately so we can schedule them natively on YouTube.
     queued_entries = await db.schedule_queue.find(
-        {
-            "$or": [{"platform": "youtube"}, {"platform": {"$exists": False}}]
-        }
+        {"$or": [{"platform": "youtube"}, {"platform": {"$exists": False}}]}
     ).to_list(length=None)
 
     if not queued_entries:
@@ -256,7 +248,7 @@ async def run_youtube_uploader(db: Any, r2_service: Any) -> None:
             await error_service.log_error(
                 feature="YouTube Uploader Loop",
                 message="YouTube uploader encountered an error during poll cycle",
-                exception=e
+                exception=e,
             )
 
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)

@@ -48,12 +48,10 @@ API_SCHEMA = {
                         "enabled": True,
                         "min_hours_since_last_upload": 12,
                         "min_views_threshold": 1000,
-                        "schedule_delay_minutes": 15
+                        "schedule_delay_minutes": 15,
                     }
                 },
-                "last_tasks": {
-                    "velocity_booster": "2026-03-06T19:53:30Z"
-                },
+                "last_tasks": {"velocity_booster": "2026-03-06T19:53:30Z"},
             },
         },
         {
@@ -90,15 +88,30 @@ API_SCHEMA = {
             "path": "/api/v1/channels/{channel_id}/content-params",
             "description": "List all content param definitions for the channel",
             "request": None,
-            "response": [{"name": "simulation_type", "values": [{"value": "battle", "score": 85, "video_count": 4}], "belongs_to": ["all"]}],
+            "response": [
+                {
+                    "name": "simulation_type",
+                    "values": [{"value": "battle", "score": 85, "video_count": 4}],
+                    "belongs_to": ["all"],
+                }
+            ],
         },
         {
             "group": "Channels",
             "method": "POST",
             "path": "/api/v1/channels/{channel_id}/content-params",
             "description": "Add a new content param definition",
-            "request": {"name": "simulation_type", "description": "Type of simulation", "values": ["battle", "survival"], "belongs_to": ["all"]},
-            "response": {"name": "simulation_type", "values": [{"value": "battle", "score": 0, "video_count": 0}], "belongs_to": ["all"]},
+            "request": {
+                "name": "simulation_type",
+                "description": "Type of simulation",
+                "values": ["battle", "survival"],
+                "belongs_to": ["all"],
+            },
+            "response": {
+                "name": "simulation_type",
+                "values": [{"value": "battle", "score": 0, "video_count": 0}],
+                "belongs_to": ["all"],
+            },
         },
         {
             "group": "Channels",
@@ -135,7 +148,12 @@ API_SCHEMA = {
                 "token": "ya29.a0ARrdaM...",
                 "refresh_token": "1//0eXyz...",
                 "token_uri": "https://oauth2.googleapis.com/token",
-                "scopes": ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.force-ssl", "https://www.googleapis.com/auth/yt-analytics.readonly"],
+                "scopes": [
+                    "https://www.googleapis.com/auth/youtube.upload",
+                    "https://www.googleapis.com/auth/youtube.readonly",
+                    "https://www.googleapis.com/auth/youtube.force-ssl",
+                    "https://www.googleapis.com/auth/yt-analytics.readonly",
+                ],
                 "expiry": "2026-03-07T12:00:00Z",
             },
             "response": {"ok": True, "channel_id": "ch1", "message": "YouTube tokens stored"},
@@ -146,7 +164,11 @@ API_SCHEMA = {
             "path": "/api/v1/channels/{channel_id}/youtube-token",
             "description": "Get a fresh access token (auto-refreshes if expired). Never returns the refresh token.",
             "request": None,
-            "response": {"ok": True, "access_token": "ya29.a0ARrdaM...", "expiry": "2026-03-07T13:00:00Z"},
+            "response": {
+                "ok": True,
+                "access_token": "ya29.a0ARrdaM...",
+                "expiry": "2026-03-07T13:00:00Z",
+            },
         },
         {
             "group": "YouTube Tokens",
@@ -169,7 +191,11 @@ API_SCHEMA = {
             "path": "/api/v1/channels/{channel_id}/categories/",
             "description": "List categories for a channel",
             "query_params": {
-                "status_filter": {"type": "string", "enum": ["active", "archived"], "optional": True},
+                "status_filter": {
+                    "type": "string",
+                    "enum": ["active", "archived"],
+                    "optional": True,
+                },
             },
             "request": None,
             "response": [
@@ -211,7 +237,12 @@ API_SCHEMA = {
             "method": "PATCH",
             "path": "/api/v1/channels/{channel_id}/categories/{category_id}",
             "description": "Update a category. Name changes propagate to videos.",
-            "request": {"name": "New Name", "description": "Updated", "score": 90, "status": "archived"},
+            "request": {
+                "name": "New Name",
+                "description": "Updated",
+                "score": 90,
+                "status": "archived",
+            },
             "response": {"ok": True, "category_id": "a1b2c3d4-..."},
         },
         {
@@ -229,9 +260,21 @@ API_SCHEMA = {
             "path": "/api/v1/channels/{channel_id}/videos/",
             "description": "List videos with sync status",
             "query_params": {
-                "status_filter": {"type": "string", "enum": ["todo", "ready", "queued", "scheduled", "published"], "optional": True},
-                "verification_status": {"type": "string", "enum": ["unverified", "verified", "missing"], "optional": True},
-                "suggest_n": {"type": "integer", "optional": True, "description": "Mark top N todo videos as suggested"},
+                "status_filter": {
+                    "type": "string",
+                    "enum": ["todo", "ready", "queued", "scheduled", "published"],
+                    "optional": True,
+                },
+                "verification_status": {
+                    "type": "string",
+                    "enum": ["unverified", "verified", "missing"],
+                    "optional": True,
+                },
+                "suggest_n": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "Mark top N todo videos as suggested",
+                },
             },
             "request": None,
             "response": {
@@ -302,7 +345,9 @@ API_SCHEMA = {
             "method": "POST",
             "path": "/api/v1/channels/{channel_id}/videos/{video_id}/verify-params",
             "description": "Mark content params as verified. Optionally pass corrected values.",
-            "request": {"content_params": {"simulation_type": "survival", "music": "Dramatic Piano"}},
+            "request": {
+                "content_params": {"simulation_type": "survival", "music": "Dramatic Piano"}
+            },
             "response": {
                 "ok": True,
                 "video_id": "uuid-1234",
@@ -327,7 +372,11 @@ API_SCHEMA = {
             "request": {"file": "(binary video file)"},
             "response": {
                 "ok": True,
-                "video": {"video_id": "uuid-1234", "status": "ready", "r2_object_key": "ch1/uuid-1234.mp4"},
+                "video": {
+                    "video_id": "uuid-1234",
+                    "status": "ready",
+                    "r2_object_key": "ch1/uuid-1234.mp4",
+                },
                 "queue_position": 3,
             },
         },
@@ -343,13 +392,13 @@ API_SCHEMA = {
                 "description": "...",
                 "tags": "tag1, tag2 (YouTube only; ignored for Instagram)",
                 "category": "Comedy",
-                "content_params": "{\"topic\": \"humor\"}",
-                "scheduled_at": "2026-03-20T10:00:00+05:30 (Instagram only)"
+                "content_params": '{"topic": "humor"}',
+                "scheduled_at": "2026-03-20T10:00:00+05:30 (Instagram only)",
             },
             "response": {
                 "ok": True,
                 "video": {"video_id": "uuid-1234", "status": "scheduled", "scheduled_at": "..."},
-                "queue_position": 1
+                "queue_position": 1,
             },
         },
         {
@@ -392,7 +441,10 @@ API_SCHEMA = {
             "path": "/api/v1/channels/{channel_id}/videos/updateToDoList",
             "description": "Generate n new video ideas via Gemini based on latest analysis",
             "request": {"n": 5},
-            "response": {"ok": True, "message": "Successfully generated 5 new videos for the to-do list."},
+            "response": {
+                "ok": True,
+                "message": "Successfully generated 5 new videos for the to-do list.",
+            },
         },
         {
             "group": "Videos",
@@ -420,7 +472,12 @@ API_SCHEMA = {
                     {"day_of_week": "monday", "times": ["14:00", "18:00"], "video_count": 2},
                 ],
                 "content_param_analysis": [
-                    {"param_name": "simulation_type", "best_values": ["battle"], "worst_values": ["puzzle"], "insight": "..."},
+                    {
+                        "param_name": "simulation_type",
+                        "best_values": ["battle"],
+                        "worst_values": ["puzzle"],
+                        "insight": "...",
+                    },
                 ],
                 "best_combinations": [
                     {"params": {"simulation_type": "battle", "music": "Epic"}, "reasoning": "..."},
@@ -438,7 +495,12 @@ API_SCHEMA = {
             "path": "/api/v1/channels/{channel_id}/analysis/update",
             "description": "Two-step pipeline: (1) per-video analysis stored in analysis_history, (2) channel summary",
             "request": None,
-            "response": {"channel_id": "ch1", "subscriber_count": 5000, "version": 3, "category_analysis": ["..."]},
+            "response": {
+                "channel_id": "ch1",
+                "subscriber_count": 5000,
+                "version": 3,
+                "category_analysis": ["..."],
+            },
         },
         {
             "group": "Analysis",
@@ -446,9 +508,21 @@ API_SCHEMA = {
             "path": "/api/v1/channels/{channel_id}/analysis/history",
             "description": "List per-video analyses with optional date range filter",
             "query_params": {
-                "from": {"type": "datetime", "optional": True, "description": "Filter analyzed_at >= from"},
-                "to": {"type": "datetime", "optional": True, "description": "Filter analyzed_at <= to"},
-                "limit": {"type": "integer", "optional": True, "description": "Max results; if omitted, returns entire history"},
+                "from": {
+                    "type": "datetime",
+                    "optional": True,
+                    "description": "Filter analyzed_at >= from",
+                },
+                "to": {
+                    "type": "datetime",
+                    "optional": True,
+                    "description": "Filter analyzed_at <= to",
+                },
+                "limit": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "Max results; if omitted, returns entire history",
+                },
             },
             "request": None,
             "response": [
@@ -461,9 +535,13 @@ API_SCHEMA = {
                     "content_params": {"simulation_type": "battle", "music": "Epic Orchestral"},
                     "published_at": "2026-03-01T10:00:00+05:30",
                     "stats_snapshot": {
-                        "views": 15000, "likes": 800, "comments": 45,
-                        "engagement_rate": 5.63, "avg_percentage_viewed": 72.5,
-                        "subscribers_gained": 120, "views_per_subscriber": 3.0,
+                        "views": 15000,
+                        "likes": 800,
+                        "comments": 45,
+                        "engagement_rate": 5.63,
+                        "avg_percentage_viewed": 72.5,
+                        "subscribers_gained": 120,
+                        "views_per_subscriber": 3.0,
                         "subscriber_count_at_analysis": 5000,
                     },
                     "ai_insight": {
@@ -506,15 +584,21 @@ API_SCHEMA = {
             "response": {
                 "channel_id": "ch1",
                 "period_1": {
-                    "from": "2026-02-01", "to": "2026-02-15",
-                    "video_count": 10, "avg_views": 12000,
-                    "avg_engagement_rate": 4.5, "total_subscribers_gained": 500,
+                    "from": "2026-02-01",
+                    "to": "2026-02-15",
+                    "video_count": 10,
+                    "avg_views": 12000,
+                    "avg_engagement_rate": 4.5,
+                    "total_subscribers_gained": 500,
                     "avg_performance_rating": 72.3,
                 },
                 "period_2": {
-                    "from": "2026-02-16", "to": "2026-03-01",
-                    "video_count": 12, "avg_views": 18000,
-                    "avg_engagement_rate": 5.8, "total_subscribers_gained": 850,
+                    "from": "2026-02-16",
+                    "to": "2026-03-01",
+                    "video_count": 12,
+                    "avg_views": 18000,
+                    "avg_engagement_rate": 5.8,
+                    "total_subscribers_gained": 850,
                     "avg_performance_rating": 81.5,
                 },
             },
@@ -561,10 +645,37 @@ API_SCHEMA = {
                     "last_known_comment_count": 450,
                     "comments_analyzed_upto": "2026-03-20T15:30:00Z",
                     "analysis": {
-                        "sentiment_summary": {"positive_percentage": 72, "negative_percentage": 12, "neutral_percentage": 16, "overall_sentiment": "positive"},
-                        "what_audience_loves": [{"theme": "Clear explanations", "signal_strength": 8, "representative_quotes": ["..."], "count": 45}],
-                        "complaints": [{"theme": "Audio quality", "signal_strength": 4, "representative_quotes": ["..."], "count": 8}],
-                        "demands": [{"topic": "Cover advanced topics", "signal_strength": 9, "demand_type": "content_request", "representative_quotes": ["..."], "count": 67}],
+                        "sentiment_summary": {
+                            "positive_percentage": 72,
+                            "negative_percentage": 12,
+                            "neutral_percentage": 16,
+                            "overall_sentiment": "positive",
+                        },
+                        "what_audience_loves": [
+                            {
+                                "theme": "Clear explanations",
+                                "signal_strength": 8,
+                                "representative_quotes": ["..."],
+                                "count": 45,
+                            }
+                        ],
+                        "complaints": [
+                            {
+                                "theme": "Audio quality",
+                                "signal_strength": 4,
+                                "representative_quotes": ["..."],
+                                "count": 8,
+                            }
+                        ],
+                        "demands": [
+                            {
+                                "topic": "Cover advanced topics",
+                                "signal_strength": 9,
+                                "demand_type": "content_request",
+                                "representative_quotes": ["..."],
+                                "count": 67,
+                            }
+                        ],
                         "content_gaps": ["No coverage of advanced workflows"],
                         "trending_topics": ["AI integration"],
                         "key_insights": ["Strong demand for advanced content"],
@@ -580,7 +691,12 @@ API_SCHEMA = {
             "path": "/api/v1/channels/{channel_id}/comment-analysis/{analysis_id}",
             "description": "Get a specific comment analysis by its MongoDB _id",
             "request": None,
-            "response": {"_id": "60f7b2a1...", "channel_id": "ch1", "platform_video_id": "...", "analysis": {"...": "..."}},
+            "response": {
+                "_id": "60f7b2a1...",
+                "channel_id": "ch1",
+                "platform_video_id": "...",
+                "analysis": {"...": "..."},
+            },
         },
         {
             "group": "Comment Analysis",
@@ -611,10 +727,37 @@ API_SCHEMA = {
                 "channel_id": "ch1",
                 "total_videos_analyzed": 15,
                 "total_comments_analyzed": 5200,
-                "aggregate_sentiment": {"positive_percentage": 68, "negative_percentage": 14, "neutral_percentage": 18, "overall_sentiment": "positive"},
-                "top_loves": [{"theme": "Production quality", "signal_strength": 9, "count": 320, "representative_quotes": ["..."]}],
-                "top_complaints": [{"theme": "Upload frequency", "signal_strength": 6, "count": 85, "representative_quotes": ["..."]}],
-                "top_demands": [{"topic": "Tutorial series", "signal_strength": 10, "demand_type": "content_request", "count": 410, "representative_quotes": ["..."]}],
+                "aggregate_sentiment": {
+                    "positive_percentage": 68,
+                    "negative_percentage": 14,
+                    "neutral_percentage": 18,
+                    "overall_sentiment": "positive",
+                },
+                "top_loves": [
+                    {
+                        "theme": "Production quality",
+                        "signal_strength": 9,
+                        "count": 320,
+                        "representative_quotes": ["..."],
+                    }
+                ],
+                "top_complaints": [
+                    {
+                        "theme": "Upload frequency",
+                        "signal_strength": 6,
+                        "count": 85,
+                        "representative_quotes": ["..."],
+                    }
+                ],
+                "top_demands": [
+                    {
+                        "topic": "Tutorial series",
+                        "signal_strength": 10,
+                        "demand_type": "content_request",
+                        "count": 410,
+                        "representative_quotes": ["..."],
+                    }
+                ],
                 "all_content_gaps": ["Advanced workflows", "Mobile-first content"],
                 "all_trending_topics": ["AI tools", "Short-form content"],
                 "all_key_insights": ["Audience craves depth over breadth"],
@@ -706,7 +849,11 @@ API_SCHEMA = {
             "path": "/api/v1/channels/{channel_id}/retention-analysis/history",
             "description": "List retention analyses for a channel with optional status filter",
             "query_params": {
-                "status": {"type": "string", "enum": ["pending", "analyzing", "completed", "failed"], "optional": True},
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "analyzing", "completed", "failed"],
+                    "optional": True,
+                },
                 "limit": {"type": "integer", "optional": True, "default": 50},
             },
             "request": None,
@@ -933,7 +1080,12 @@ API_SCHEMA = {
             "method": "POST",
             "path": "/api/v1/channels/{channel_id}/thumbnail-analysis/",
             "description": "Upload a thumbnail image for ephemeral quality/CTR analysis (24h TTL). Multipart form: file, title, label, previous_analysis_id.",
-            "request": {"file": "(binary)", "title": "My Video Title", "label": "v2", "previous_analysis_id": "optional-uuid"},
+            "request": {
+                "file": "(binary)",
+                "title": "My Video Title",
+                "label": "v2",
+                "previous_analysis_id": "optional-uuid",
+            },
             "response": {
                 "ok": True,
                 "analysis_id": "550e8400-...",
@@ -1030,7 +1182,13 @@ API_SCHEMA = {
             "request": None,
             "response": {
                 "channel_id": "ch1",
-                "topics": [{"topic_name": "Walking 27 Years Around the World", "category": "Inspirational Journeys", "recommendation_score": 85.5}],
+                "topics": [
+                    {
+                        "topic_name": "Walking 27 Years Around the World",
+                        "category": "Inspirational Journeys",
+                        "recommendation_score": 85.5,
+                    }
+                ],
             },
         },
         {

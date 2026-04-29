@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Depends, Query, HTTPException, status
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.database import get_db, get_channel_platform
-from app.services.growth_tracking import GrowthTrackingService
+
+from app.database import get_channel_platform, get_db
 from app.routers.observability import verify_api_key
+from app.services.growth_tracking import GrowthTrackingService
 
 router = APIRouter(prefix="/api/v1/growth", tags=["growth"])
+
 
 @router.get("/{channel_id}/history", response_model=List[Dict[str, Any]])
 async def get_growth_history(
@@ -17,7 +20,7 @@ async def get_growth_history(
     """Get the historical daily growth snapshots for a channel."""
     growth_service = GrowthTrackingService(db)
     history = await growth_service.get_history(channel_id, limit=limit)
-    
+
     # Format for JSON response
     for snap in history:
         if "_id" in snap:
@@ -25,8 +28,9 @@ async def get_growth_history(
             del snap["_id"]
         if "timestamp" in snap:
             snap["timestamp"] = snap["timestamp"].isoformat()
-            
+
     return history
+
 
 @router.get("/{channel_id}/velocity", response_model=Dict[str, Any])
 async def get_growth_velocity(
@@ -39,6 +43,7 @@ async def get_growth_velocity(
     velocity = await growth_service.calculate_velocity(channel_id)
     return velocity
 
+
 @router.get("/{channel_id}/milestones", response_model=List[int])
 async def get_channel_milestones(
     channel_id: str,
@@ -50,6 +55,7 @@ async def get_channel_milestones(
     milestones = await growth_service.get_milestones(channel_id)
     return sorted(milestones)
 
+
 @router.post("/{channel_id}/snapshot", response_model=Dict[str, Any])
 async def trigger_growth_snapshot(
     channel_id: str,
@@ -57,16 +63,19 @@ async def trigger_growth_snapshot(
     api_key: str = Depends(verify_api_key),
 ):
     """Force a growth snapshot for a single channel immediately."""
-    from app.main import youtube_service_manager, instagram_service_manager
-    
+    from app.main import instagram_service_manager, youtube_service_manager
+    assert youtube_service_manager is not None
+    assert instagram_service_manager is not None
+
+
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
-        
+
     platform = get_channel_platform(channel)
     subs, views = 0, 0
     metadata = {}
-    
+
     try:
         if platform == "youtube":
             yt_service = await youtube_service_manager.get_service(channel_id)
@@ -75,21 +84,21 @@ async def trigger_growth_snapshot(
                 subs = info.get("subscriber_count", 0)
                 views = info.get("view_count", 0)
                 metadata = {"video_count": info.get("video_count", 0)}
-        
+
         elif platform == "instagram":
             ig_service = await instagram_service_manager.get_service(channel_id)
             if ig_service:
                 info = ig_service.get_account_info(channel.get("instagram_user_id", ""))
                 subs = info.get("followers_count", 0)
-                views = 0 
+                views = 0
                 metadata = {"media_count": info.get("media_count", 0)}
-                
+
         growth_service = GrowthTrackingService(db)
         snapshot = await growth_service.record_snapshot(channel_id, platform, subs, views, metadata)
-        
+
         # Convert timestamp for response
         snapshot["timestamp"] = snapshot["timestamp"].isoformat()
         return snapshot
-        
+
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to record snapshot: {exc}")

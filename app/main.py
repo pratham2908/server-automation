@@ -4,7 +4,9 @@ Configures the app, lifespan events (DB + service init), and router mounting.
 """
 
 import logging
+
 from app.logger import setup_root_logging
+
 setup_root_logging()
 
 logging.basicConfig(level=logging.INFO)
@@ -84,16 +86,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from app.services.gemini import GeminiService
 
     gemini_service = GeminiService(
-        project=settings.GOOGLE_CLOUD_PROJECT,
-        location=settings.GOOGLE_CLOUD_LOCATION
+        project=settings.GOOGLE_CLOUD_PROJECT, location=settings.GOOGLE_CLOUD_LOCATION
     )
     logger.info("Gemini service initialised")
 
     # ---- Background auto-publisher (Instagram scheduled reels) ----
     import asyncio
+
     from app.services.auto_publisher import run_auto_publisher
 
-    global _auto_publisher_task, _youtube_uploader_task, _comment_analysis_task, _comment_reply_task, _sync_analysis_task
+    global \
+        _auto_publisher_task, \
+        _youtube_uploader_task, \
+        _comment_analysis_task, \
+        _comment_reply_task, \
+        _sync_analysis_task
     _auto_publisher_task = asyncio.create_task(run_auto_publisher(db, r2_service))
     logger.info("Background auto-publisher (Instagram) started")
 
@@ -106,19 +113,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # ---- Background Velocity Booster (auto-boost pace if engagement low) ----
     from app.services.velocity_booster import run_velocity_booster
 
-    _velocity_booster_task = asyncio.create_task(run_velocity_booster(db))
+    _velocity_booster_task = asyncio.create_task(
+        run_velocity_booster(
+            db, youtube_service_manager, instagram_service_manager, gemini_service
+        )
+    )
+
     logger.info("Background Velocity Booster started")
 
     # ---- Background comment analysis cron (24-hour cycle) ----
     from app.services.comment_analysis_cron import run_comment_analysis_cron
 
     _comment_analysis_task = asyncio.create_task(
-        run_comment_analysis_cron(db, youtube_service_manager, instagram_service_manager, gemini_service)
+        run_comment_analysis_cron(
+            db, youtube_service_manager, instagram_service_manager, gemini_service
+        )
     )
     logger.info("Background comment analysis cron started")
 
     # ---- Background metrics persistence (every hour) ----
     from app.services.metrics import metrics_service
+
     async def run_metrics_persistence():
         while True:
             await asyncio.sleep(3600)  # 1 hour
@@ -126,7 +141,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
                 await metrics_service.persist_snapshot(db)
             except Exception as e:
                 logger.error(f"Failed to persist metrics: {e}")
-    
+
     global _metrics_persistence_task
     _metrics_persistence_task = asyncio.create_task(run_metrics_persistence())
     logger.info("Background metrics persistence started")
@@ -135,7 +150,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from app.services.comment_reply_cron import run_comment_reply_cron
 
     _comment_reply_task = asyncio.create_task(
-        run_comment_reply_cron(db, youtube_service_manager, instagram_service_manager, gemini_service)
+        run_comment_reply_cron(
+            db, youtube_service_manager, instagram_service_manager, gemini_service
+        )
     )
     logger.info("Background comment reply cron started")
 
@@ -143,7 +160,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from app.services.sync_analysis_cron import run_sync_analysis_cron
 
     _sync_analysis_task = asyncio.create_task(
-        run_sync_analysis_cron(db, youtube_service_manager, instagram_service_manager, gemini_service)
+        run_sync_analysis_cron(
+            db, youtube_service_manager, instagram_service_manager, gemini_service
+        )
     )
     logger.info("Background sync-analysis cron started")
 
@@ -192,6 +211,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 # ------------------------------------------------------------------
 
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.middleware import StructuredLoggingMiddleware
 
 app = FastAPI(
@@ -215,11 +235,11 @@ from app.routers import (
     auth,
     categories,
     channels,
-    errors,
     comment_analysis,
     comment_replies,
     content_intelligence,
     discovery,
+    errors,
     growth,
     observability,
     preview_analysis,
@@ -261,6 +281,7 @@ async def health_check():
 
 
 from app.docs.schema import get_api_schema
+
 
 @app.get("/api/schema", tags=["schema"])
 async def api_schema():

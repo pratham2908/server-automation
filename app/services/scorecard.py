@@ -35,9 +35,7 @@ async def _gather_retention_signal(
         "avg_cut_interval": (a.get("pacing_analysis") or {}).get("avg_cut_interval_seconds"),
         "drop_off_count": len(a.get("predicted_drop_off_points", [])),
         "top_drop_off": (
-            a["predicted_drop_off_points"][0]
-            if a.get("predicted_drop_off_points")
-            else None
+            a["predicted_drop_off_points"][0] if a.get("predicted_drop_off_points") else None
         ),
         "strengths": a.get("strengths", []),
         "weaknesses": a.get("weaknesses", []),
@@ -45,7 +43,9 @@ async def _gather_retention_signal(
 
 
 async def _gather_thumbnail_signal(
-    db: AsyncIOMotorDatabase, channel_id: str, video_id: str,
+    db: AsyncIOMotorDatabase,
+    channel_id: str,
+    video_id: str,
 ) -> dict[str, Any] | None:
     """Pull the latest completed thumbnail analysis linked to this video."""
     doc = await db.thumbnail_analysis.find_one(
@@ -70,7 +70,8 @@ async def _gather_thumbnail_signal(
 
 
 async def _gather_channel_patterns(
-    db: AsyncIOMotorDatabase, channel_id: str,
+    db: AsyncIOMotorDatabase,
+    channel_id: str,
 ) -> dict[str, Any] | None:
     """Pull channel-level analysis data (best times, combinations, etc.)."""
     doc = await db.analysis.find_one({"channel_id": channel_id})
@@ -86,7 +87,8 @@ async def _gather_channel_patterns(
 
 
 def _build_content_alignment_signal(
-    video: dict, channel_patterns: dict[str, Any] | None,
+    video: dict,
+    channel_patterns: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     """Check how well the video's content params match channel patterns."""
     if not channel_patterns:
@@ -96,15 +98,11 @@ def _build_content_alignment_signal(
     video_params = video.get("content_params") or {}
 
     cat_scores = {
-        c["category"]: c.get("score", 0)
-        for c in channel_patterns.get("category_analysis", [])
+        c["category"]: c.get("score", 0) for c in channel_patterns.get("category_analysis", [])
     }
 
     param_analysis = channel_patterns.get("content_param_analysis", [])
-    param_best = {
-        p["param_name"]: p.get("best_values", [])
-        for p in param_analysis
-    }
+    param_best = {p["param_name"]: p.get("best_values", []) for p in param_analysis}
 
     matching_best_values = 0
     total_params = len(video_params)
@@ -168,7 +166,9 @@ async def generate_scorecard(
     if channel_patterns and channel_patterns.get("best_posting_times"):
         posting_time_signal = {
             "best_posting_times": channel_patterns["best_posting_times"],
-            "scheduled_at": str(video.get("scheduled_at", "")) if video.get("scheduled_at") else None,
+            "scheduled_at": str(video.get("scheduled_at", ""))
+            if video.get("scheduled_at")
+            else None,
         }
 
     signals: dict[str, Any] = {

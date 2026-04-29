@@ -1,6 +1,5 @@
 """Sync-analysis pipeline router -- config API and manual trigger."""
 
-import asyncio
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -61,7 +60,9 @@ async def get_auto_pipeline_config(
 class AutoPipelineConfigUpdate(BaseModel):
     enabled: Optional[bool] = Field(None, description="Enable or disable the auto-sync cron")
     interval_hours: Optional[int] = Field(None, ge=1, le=168, description="Sync interval in hours")
-    analysis_threshold: Optional[int] = Field(None, ge=1, le=50, description="Min unanalyzed videos to trigger analysis")
+    analysis_threshold: Optional[int] = Field(
+        None, ge=1, le=50, description="Min unanalyzed videos to trigger analysis"
+    )
 
 
 @config_router.put("/")
@@ -92,8 +93,10 @@ async def update_auto_pipeline_config(
     )
 
     doc = await db.config.find_one({"key": _CONFIG_KEY})
-    doc.pop("_id", None)
-    return {"ok": True, **doc}
+    if doc:
+        doc.pop("_id", None)
+    return {"ok": True, **(doc or {})}
+
 
 
 # ------------------------------------------------------------------

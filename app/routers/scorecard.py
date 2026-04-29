@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db, get_channel_platform
+from app.database import get_channel_platform, get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 

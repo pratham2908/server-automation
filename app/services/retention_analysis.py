@@ -8,6 +8,7 @@ Also provides a helper for computing predicted-vs-actual deviation.
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -17,8 +18,6 @@ from app.services.gemini import GeminiService
 from app.services.pacing_templates import PacingTemplateService
 from app.services.r2 import R2Service
 from app.timezone import now_ist
-
-import subprocess
 
 logger = get_logger(__name__)
 
@@ -30,11 +29,15 @@ def extract_thumbnail(video_path: str, timestamp: float, output_path: str) -> bo
         cmd = [
             "ffmpeg",
             "-y",
-            "-ss", str(timestamp),
-            "-i", video_path,
-            "-vframes", "1",
-            "-q:v", "2",  # High quality
-            output_path
+            "-ss",
+            str(timestamp),
+            "-i",
+            video_path,
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",  # High quality
+            output_path,
         ]
         logger.info("Extracting thumbnail at %.2fs: %s", timestamp, " ".join(cmd))
         subprocess.run(cmd, check=True, capture_output=True)
@@ -64,9 +67,7 @@ async def run_retention_analysis(
     5. Store result (``completed`` or ``failed``).
     6. Clean up the temp file.
     """
-    video = await db.videos.find_one(
-        {"channel_id": channel_id, "video_id": video_id}
-    )
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
     if not video:
         logger.error("Retention analysis: video %s not found", video_id)
         return
@@ -111,25 +112,32 @@ async def run_retention_analysis(
             logger.info("Using local video path for retention analysis: %s", temp_path)
 
         logger.info("Starting Gemini retention analysis for '%s'...", video_title[:50])
-        
+
         # Fetch templates for the channel to provide context to Gemini and for matching
         pacing_service = PacingTemplateService(db)
         templates = await pacing_service.get_templates(channel_id)
         template_dicts = [t.dict() for t in templates]
-        
+
         result = await gemini_service.analyze_video_retention(
             temp_path, video_title, platform, pacing_templates=template_dicts
         )
 
         # Compute pacing matches
         from app.models.retention_analysis import PacingAnalysis
+
         try:
             pacing_analysis = PacingAnalysis(**result.get("pacing_analysis", {}))
-            duration = result.get("pacing_analysis", {}).get(
-                "visual_change_timestamps", [{}]
-            )[-1].get("timestamp_seconds") if result.get("pacing_analysis", {}).get("visual_change_timestamps") else None
-            
-            matches = pacing_service.match_pacing(pacing_analysis, templates, video_duration=duration)
+            duration = (
+                result.get("pacing_analysis", {})
+                .get("visual_change_timestamps", [{}])[-1]
+                .get("timestamp_seconds")
+                if result.get("pacing_analysis", {}).get("visual_change_timestamps")
+                else None
+            )
+
+            matches = pacing_service.match_pacing(
+                pacing_analysis, templates, video_duration=duration
+            )
             result["pacing_matches"] = [m.dict() for m in matches]
         except Exception as e:
             logger.warning("Failed to compute pacing matches: %s", e)
@@ -141,9 +149,11 @@ async def run_retention_analysis(
                 "$set": {
                     "retention.status": "completed",
                     "retention.analysis": result,
-                    "retention.duration_seconds": result.get("pacing_analysis", {}).get(
-                        "visual_change_timestamps", [{}]
-                    )[-1].get("timestamp_seconds") if result.get("pacing_analysis", {}).get("visual_change_timestamps") else None,
+                    "retention.duration_seconds": result.get("pacing_analysis", {})
+                    .get("visual_change_timestamps", [{}])[-1]
+                    .get("timestamp_seconds")
+                    if result.get("pacing_analysis", {}).get("visual_change_timestamps")
+                    else None,
                     "retention.analyzed_at": now,
                     "retention.error_message": None,
                     "retention.updated_at": now,
@@ -165,16 +175,16 @@ async def run_retention_analysis(
             ts = packaging.get("best_thumbnail_timestamp", 0.0)
             thumbnail_filename = f"thumb_{video_id}.jpg"
             local_thumb_path = f"/tmp/{thumbnail_filename}"
-            
+
             # Auto-sync metadata to primary fields so it's persisted permanently
             titles = packaging.get("suggested_titles")
             if titles and isinstance(titles, list) and len(titles) > 0:
                 updates["title"] = titles[0]
-            
+
             desc = packaging.get("suggested_description")
             if desc:
                 updates["description"] = desc
-                
+
             tags = packaging.get("suggested_tags")
             if tags:
                 # Video model expects list[str]
@@ -187,12 +197,14 @@ async def run_retention_analysis(
                 try:
                     # Upload to R2 under channel/thumbnails/
                     r2_thumb_key = f"{channel_id}/thumbnails/{video_id}.jpg"
-                    
+
                     with open(local_thumb_path, "rb") as f:
                         r2_service.upload_video(f, r2_thumb_key)
-                    
+
                     # Generate a presigned URL for the frontend to render
-                    thumb_url = r2_service.generate_presigned_url(r2_thumb_key, expires_in=604800) # 7 days
+                    thumb_url = r2_service.generate_presigned_url(
+                        r2_thumb_key, expires_in=604800
+                    )  # 7 days
                     updates["ai_packaging"]["thumbnail_url"] = thumb_url
                     logger.success("Thumbnail uploaded and URL generated: %s", thumb_url)
                 except Exception as e:
@@ -200,10 +212,9 @@ async def run_retention_analysis(
                 finally:
                     if os.path.exists(local_thumb_path):
                         os.unlink(local_thumb_path)
-            
+
             await db.videos.update_one(
-                {"channel_id": channel_id, "video_id": video_id},
-                {"$set": updates}
+                {"channel_id": channel_id, "video_id": video_id}, {"$set": updates}
             )
 
         logger.success(

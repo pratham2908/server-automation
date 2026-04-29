@@ -7,12 +7,10 @@ collection.  Tokens are refreshed automatically when expired and
 written back to the DB.
 """
 
-from datetime import datetime, timezone
 import json
 import time
+from datetime import datetime, timezone
 from typing import Any
-
-from app.timezone import now_ist
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -20,6 +18,7 @@ from googleapiclient.http import MediaFileUpload
 
 from app.logger import get_logger
 from app.services.metrics import metrics_service
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
@@ -69,7 +68,9 @@ class YouTubeService:
                 if isinstance(expiry_raw, str):
                     expiry_dt = datetime.fromisoformat(expiry_raw.replace("Z", "+00:00"))
                 elif isinstance(expiry_raw, datetime):
-                    expiry_dt = expiry_raw if expiry_raw.tzinfo else expiry_raw.replace(tzinfo=timezone.utc)
+                    expiry_dt = (
+                        expiry_raw if expiry_raw.tzinfo else expiry_raw.replace(tzinfo=timezone.utc)
+                    )
             except (ValueError, TypeError):
                 pass
 
@@ -85,6 +86,7 @@ class YouTubeService:
 
         if not creds.valid and creds.refresh_token:
             from google.auth.transport.requests import Request
+
             creds.refresh(Request())
             self._save_credentials(creds)
             logger.info("Refreshed YouTube token for channel '%s'", self._channel_id)
@@ -119,9 +121,7 @@ class YouTubeService:
         import asyncio
 
         updated_expiry = (
-            creds.expiry.replace(tzinfo=timezone.utc).isoformat()
-            if creds.expiry
-            else None
+            creds.expiry.replace(tzinfo=timezone.utc).isoformat() if creds.expiry else None
         )
 
         async def _write() -> None:
@@ -145,7 +145,7 @@ class YouTubeService:
     def _execute(self, request: Any) -> Any:
         """Helper to execute a YouTube API request with metrics tracking."""
         from app.services.metrics import metrics_service
-        
+
         start_time = time.time()
         try:
             response = request.execute()
@@ -168,15 +168,12 @@ class YouTubeService:
         ``video_count``, ``thumbnail_url``, ``custom_url``.
         """
         response = self._execute(
-            self._youtube.channels()
-            .list(part="snippet,statistics", id=youtube_channel_id)
+            self._youtube.channels().list(part="snippet,statistics", id=youtube_channel_id)
         )
 
         items = response.get("items", [])
         if not items:
-            raise ValueError(
-                f"No YouTube channel found with ID '{youtube_channel_id}'"
-            )
+            raise ValueError(f"No YouTube channel found with ID '{youtube_channel_id}'")
 
         channel = items[0]
         snippet = channel.get("snippet", {})
@@ -186,9 +183,7 @@ class YouTubeService:
             "name": snippet.get("title", ""),
             "description": snippet.get("description", ""),
             "custom_url": snippet.get("customUrl", ""),
-            "thumbnail_url": snippet.get("thumbnails", {})
-            .get("default", {})
-            .get("url", ""),
+            "thumbnail_url": snippet.get("thumbnails", {}).get("default", {}).get("url", ""),
             "subscriber_count": int(stats.get("subscriberCount", 0)),
             "video_count": int(stats.get("videoCount", 0)),
             "view_count": int(stats.get("viewCount", 0)),
@@ -207,9 +202,7 @@ class YouTubeService:
         seconds = int(match.group(3) or 0)
         return hours * 3600 + minutes * 60 + seconds
 
-    def get_video_analytics(
-        self, youtube_video_ids: list[str]
-    ) -> dict[str, dict[str, Any]]:
+    def get_video_analytics(self, youtube_video_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Fetch per-video analytics from the YouTube Analytics API.
 
         Returns a dict keyed by ``youtube_video_id`` with metrics including
@@ -223,8 +216,8 @@ class YouTubeService:
         today = now_ist().strftime("%Y-%m-%d")
 
         # Standard metrics for deep video performance analysis
-        # Reach metrics (impressions, impressionClickThroughRate) are strictly SINGLE-VIDEO metrics 
-        # in the YouTube Analytics API. Including them in a batch query with multiple video filters 
+        # Reach metrics (impressions, impressionClickThroughRate) are strictly SINGLE-VIDEO metrics
+        # in the YouTube Analytics API. Including them in a batch query with multiple video filters
         # (dimensions=video) causes an "Unknown identifier" error.
         metrics_list = [
             "averageViewPercentage",
@@ -240,8 +233,7 @@ class YouTubeService:
             try:
                 logger.info(f"📊 Requesting Analytics report for batch of {len(batch)} videos...")
                 response = self._execute(
-                    self._youtube_analytics.reports()
-                    .query(
+                    self._youtube_analytics.reports().query(
                         ids="channel==MINE",
                         startDate="2005-01-01",
                         endDate=today,
@@ -260,20 +252,25 @@ class YouTubeService:
                             error_msg = jb["error"].get("message", error_msg)
                         elif "error_description" in jb:
                             error_msg = jb["error_description"]
-                    except: pass
+                    except:
+                        pass
                 logger.error(f"❌ YouTube Analytics query for batch failed: {error_msg}")
                 continue
 
             headers = [h["name"] for h in response.get("columnHeaders", [])]
             rows = response.get("rows", [])
-            
-            logger.info(f"✅ Analytics response received: {len(rows)} matching rows found for batch.")
-            
+
+            logger.info(
+                f"✅ Analytics response received: {len(rows)} matching rows found for batch."
+            )
+
             # Check for videos that were requested but didn't return a row
             returned_vids = {row[0] if "video" in headers else None for row in rows}
             missing_vids = [vid for vid in batch if vid not in returned_vids]
             if missing_vids:
-                logger.warning(f"⚠️ Analytics data NOT READY for {len(missing_vids)} videos: {missing_vids}")
+                logger.warning(
+                    f"⚠️ Analytics data NOT READY for {len(missing_vids)} videos: {missing_vids}"
+                )
 
             for row in rows:
                 try:
@@ -299,17 +296,15 @@ class YouTubeService:
 
         return analytics
 
-
     def get_video_reach_analytics(self, youtube_video_id: str) -> dict:
         """Fetch impressions and CTR for a single video (limited by YT API)"""
         if not self._youtube_analytics:
             return {}
-            
+
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             result = self._execute(
-                self._youtube_analytics.reports()
-                .query(
+                self._youtube_analytics.reports().query(
                     ids="channel==MINE",
                     startDate="2005-01-01",
                     endDate=today,
@@ -326,26 +321,32 @@ class YouTubeService:
 
             row_dict = dict(zip(headers, rows[0]))
             return {
-                "ctr": round(float(row_dict.get("videoThumbnailImpressionsClickRate") or 0) * 100, 2),
+                "ctr": round(
+                    float(row_dict.get("videoThumbnailImpressionsClickRate") or 0) * 100, 2
+                ),
                 "impressions": int(row_dict.get("videoThumbnailImpressions") or 0),
             }
         except Exception as exc:
             import json
+
             from googleapiclient.errors import HttpError
+
             if isinstance(exc, HttpError):
                 try:
-                    error_details = json.loads(exc.content.decode('utf-8'))
-                    reason = error_details.get('error', {}).get('message', 'Unknown reason')
+                    error_details = json.loads(exc.content.decode("utf-8"))
+                    reason = error_details.get("error", {}).get("message", "Unknown reason")
                 except:
                     reason = str(exc)
-                logger.error(f"❌ YouTube Reach Analytics failed for {youtube_video_id}: status={exc.resp.status}, reason={reason}")
+                logger.error(
+                    f"❌ YouTube Reach Analytics failed for {youtube_video_id}: status={exc.resp.status}, reason={reason}"
+                )
             else:
                 logger.error(f"❌ YouTube Reach Analytics failed for {youtube_video_id}: {exc}")
             return {}
 
     def get_audience_retention_curve(self, youtube_video_id: str) -> dict[float, float]:
         """Fetch the audience retention curve for a specific video.
-        
+
         Returns a dict mapping elapsedVideoTimeRatio (0.0 to 1.0) to audienceWatchRatio (0.0 to 1.0+).
         """
         if not self._youtube_analytics:
@@ -354,8 +355,7 @@ class YouTubeService:
         today = now_ist().strftime("%Y-%m-%d")
         try:
             response = self._execute(
-                self._youtube_analytics.reports()
-                .query(
+                self._youtube_analytics.reports().query(
                     ids="channel==MINE",
                     startDate="2005-01-01",
                     endDate=today,
@@ -364,7 +364,7 @@ class YouTubeService:
                     filters=f"video=={youtube_video_id}",
                 )
             )
-            
+
             curve = {}
             for row in response.get("rows", []):
                 curve[float(row[0])] = float(row[1])
@@ -376,13 +376,14 @@ class YouTubeService:
                     jb = json.loads(exc.content.decode())
                     if isinstance(jb.get("error"), dict):
                         error_msg = jb["error"].get("message", error_msg)
-                except: pass
-            logger.warning("⚠️ YouTube Analytics curve query failed for %s: %s", youtube_video_id, error_msg)
+                except:
+                    pass
+            logger.warning(
+                "⚠️ YouTube Analytics curve query failed for %s: %s", youtube_video_id, error_msg
+            )
             return {}
 
-    def get_video_stats(
-        self, youtube_video_ids: list[str]
-    ) -> dict[str, dict[str, Any]]:
+    def get_video_stats(self, youtube_video_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Fetch views, likes, comments, duration, derived rates, and analytics.
 
         Returns a dict keyed by ``youtube_video_id`` with Data API stats
@@ -393,8 +394,7 @@ class YouTubeService:
         for i in range(0, len(youtube_video_ids), 50):
             batch = youtube_video_ids[i : i + 50]
             response = self._execute(
-                self._youtube.videos()
-                .list(
+                self._youtube.videos().list(
                     part="snippet,statistics,contentDetails",
                     id=",".join(batch),
                 )
@@ -407,9 +407,7 @@ class YouTubeService:
                 views = int(s.get("viewCount", 0))
                 likes = int(s.get("likeCount", 0))
                 comments = int(s.get("commentCount", 0))
-                duration_seconds = self._parse_iso8601_duration(
-                    content.get("duration")
-                )
+                duration_seconds = self._parse_iso8601_duration(content.get("duration"))
 
                 if views > 0:
                     engagement_rate = round((likes + comments) / views * 100, 4)
@@ -432,7 +430,7 @@ class YouTubeService:
         # Merge analytics data (avg_percentage_viewed, avg_view_duration, etc.)
         # Merge core analytics data
         analytics = self.get_video_analytics(youtube_video_ids)
-        
+
         # Reach metrics (impressions/CTR) must be fetched for each video individually.
         # We only do this for small batches to avoid burning excessive quota or latency.
         if len(youtube_video_ids) <= 10:
@@ -536,7 +534,7 @@ class YouTubeService:
                 error_msg = detail.get("error", {}).get("message", error_msg)
             except Exception:
                 pass
-            
+
             logger.error(f"YouTube Resumable Upload Failed: {error_msg}")
             raise
 
@@ -563,8 +561,7 @@ class YouTubeService:
         uploads_playlist_id = "UU" + youtube_channel_id[2:]
 
         response = self._execute(
-            self._youtube.playlistItems()
-            .list(
+            self._youtube.playlistItems().list(
                 part="snippet,contentDetails",
                 playlistId=uploads_playlist_id,
                 maxResults=min(max_results, 50),
@@ -576,20 +573,21 @@ class YouTubeService:
         for item in response.get("items", []):
             vid = item["contentDetails"]["videoId"]
             snippet = item.get("snippet", {})
-            videos.append({
-                "video_id": vid,
-                "title": snippet.get("title", ""),
-                "published_at": snippet.get("publishedAt", ""),
-                "comment_count": 0,
-            })
+            videos.append(
+                {
+                    "video_id": vid,
+                    "title": snippet.get("title", ""),
+                    "published_at": snippet.get("publishedAt", ""),
+                    "comment_count": 0,
+                }
+            )
             video_ids.append(vid)
 
         if video_ids:
             for i in range(0, len(video_ids), 50):
                 batch = video_ids[i : i + 50]
                 stats_resp = self._execute(
-                    self._youtube.videos()
-                    .list(part="statistics", id=",".join(batch))
+                    self._youtube.videos().list(part="statistics", id=",".join(batch))
                 )
                 stats_map = {
                     it["id"]: int(it.get("statistics", {}).get("commentCount", 0))
@@ -630,13 +628,12 @@ class YouTubeService:
                 kwargs["pageToken"] = page_token
 
             try:
-                response = (
-                    self._execute(self._youtube.commentThreads().list(**kwargs))
-                )
+                response = self._execute(self._youtube.commentThreads().list(**kwargs))
             except Exception as exc:
                 logger.warning(
                     "Failed to fetch comments for video %s: %s",
-                    youtube_video_id, exc,
+                    youtube_video_id,
+                    exc,
                 )
                 break
 
@@ -644,16 +641,18 @@ class YouTubeService:
                 top = item["snippet"]["topLevelComment"]
                 snip = top["snippet"]
                 author_ch = snip.get("authorChannelId", {})
-                comments.append({
-                    "comment_id": top.get("id", ""),
-                    "text": snip.get("textDisplay", ""),
-                    "like_count": int(snip.get("likeCount", 0)),
-                    "author": snip.get("authorDisplayName", ""),
-                    "author_channel_id": author_ch.get("value", ""),
-                    "published_at": snip.get("publishedAt", ""),
-                    "video_url": f"https://www.youtube.com/watch?v={youtube_video_id}",
-                    "comment_url": f"https://www.youtube.com/watch?v={youtube_video_id}&lc={top.get('id', '')}",
-                })
+                comments.append(
+                    {
+                        "comment_id": top.get("id", ""),
+                        "text": snip.get("textDisplay", ""),
+                        "like_count": int(snip.get("likeCount", 0)),
+                        "author": snip.get("authorDisplayName", ""),
+                        "author_channel_id": author_ch.get("value", ""),
+                        "published_at": snip.get("publishedAt", ""),
+                        "video_url": f"https://www.youtube.com/watch?v={youtube_video_id}",
+                        "comment_url": f"https://www.youtube.com/watch?v={youtube_video_id}&lc={top.get('id', '')}",
+                    }
+                )
 
             page_token = response.get("nextPageToken")
             if not page_token:
@@ -677,7 +676,8 @@ class YouTubeService:
 
         Returns the same dict shape as ``get_video_comments``.
         """
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
 
         if isinstance(cutoff_timestamp, str):
             cutoff = _dt.fromisoformat(cutoff_timestamp.replace("Z", "+00:00"))
@@ -702,13 +702,12 @@ class YouTubeService:
                 kwargs["pageToken"] = page_token
 
             try:
-                response = (
-                    self._execute(self._youtube.commentThreads().list(**kwargs))
-                )
+                response = self._execute(self._youtube.commentThreads().list(**kwargs))
             except Exception as exc:
                 logger.warning(
                     "Failed to fetch comments for video %s: %s",
-                    youtube_video_id, exc,
+                    youtube_video_id,
+                    exc,
                 )
                 break
 
@@ -726,16 +725,18 @@ class YouTubeService:
                     break
 
                 author_ch = snip.get("authorChannelId", {})
-                comments.append({
-                    "comment_id": top.get("id", ""),
-                    "text": snip.get("textDisplay", ""),
-                    "like_count": int(snip.get("likeCount", 0)),
-                    "author": snip.get("authorDisplayName", ""),
-                    "author_channel_id": author_ch.get("value", ""),
-                    "published_at": pub_raw,
-                    "video_url": f"https://www.youtube.com/watch?v={youtube_video_id}",
-                    "comment_url": f"https://www.youtube.com/watch?v={youtube_video_id}&lc={top.get('id', '')}",
-                })
+                comments.append(
+                    {
+                        "comment_id": top.get("id", ""),
+                        "text": snip.get("textDisplay", ""),
+                        "like_count": int(snip.get("likeCount", 0)),
+                        "author": snip.get("authorDisplayName", ""),
+                        "author_channel_id": author_ch.get("value", ""),
+                        "published_at": pub_raw,
+                        "video_url": f"https://www.youtube.com/watch?v={youtube_video_id}",
+                        "comment_url": f"https://www.youtube.com/watch?v={youtube_video_id}&lc={top.get('id', '')}",
+                    }
+                )
 
             page_token = response.get("nextPageToken")
             if not page_token:
@@ -748,15 +749,17 @@ class YouTubeService:
 
         Returns the ID of the newly created reply comment.
         """
-        response = self._execute(self._youtube.comments().insert(
-            part="snippet",
-            body={
-                "snippet": {
-                    "parentId": comment_id,
-                    "textOriginal": text,
-                }
-            },
-        ))
+        response = self._execute(
+            self._youtube.comments().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "parentId": comment_id,
+                        "textOriginal": text,
+                    }
+                },
+            )
+        )
         return response["id"]
 
 
@@ -802,7 +805,7 @@ class YouTubeServiceManager:
         if not channel:
             logger.warning("Channel '%s' not found", channel_id)
             return None
-            
+
         if not channel.get("youtube_tokens"):
             # Only warn if this is intended to be a YouTube channel
             if channel.get("platform") == "youtube":

@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db, get_channel_platform
+from app.database import get_channel_platform, get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 
@@ -156,9 +156,9 @@ async def list_video_intelligence(
     if source:
         query["source"] = source
 
-    docs = await db.video_intelligence.find(query).sort(
-        "views", -1
-    ).limit(limit).to_list(length=limit)
+    docs = (
+        await db.video_intelligence.find(query).sort("views", -1).limit(limit).to_list(length=limit)
+    )
 
     for d in docs:
         d.pop("_id", None)
@@ -195,7 +195,9 @@ async def get_video_intelligence(
 @router.delete("/scan")
 async def clear_intelligence(
     channel_id: str,
-    source: Optional[str] = Query(None, description="Clear only 'competitor' or 'own', or omit for all"),
+    source: Optional[str] = Query(
+        None, description="Clear only 'competitor' or 'own', or omit for all"
+    ),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Clear all video intelligence for a channel (or by source).

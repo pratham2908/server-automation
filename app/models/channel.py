@@ -12,7 +12,9 @@ class ContentParamValue(BaseModel):
     """A tracked value for a content param with its performance data."""
 
     value: str = Field(..., description="The actual value string, e.g. 'battle'")
-    score: float = Field(0, description="Performance score (avg performance_rating of videos using this value)")
+    score: float = Field(
+        0, description="Performance score (avg performance_rating of videos using this value)"
+    )
     video_count: int = Field(0, description="Number of published videos with this value")
 
 
@@ -53,7 +55,9 @@ class Competitor(BaseModel):
     handle: Optional[str] = Field(None, description="YouTube handle, e.g. @MrBeast")
 
     # Instagram (optional)
-    instagram_username: Optional[str] = Field(None, description="Instagram username, e.g. 'mrbeast'")
+    instagram_username: Optional[str] = Field(
+        None, description="Instagram username, e.g. 'mrbeast'"
+    )
     instagram_user_id: Optional[str] = Field(None, description="Instagram ID (if known)")
 
     name: str = Field(..., description="Display name")
@@ -88,16 +92,24 @@ class InstagramTokens(BaseModel):
 class VelocityBoosterConfig(BaseModel):
     """Configuration for the Velocity Booster automation."""
 
-    enabled: bool = Field(False, description="Whether to automatically boost uploading pace if engagement is low")
-    min_hours_since_last_upload: int = Field(12, description="Minimum hours to wait after the last upload before boosting")
-    min_views_threshold: int = Field(1000, description="If last video views are below this, boost is triggered")
-    schedule_delay_minutes: int = Field(15, description="How many minutes from now to schedule the boosted video")
+    enabled: bool = Field(
+        False, description="Whether to automatically boost uploading pace if engagement is low"
+    )
+    min_hours_since_last_upload: int = Field(
+        12, description="Minimum hours to wait after the last upload before boosting"
+    )
+    min_views_threshold: int = Field(
+        1000, description="If last video views are below this, boost is triggered"
+    )
+    schedule_delay_minutes: int = Field(
+        15, description="How many minutes from now to schedule the boosted video"
+    )
 
 
 class AutomationConfig(BaseModel):
     """Aggregate for all channel-level automation settings."""
 
-    velocity_booster: VelocityBoosterConfig = Field(default_factory=VelocityBoosterConfig)
+    velocity_booster: VelocityBoosterConfig = Field(default_factory=lambda: VelocityBoosterConfig())
 
 
 class Channel(BaseModel):
@@ -107,13 +119,23 @@ class Channel(BaseModel):
     profile_id: str = Field("default", description="ID of the profile that owns this channel")
     name: str = Field(..., description="Human-readable channel name")
     platform: str = Field("youtube", description="'youtube' or 'instagram'")
-    youtube_channel_id: Optional[str] = Field(None, description="YouTube UC... channel ID (youtube only)")
-    youtube_tokens: Optional[YouTubeTokens] = Field(None, description="YouTube OAuth tokens (excluded from API responses)")
-    instagram_user_id: Optional[str] = Field(None, description="Instagram Graph API user ID (instagram only)")
-    instagram_tokens: Optional[InstagramTokens] = Field(None, description="Instagram tokens (excluded from API responses)")
-    
-    automation_config: AutomationConfig = Field(default_factory=AutomationConfig)
-    last_tasks: dict[str, datetime] = Field(default_factory=dict, description="Last run timestamps for various background tasks")
-    
+    youtube_channel_id: Optional[str] = Field(
+        None, description="YouTube UC... channel ID (youtube only)"
+    )
+    youtube_tokens: Optional[YouTubeTokens] = Field(
+        None, description="YouTube OAuth tokens (excluded from API responses)"
+    )
+    instagram_user_id: Optional[str] = Field(
+        None, description="Instagram Graph API user ID (instagram only)"
+    )
+    instagram_tokens: Optional[InstagramTokens] = Field(
+        None, description="Instagram tokens (excluded from API responses)"
+    )
+
+    automation_config: AutomationConfig = Field(default_factory=lambda: AutomationConfig())
+    last_tasks: dict[str, datetime] = Field(
+        default_factory=dict, description="Last run timestamps for various background tasks"
+    )
+
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)

@@ -2,10 +2,9 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_serializer
-from typing import Any
 
 from app.timezone import now_ist, to_ist_iso
 
@@ -15,8 +14,10 @@ class VideoStatus(str, Enum):
 
     TODO = "todo"
     READY = "ready"
-    QUEUED = "queued"       # In internal queue — background worker will upload to platform
-    SCHEDULED = "scheduled"  # Confirmed on platform (YouTube private+publishAt, or Instagram published)
+    QUEUED = "queued"  # In internal queue — background worker will upload to platform
+    SCHEDULED = (
+        "scheduled"  # Confirmed on platform (YouTube private+publishAt, or Instagram published)
+    )
     PUBLISHED = "published"
 
 
@@ -92,17 +93,15 @@ class Video(BaseModel):
         None,
         description="When the video was published on the platform. Null until published.",
     )
-    
+
     # Unified Analytics Data
     retention: Optional[dict[str, Any]] = Field(
-        None,
-        description="Pre-publish multimodal analysis and predicted retention curve."
+        None, description="Pre-publish multimodal analysis and predicted retention curve."
     )
     performance: Optional[dict[str, Any]] = Field(
-        None,
-        description="Post-publish metric analysis and actual performance rating."
+        None, description="Post-publish metric analysis and actual performance rating."
     )
-    
+
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)
 

@@ -6,17 +6,14 @@ video ideas for the to-do list.
 Called at the end of every analysis update to keep the to-do pipeline fresh.
 """
 
-import logging
 import uuid
-from datetime import datetime, timedelta
 from typing import Any
-
-from app.timezone import IST, UTC, now_ist
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
 from app.services.gemini import GeminiService
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
@@ -117,7 +114,10 @@ async def update_categories_from_analysis(
     analysed_videos: list[dict[str, Any]] | None = None,
 ) -> None:
     """Update category scores, metadata (and video_count from it), and archive underperformers."""
-    logger.info("🔄 Updating category scores, metadata & video_count from new analysis...", extra={"color": "BLUE"})
+    logger.info(
+        "🔄 Updating category scores, metadata & video_count from new analysis...",
+        extra={"color": "BLUE"},
+    )
 
     # 1. Update scores
     for cat_analysis in analysis.get("category_analysis", []):
@@ -136,9 +136,7 @@ async def update_categories_from_analysis(
 
     # 2. Compute and persist aggregated metadata per category (eligible-for-analysis videos only),
     #    and set video_count from that same count
-    all_categories = await db.categories.find(
-        {"channel_id": channel_id}
-    ).to_list(length=None)
+    all_categories = await db.categories.find({"channel_id": channel_id}).to_list(length=None)
 
     for cat_doc in all_categories:
         cat_name = cat_doc["name"]
@@ -164,9 +162,7 @@ async def update_categories_from_analysis(
         if score >= _ARCHIVE_SCORE_THRESHOLD:
             continue
 
-        cat_doc = await db.categories.find_one(
-            {"channel_id": channel_id, "name": cat_name}
-        )
+        cat_doc = await db.categories.find_one({"channel_id": channel_id, "name": cat_name})
         if cat_doc and cat_doc.get("video_count", 0) >= _ARCHIVE_MIN_VIDEOS:
             await db.categories.update_one(
                 {"channel_id": channel_id, "name": cat_name},
@@ -223,7 +219,7 @@ async def generate_todo_videos(
         if delete_result.deleted_count > 0:
             logger.warning(
                 "🗑️ Deleted %d pending todo videos from archived categories",
-                delete_result.deleted_count
+                delete_result.deleted_count,
             )
 
     # ------------------------------------------------------------------ #
@@ -238,19 +234,17 @@ async def generate_todo_videos(
     channel_doc = await db.channels.find_one({"channel_id": channel_id})
     platform = (channel_doc or {}).get("platform", "youtube")
 
-    latest_analysis = await db.analysis.find_one(
-        {"channel_id": channel_id}, sort=[("version", -1)]
-    ) or {}
-    
+    latest_analysis = (
+        await db.analysis.find_one({"channel_id": channel_id}, sort=[("version", -1)]) or {}
+    )
+
     analysis_by_cat: dict[str, dict[str, Any]] = {
         ca["category"]: ca for ca in latest_analysis.get("category_analysis", [])
     }
     content_param_analysis = latest_analysis.get("content_param_analysis", [])
     best_combinations = latest_analysis.get("best_combinations", [])
 
-    eligible = [
-        c for c in active_categories if c["name"] in analysis_by_cat
-    ]
+    eligible = [c for c in active_categories if c["name"] in analysis_by_cat]
     if not eligible:
         logger.warning("No eligible categories with analysis insights found.")
         return
@@ -285,13 +279,13 @@ async def generate_todo_videos(
     total_slots = sum(slots.values())
     logger.info("🧠 Generating %d new to-do video ideas", total_slots, extra={"color": "MAGENTA"})
     new_videos: list[dict[str, Any]] = []
-    
+
     global_idx = 0
 
     for cat_name, count in slots.items():
         if count == 0:
             continue
-            
+
         cat_insights = analysis_by_cat[cat_name]
 
         content_schema = await get_content_schema_for_prompt(db, channel_id, category=cat_name)
@@ -303,8 +297,7 @@ async def generate_todo_videos(
         ).to_list(length=None)
         existing_titles = [doc.get("title", "") for doc in existing_docs if doc.get("title")]
         existing_content_params = [
-            doc["content_params"] for doc in existing_docs
-            if doc.get("content_params")
+            doc["content_params"] for doc in existing_docs if doc.get("content_params")
         ]
 
         try:
@@ -327,7 +320,9 @@ async def generate_todo_videos(
         for content in generated_list:
             global_idx += 1
 
-            logger.success(f"💡 Generated [{global_idx}/{total_slots}] - \"{content.get('title', 'Untitled')}\" (Category: {cat_name})")
+            logger.success(
+                f'💡 Generated [{global_idx}/{total_slots}] - "{content.get("title", "Untitled")}" (Category: {cat_name})'
+            )
 
             gen_params = content.get("content_params") or {}
 
@@ -361,6 +356,5 @@ async def generate_todo_videos(
     if new_videos:
         await db.videos.insert_many(new_videos)
         logger.success(f"Inserted {len(new_videos)} new auto-generated To-Do videos into database")
-        
-    logger.success("✅ To-Do Generation Complete!", extra={"color": "BRIGHT_GREEN"})
 
+    logger.success("✅ To-Do Generation Complete!", extra={"color": "BRIGHT_GREEN"})

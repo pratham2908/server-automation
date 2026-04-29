@@ -10,16 +10,16 @@ Follows the same ``asyncio.create_task`` pattern as ``auto_publisher.py``.
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.logger import get_logger
 from app.database import update_channel_task_status
+from app.logger import get_logger
 from app.services.comment_analysis_engine import run_cron_cycle
 from app.services.gemini import GeminiService
-from app.timezone import IST, now_ist
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
@@ -28,8 +28,7 @@ _INTERVAL_SECONDS = 86_400  # 24 hours
 
 
 async def _get_config(db: AsyncIOMotorDatabase) -> dict:
-    """Read the configured analysis hour from the ``config`` collection.
-    """
+    """Read the configured analysis hour from the ``config`` collection."""
     doc = await db.config.find_one({"key": "comment_analysis_config"})
     return doc or {}
 
@@ -61,7 +60,7 @@ async def run_comment_analysis_cron(
         config = await _get_config(db)
         target_hour = int(config.get("analysis_hour", _DEFAULT_HOUR))
         enabled = config.get("enabled", True)
-        
+
         wait_seconds = _seconds_until_hour(target_hour)
 
         next_run = now_ist() + timedelta(seconds=wait_seconds)
@@ -73,11 +72,11 @@ async def run_comment_analysis_cron(
         )
 
         await asyncio.sleep(wait_seconds)
-        
+
         if not enabled:
             logger.info("Comment analysis cron: disabled via config — skipping this cycle")
             continue
-            
+
         from app.services.metrics import metrics_service
 
         try:
@@ -105,14 +104,16 @@ async def run_comment_analysis_cron(
                     )
                     logger.info(
                         "✅ Comment analysis cron completed for '%s': %s",
-                        channel_id, stats,
+                        channel_id,
+                        stats,
                     )
                     # Update channel status
                     await update_channel_task_status(db, channel_id, "comment_analysis")
                 except Exception as exc:
                     logger.error(
                         "Comment analysis cron failed for channel '%s': %s",
-                        channel_id, exc,
+                        channel_id,
+                        exc,
                     )
             metrics_service.track_task_end("comment_analysis", "success")
         except Exception as exc:

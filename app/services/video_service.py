@@ -1,30 +1,34 @@
-import uuid
 import asyncio
 import json
 import os
 import shutil
 import tempfile
+import uuid
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Dict, Optional
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from dateutil.parser import isoparse
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.timezone import now_ist, to_ist_iso, IST
+from app.database import (
+    get_channel_platform,
+    get_content_schema_for_prompt,
+)
 from app.logger import get_logger
-from app.database import update_channel_task_status, get_channel_platform, get_content_schema_for_prompt
 from app.services.r2 import R2Service
+from app.timezone import IST, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
+
 class VideoService:
     def __init__(
-        self, 
-        db: AsyncIOMotorDatabase, 
-        r2_service: Optional[R2Service] = None, 
+        self,
+        db: AsyncIOMotorDatabase,
+        r2_service: Optional[R2Service] = None,
         gemini_service: Any = None,
         youtube_manager: Any = None,
-        instagram_manager: Any = None
+        instagram_manager: Any = None,
     ):
         self.db = db
         self.r2 = r2_service
@@ -35,11 +39,13 @@ class VideoService:
     # --- Helper methods ---
 
     async def _get_youtube_service(self, channel_id: str):
-        if not self.youtube_manager: return None
+        if not self.youtube_manager:
+            return None
         return await self.youtube_manager.get_service(channel_id)
 
     async def _get_instagram_service(self, channel_id: str):
-        if not self.instagram_manager: return None
+        if not self.instagram_manager:
+            return None
         return await self.instagram_manager.get_service(channel_id)
 
     def _fetch_youtube_video_ids(self, yt, youtube_channel_id: str) -> list[str]:
@@ -47,11 +53,18 @@ class VideoService:
         video_ids: list[str] = []
         next_page = None
         while True:
-            request = yt._youtube.playlistItems().list(part="contentDetails", playlistId=uploads_playlist_id, maxResults=50, pageToken=next_page)
+            request = yt._youtube.playlistItems().list(
+                part="contentDetails",
+                playlistId=uploads_playlist_id,
+                maxResults=50,
+                pageToken=next_page,
+            )
             response = request.execute()
-            for item in response.get("items", []): video_ids.append(item["contentDetails"]["videoId"])
+            for item in response.get("items", []):
+                video_ids.append(item["contentDetails"]["videoId"])
             next_page = response.get("nextPageToken")
-            if not next_page: break
+            if not next_page:
+                break
         return video_ids
 
     def _check_youtube_live_status(self, yt, youtube_video_ids: list[str]) -> dict[str, dict]:
@@ -69,117 +82,222 @@ class VideoService:
                 if published_at_str:
                     try:
                         published_at_dt = isoparse(published_at_str).astimezone(IST)
-                        if published_at_dt > now: is_live = False
-                    except: pass
+                        if published_at_dt > now:
+                            is_live = False
+                    except:
+                        pass
                 result[vid_id] = {"live": is_live, "published_at": published_at_dt}
         return result
 
     async def get_sync_status(self, channel_id: str) -> dict:
         channel = await self.db.channels.find_one({"channel_id": channel_id})
-        if not channel: return {"available": False, "reason": "Channel not found"}
+        if not channel:
+            return {"available": False, "reason": "Channel not found"}
         platform = get_channel_platform(channel)
-        if platform == "instagram": return await self._get_instagram_sync_status(channel_id, channel)
-        if not channel.get("youtube_channel_id"): return {"available": False, "reason": "No YouTube channel linked"}
+        if platform == "instagram":
+            return await self._get_instagram_sync_status(channel_id, channel)
+        if not channel.get("youtube_channel_id"):
+            return {"available": False, "reason": "No YouTube channel linked"}
         yt = await self._get_youtube_service(channel_id)
-        if not yt: return {"available": False, "reason": "No YouTube token"}
+        if not yt:
+            return {"available": False, "reason": "No YouTube token"}
         try:
             yt_video_ids = set(self._fetch_youtube_video_ids(yt, channel["youtube_channel_id"]))
-        except: return {"available": False, "reason": "Failed to reach YouTube API"}
-        db_yt_ids = {doc["youtube_video_id"] async for doc in self.db.videos.find({"channel_id": channel_id, "youtube_video_id": {"$ne": None}}, {"youtube_video_id": 1})}
+        except:
+            return {"available": False, "reason": "Failed to reach YouTube API"}
+        db_yt_ids = {
+            doc["youtube_video_id"]
+            async for doc in self.db.videos.find(
+                {"channel_id": channel_id, "youtube_video_id": {"$ne": None}},
+                {"youtube_video_id": 1},
+            )
+        }
         new_vids = yt_video_ids - db_yt_ids
         metadata_ref = yt_video_ids & db_yt_ids
-        scheduled_docs = await self.db.videos.find({"channel_id": channel_id, "status": "scheduled", "youtube_video_id": {"$ne": None}}, {"youtube_video_id": 1}).to_list(length=None)
+        scheduled_docs = await self.db.videos.find(
+            {"channel_id": channel_id, "status": "scheduled", "youtube_video_id": {"$ne": None}},
+            {"youtube_video_id": 1},
+        ).to_list(length=None)
         pending_reconciliation = 0
         if scheduled_docs:
             try:
-                live_status = self._check_youtube_live_status(yt, [d["youtube_video_id"] for d in scheduled_docs])
+                live_status = self._check_youtube_live_status(
+                    yt, [d["youtube_video_id"] for d in scheduled_docs]
+                )
                 pending_reconciliation = sum(1 for info in live_status.values() if info["live"])
-            except: pass
-        return {"available": True, "youtube_total": len(yt_video_ids), "in_database": len(db_yt_ids), "new_videos_to_import": len(new_vids), "pending_reconciliation": pending_reconciliation, "metadata_to_refresh": len(metadata_ref)}
+            except:
+                pass
+        return {
+            "available": True,
+            "youtube_total": len(yt_video_ids),
+            "in_database": len(db_yt_ids),
+            "new_videos_to_import": len(new_vids),
+            "pending_reconciliation": pending_reconciliation,
+            "metadata_to_refresh": len(metadata_ref),
+        }
 
     async def _get_instagram_sync_status(self, channel_id: str, channel: dict) -> dict:
         ig_svc = await self._get_instagram_service(channel_id)
-        if not ig_svc: return {"available": False, "reason": "No Instagram token"}
+        if not ig_svc:
+            return {"available": False, "reason": "No Instagram token"}
         ig_user_id = channel.get("instagram_user_id")
-        if not ig_user_id: return {"available": False, "reason": "No instagram_user_id"}
+        if not ig_user_id:
+            return {"available": False, "reason": "No instagram_user_id"}
         try:
             reels = ig_svc.get_reels(ig_user_id)
             ig_media_ids = {r["id"] for r in reels}
-        except: return {"available": False, "reason": "Failed to reach Instagram API"}
-        db_ig_ids = {doc["instagram_media_id"] async for doc in self.db.videos.find({"channel_id": channel_id, "instagram_media_id": {"$ne": None}}, {"instagram_media_id": 1})}
-        return {"available": True, "instagram_total": len(ig_media_ids), "in_database": len(db_ig_ids), "new_reels_to_import": len(ig_media_ids - db_ig_ids), "metadata_to_refresh": len(ig_media_ids & db_ig_ids)}
+        except:
+            return {"available": False, "reason": "Failed to reach Instagram API"}
+        db_ig_ids = {
+            doc["instagram_media_id"]
+            async for doc in self.db.videos.find(
+                {"channel_id": channel_id, "instagram_media_id": {"$ne": None}},
+                {"instagram_media_id": 1},
+            )
+        }
+        return {
+            "available": True,
+            "instagram_total": len(ig_media_ids),
+            "in_database": len(db_ig_ids),
+            "new_reels_to_import": len(ig_media_ids - db_ig_ids),
+            "metadata_to_refresh": len(ig_media_ids & db_ig_ids),
+        }
 
     # --- Core Business Logic ---
 
-    async def list_videos(self, channel_id: str, status_filter: str = None, verification_status: str = None, suggest_n: int = None) -> Dict[str, Any]:
+    async def list_videos(
+        self,
+        channel_id: str,
+        status_filter: Optional[str] = None,
+        verification_status: Optional[str] = None,
+        suggest_n: Optional[int] = None,
+    ) -> Dict[str, Any]:
         query: dict = {"channel_id": channel_id}
-        if status_filter and status_filter != "all": query["status"] = status_filter
+        if status_filter and status_filter != "all":
+            query["status"] = status_filter
         if verification_status:
-            if verification_status == "missing": query["verification_status"] = None
-            else: query["verification_status"] = verification_status
+            if verification_status == "missing":
+                query["verification_status"] = None
+            else:
+                query["verification_status"] = verification_status
         if suggest_n and suggest_n > 0:
-            await self.db.videos.update_many({"channel_id": channel_id, "suggested": True}, {"$set": {"suggested": False, "updated_at": now_ist()}})
-            categories = await self.db.categories.find({"channel_id": channel_id, "status": "active"}).sort("score", -1).to_list(length=None)
+            await self.db.videos.update_many(
+                {"channel_id": channel_id, "suggested": True},
+                {"$set": {"suggested": False, "updated_at": now_ist()}},
+            )
+            categories = (
+                await self.db.categories.find({"channel_id": channel_id, "status": "active"})
+                .sort("score", -1)
+                .to_list(length=None)
+            )
             cat_order = {c["name"]: idx for idx, c in enumerate(categories)}
-            todo_videos = await self.db.videos.find({"channel_id": channel_id, "status": "todo"}).to_list(length=None)
+            todo_videos = await self.db.videos.find(
+                {"channel_id": channel_id, "status": "todo"}
+            ).to_list(length=None)
             todo_videos.sort(key=lambda v: cat_order.get(v.get("category", ""), 9999))
             for v in todo_videos[:suggest_n]:
-                await self.db.videos.update_one({"_id": v["_id"]}, {"$set": {"suggested": True, "updated_at": now_ist()}})
+                await self.db.videos.update_one(
+                    {"_id": v["_id"]}, {"$set": {"suggested": True, "updated_at": now_ist()}}
+                )
         projection = {"retention": 0, "performance": 0}
         videos = await self.db.videos.find(query, projection).to_list(length=None)
         for v in videos:
             v.pop("_id", None)
             for key in ("scheduled_at", "published_at", "created_at", "updated_at"):
-                if v.get(key) is not None: v[key] = to_ist_iso(v[key])
+                if v.get(key) is not None:
+                    v[key] = to_ist_iso(v[key])
         sync_status = await self.get_sync_status(channel_id)
         return {"videos": videos, "sync_status": sync_status}
 
-    async def update_video_status(self, channel_id: str, video_id: str, new_status: str) -> Dict[str, Any]:
+    async def update_video_status(
+        self, channel_id: str, video_id: str, new_status: str
+    ) -> Dict[str, Any]:
         from app.services.todo_engine import recompute_category
-        _TRANSITIONS = {"todo": {"published"}, "ready": {"todo", "published"}, "queued": {"todo", "ready"}, "scheduled": {"todo", "published"}, "published": set()}
+
+        _TRANSITIONS = {
+            "todo": {"published"},
+            "ready": {"todo", "published"},
+            "queued": {"todo", "ready"},
+            "scheduled": {"todo", "published"},
+            "published": set(),
+        }
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video: raise ValueError(f"Video {video_id} not found")
+        if not video:
+            raise ValueError(f"Video {video_id} not found")
         old_status = video.get("status")
-        if new_status not in _TRANSITIONS.get(old_status, set()): raise ValueError(f"Invalid transition {old_status}->{new_status}")
+        if new_status not in _TRANSITIONS.get(old_status, set()):
+            raise ValueError(f"Invalid transition {old_status}->{new_status}")
         update_fields = {"status": new_status, "updated_at": now_ist()}
         if old_status == "ready":
             if video.get("r2_object_key") and self.r2:
-                try: self.r2.delete_video(video["r2_object_key"])
-                except: pass
+                try:
+                    self.r2.delete_video(video["r2_object_key"])
+                except:
+                    pass
             await self.db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
             update_fields["r2_object_key"] = None
         if old_status in ("queued", "scheduled"):
-            await self.db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
+            await self.db.schedule_queue.delete_one(
+                {"channel_id": channel_id, "video_id": video_id}
+            )
             update_fields["scheduled_at"] = None
             if old_status == "queued" and new_status == "ready":
-                last = await self.db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
-                await self.db.posting_queue.insert_one({"channel_id": channel_id, "video_id": video_id, "position": (last["position"]+1) if last else 1, "added_at": now_ist()})
-        if new_status == "published": update_fields["published_at"] = now_ist()
+                last = await self.db.posting_queue.find_one(
+                    {"channel_id": channel_id}, sort=[("position", -1)]
+                )
+                await self.db.posting_queue.insert_one(
+                    {
+                        "channel_id": channel_id,
+                        "video_id": video_id,
+                        "position": (last["position"] + 1) if last else 1,
+                        "added_at": now_ist(),
+                    }
+                )
+        if new_status == "published":
+            update_fields["published_at"] = now_ist()
         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": update_fields})
         if video.get("category") and (new_status == "published" or old_status == "published"):
             await recompute_category(channel_id, video["category"], self.db)
         return {"ok": True, "video_id": video_id, "status": new_status}
 
-    async def change_video_category(self, channel_id: str, video_id: str, old_cat_id: str, new_cat_id: str) -> Dict[str, Any]:
+    async def change_video_category(
+        self, channel_id: str, video_id: str, old_cat_id: str, new_cat_id: str
+    ) -> Dict[str, Any]:
         from app.services.todo_engine import recompute_category
+
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video: raise ValueError("Video not found")
+        if not video:
+            raise ValueError("Video not found")
         old_cat = await self.db.categories.find_one({"id": old_cat_id, "channel_id": channel_id})
         new_cat = await self.db.categories.find_one({"id": new_cat_id, "channel_id": channel_id})
-        if not old_cat or not new_cat: raise ValueError("Category not found")
+        if not old_cat or not new_cat:
+            raise ValueError("Category not found")
         old_name, new_name = old_cat["name"], new_cat["name"]
-        await self.db.videos.update_one({"channel_id": channel_id, "video_id": video_id}, {"$set": {"category": new_name, "updated_at": now_ist()}})
-        await self.db.analysis_history.update_many({"channel_id": channel_id, "video_id": video_id}, {"$set": {"category": new_name}})
+        await self.db.videos.update_one(
+            {"channel_id": channel_id, "video_id": video_id},
+            {"$set": {"category": new_name, "updated_at": now_ist()}},
+        )
+        await self.db.analysis_history.update_many(
+            {"channel_id": channel_id, "video_id": video_id}, {"$set": {"category": new_name}}
+        )
         await recompute_category(channel_id, old_name, self.db)
         await recompute_category(channel_id, new_name, self.db)
-        return {"ok": True, "video_id": video_id, "old_category": old_name, "new_category": new_name}
+        return {
+            "ok": True,
+            "video_id": video_id,
+            "old_category": old_name,
+            "new_category": new_name,
+        }
 
     async def delete_video(self, channel_id: str, video_id: str) -> Dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video: raise ValueError("Video not found")
+        if not video:
+            raise ValueError("Video not found")
         if video.get("r2_object_key") and self.r2:
-            try: self.r2.delete_video(video["r2_object_key"])
-            except: pass
+            try:
+                self.r2.delete_video(video["r2_object_key"])
+            except:
+                pass
         await self.db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
         await self.db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
         await self.db.videos.delete_one({"_id": video["_id"]})
@@ -187,78 +305,188 @@ class VideoService:
 
     async def upload_video(self, channel_id: str, video_id: str, file: Any) -> Dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video: raise ValueError("Video not found")
-        if video.get("status") != "todo": raise ValueError("Video must be in 'todo' status")
+        if not video:
+            raise ValueError("Video not found")
+        if video.get("status") != "todo":
+            raise ValueError("Video must be in 'todo' status")
         key = f"{channel_id}/{video_id}.mp4"
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
             shutil.copyfileobj(file.file, tmp)
             tpath = tmp.name
-        with open(tpath, "rb") as f: self.r2.upload_video(f, key)
+        with open(tpath, "rb") as f:
+            self.r2.upload_video(f, key)
         now = now_ist()
-        await self.db.videos.update_one({"_id": video["_id"]}, {"$set": {"status": "ready", "r2_object_key": key, "updated_at": now}})
-        last = await self.db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
-        await self.db.posting_queue.insert_one({"channel_id": channel_id, "video_id": video_id, "position": (last["position"]+1) if last else 1, "added_at": now})
+        await self.db.videos.update_one(
+            {"_id": video["_id"]},
+            {"$set": {"status": "ready", "r2_object_key": key, "updated_at": now}},
+        )
+        last = await self.db.posting_queue.find_one(
+            {"channel_id": channel_id}, sort=[("position", -1)]
+        )
+        await self.db.posting_queue.insert_one(
+            {
+                "channel_id": channel_id,
+                "video_id": video_id,
+                "position": (last["position"] + 1) if last else 1,
+                "added_at": now,
+            }
+        )
         self.trigger_retention_analysis(channel_id, video_id, local_video_path=tpath)
         return {"ok": True}
 
-    async def repost_video(self, channel_id: str, video_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def repost_video(
+        self, channel_id: str, video_id: str, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video or not video.get("youtube_video_id"): raise ValueError("Original YouTube video not found")
+        if not video or not video.get("youtube_video_id"):
+            raise ValueError("Original YouTube video not found")
         new_id = str(uuid.uuid4())
         tid = data.get("target_channel_id") or channel_id
-        doc = {"channel_id": tid, "video_id": new_id, "title": data["title"], "description": data.get("description", ""), "tags": data.get("tags", []), "category": video.get("category"), "status": "todo", "youtube_video_id": video["youtube_video_id"], "scheduled_at": data.get("scheduled_at"), "created_at": now_ist(), "updated_at": now_ist()}
+        doc = {
+            "channel_id": tid,
+            "video_id": new_id,
+            "title": data["title"],
+            "description": data.get("description", ""),
+            "tags": data.get("tags", []),
+            "category": video.get("category"),
+            "status": "todo",
+            "youtube_video_id": video["youtube_video_id"],
+            "scheduled_at": data.get("scheduled_at"),
+            "created_at": now_ist(),
+            "updated_at": now_ist(),
+        }
         await self.db.videos.insert_one(doc)
         if data.get("instant"):
             from app.services.downloader import download_youtube_video_to_r2
+
             key = await download_youtube_video_to_r2(video["youtube_video_id"], tid, self.r2)
-            await self.db.videos.update_one({"video_id": new_id}, {"$set": {"r2_object_key": key, "status": "queued", "updated_at": now_ist()}})
+            await self.db.videos.update_one(
+                {"video_id": new_id},
+                {"$set": {"r2_object_key": key, "status": "queued", "updated_at": now_ist()}},
+            )
         else:
-            self.trigger_repost_download(channel_id, video["youtube_video_id"], new_id, target_channel_id=tid)
+            self.trigger_repost_download(
+                channel_id, video["youtube_video_id"], new_id, target_channel_id=tid
+            )
         return {"ok": True, "new_video_id": new_id}
 
-    def trigger_retention_analysis(self, channel_id: str, video_id: str, local_video_path: str = None) -> None:
+    def trigger_retention_analysis(
+        self, channel_id: str, video_id: str, local_video_path: Optional[str] = None
+    ) -> None:
         from app.services.retention_analysis import run_retention_analysis
-        if self.r2 and self.gemini:
-            asyncio.create_task(run_retention_analysis(channel_id, video_id, self.db, self.r2, self.gemini, local_video_path=local_video_path))
 
-    def trigger_repost_download(self, channel_id: str, youtube_video_id: str, new_video_id: str, target_channel_id: str = None) -> None:
+        if self.r2 and self.gemini:
+            asyncio.create_task(
+                run_retention_analysis(
+                    channel_id,
+                    video_id,
+                    self.db,
+                    self.r2,
+                    self.gemini,
+                    local_video_path=local_video_path,
+                )
+            )
+
+    def trigger_repost_download(
+        self,
+        channel_id: str,
+        youtube_video_id: str,
+        new_video_id: str,
+        target_channel_id: Optional[str] = None,
+    ) -> None:
         from app.services.downloader import download_youtube_video_to_r2
+
         if self.r2:
+
             async def _job():
                 try:
                     tid = target_channel_id or channel_id
+                    assert self.r2 is not None
                     key = await download_youtube_video_to_r2(youtube_video_id, tid, self.r2)
-                    video = await self.db.videos.find_one({"channel_id": tid, "video_id": new_video_id})
-                    if not video: return
+                    video = await self.db.videos.find_one(
+                        {"channel_id": tid, "video_id": new_video_id}
+                    )
+                    if not video:
+                        return
                     now = now_ist()
                     upd = {"r2_object_key": key, "updated_at": now, "status": "queued"}
                     if video.get("scheduled_at") and video["scheduled_at"] > now:
                         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
-                        last = await self.db.schedule_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
-                        await self.db.schedule_queue.insert_one({"channel_id": tid, "video_id": new_video_id, "position": (last["position"]+1) if last else 1, "scheduled_at": video["scheduled_at"], "added_at": now})
+                        last = await self.db.schedule_queue.find_one(
+                            {"channel_id": tid}, sort=[("position", -1)]
+                        )
+                        await self.db.schedule_queue.insert_one(
+                            {
+                                "channel_id": tid,
+                                "video_id": new_video_id,
+                                "position": (last["position"] + 1) if last else 1,
+                                "scheduled_at": video["scheduled_at"],
+                                "added_at": now,
+                            }
+                        )
                     else:
                         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
-                        last = await self.db.posting_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
-                        await self.db.posting_queue.insert_one({"channel_id": tid, "video_id": new_video_id, "position": (last["position"]+1) if last else 1, "added_at": now})
-                except: pass
+                        last = await self.db.posting_queue.find_one(
+                            {"channel_id": tid}, sort=[("position", -1)]
+                        )
+                        await self.db.posting_queue.insert_one(
+                            {
+                                "channel_id": tid,
+                                "video_id": new_video_id,
+                                "position": (last["position"] + 1) if last else 1,
+                                "added_at": now,
+                            }
+                        )
+                except:
+                    pass
+
             asyncio.create_task(_job())
 
     async def extract_content_params(self, channel_id: str, video_id: str) -> Dict[str, Any]:
-        if not self.gemini: raise ValueError("Gemini not initialised")
+        if not self.gemini:
+            raise ValueError("Gemini not initialised")
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video: raise ValueError("Video not found")
+        if not video:
+            raise ValueError("Video not found")
         schema = await get_content_schema_for_prompt(self.db, channel_id)
-        if not schema: raise ValueError("No schema defined")
+        if not schema:
+            raise ValueError("No schema defined")
         prompt = f"Extract params:\nSchema: {json.dumps(schema)}\nVideo: {video.get('title')}\n{video.get('description')[:1000]}"
         try:
             params = json.loads(await self.gemini._generate(prompt))
-            await self.db.videos.update_one({"_id": video["_id"]}, {"$set": {"content_params": params, "verification_status": "unverified", "updated_at": now_ist()}})
-            return {"ok": True, "video_id": video_id, "content_params": params, "verification_status": "unverified"}
-        except: raise ValueError("Gemini extraction failed")
+            await self.db.videos.update_one(
+                {"_id": video["_id"]},
+                {
+                    "$set": {
+                        "content_params": params,
+                        "verification_status": "unverified",
+                        "updated_at": now_ist(),
+                    }
+                },
+            )
+            return {
+                "ok": True,
+                "video_id": video_id,
+                "content_params": params,
+                "verification_status": "unverified",
+            }
+        except:
+            raise ValueError("Gemini extraction failed")
 
-    async def create_video(self, channel_id: str, file: Any, title: str, description: str = "", tags: str = "", category: str = None, content_params: str = None, scheduled_at: str = None) -> Dict[str, Any]:
+    async def create_video(
+        self,
+        channel_id: str,
+        file: Any,
+        title: str,
+        description: str = "",
+        tags: str = "",
+        category: Optional[str] = None,
+        content_params: Optional[str] = None,
+        scheduled_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
         channel = await self.db.channels.find_one({"channel_id": channel_id})
-        if not channel: raise ValueError("Channel not found")
+        if not channel:
+            raise ValueError("Channel not found")
         params = json.loads(content_params) if content_params else None
         platform = get_channel_platform(channel)
         parsed_tags = [t.strip() for t in tags.split(",")] if tags else []
@@ -268,199 +496,405 @@ class VideoService:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
             shutil.copyfileobj(file, tmp)
             tpath = tmp.name
-        with open(tpath, "rb") as f: self.r2.upload_video(f, key)
+        with open(tpath, "rb") as f:
+            assert self.r2 is not None
+            self.r2.upload_video(f, key)
         now = now_ist()
         status = "scheduled" if (sch_at and platform == "instagram") else "ready"
-        doc = {"channel_id": channel_id, "video_id": vid_id, "title": title, "description": description, "tags": parsed_tags, "category": category or "Uncategorized", "status": status, "r2_object_key": key, "content_params": params, "verification_status": "verified" if (category and params) else "unverified", "scheduled_at": sch_at if status=="scheduled" else None, "created_at": now, "updated_at": now}
+        doc = {
+            "channel_id": channel_id,
+            "video_id": vid_id,
+            "title": title,
+            "description": description,
+            "tags": parsed_tags,
+            "category": category or "Uncategorized",
+            "status": status,
+            "r2_object_key": key,
+            "content_params": params,
+            "verification_status": "verified" if (category and params) else "unverified",
+            "scheduled_at": sch_at if status == "scheduled" else None,
+            "created_at": now,
+            "updated_at": now,
+        }
         await self.db.videos.insert_one(doc)
         if status == "scheduled":
-            last = await self.db.schedule_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
-            await self.db.schedule_queue.insert_one({"channel_id": channel_id, "video_id": vid_id, "position": (last["position"]+1) if last else 1, "scheduled_at": sch_at, "added_at": now})
+            last = await self.db.schedule_queue.find_one(
+                {"channel_id": channel_id}, sort=[("position", -1)]
+            )
+            await self.db.schedule_queue.insert_one(
+                {
+                    "channel_id": channel_id,
+                    "video_id": vid_id,
+                    "position": (last["position"] + 1) if last else 1,
+                    "scheduled_at": sch_at,
+                    "added_at": now,
+                }
+            )
         else:
-            last = await self.db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
-            await self.db.posting_queue.insert_one({"channel_id": channel_id, "video_id": vid_id, "position": (last["position"]+1) if last else 1, "added_at": now})
-        if status == "ready": self.trigger_retention_analysis(channel_id, vid_id, local_video_path=tpath)
-        elif os.path.exists(tpath): os.unlink(tpath)
+            last = await self.db.posting_queue.find_one(
+                {"channel_id": channel_id}, sort=[("position", -1)]
+            )
+            await self.db.posting_queue.insert_one(
+                {
+                    "channel_id": channel_id,
+                    "video_id": vid_id,
+                    "position": (last["position"] + 1) if last else 1,
+                    "added_at": now,
+                }
+            )
+        if status == "ready":
+            self.trigger_retention_analysis(channel_id, vid_id, local_video_path=tpath)
+        elif os.path.exists(tpath):
+            os.unlink(tpath)
         doc.pop("_id", None)
         return {"ok": True, "video": doc}
 
-    async def schedule_video(self, channel_id: str, video_id: str, scheduled_at: datetime = None) -> Dict[str, Any]:
-        from app.services.scheduler import compute_schedule_slots
-        from app.services.schedule_operation import enqueue_video_for_youtube, schedule_single_video_instagram
+    async def schedule_video(
+        self, channel_id: str, video_id: str, scheduled_at: Optional[datetime] = None
+    ) -> Dict[str, Any]:
         from app.config import get_settings
+        from app.services.schedule_operation import (
+            enqueue_video_for_youtube,
+            schedule_single_video_instagram,
+        )
+        from app.services.scheduler import compute_schedule_slots
+
         settings = get_settings()
         channel = await self.db.channels.find_one({"channel_id": channel_id})
-        if not channel: raise ValueError("Channel not found")
+        if not channel:
+            raise ValueError("Channel not found")
         platform = channel.get("platform", "youtube")
         if video_id.lower() == "all":
-            entries = await self.db.posting_queue.find({"channel_id": channel_id}).sort("position", 1).to_list(length=None)
+            entries = (
+                await self.db.posting_queue.find({"channel_id": channel_id})
+                .sort("position", 1)
+                .to_list(length=None)
+            )
             vids = []
             for e in entries:
-                v = await self.db.videos.find_one({"channel_id": channel_id, "video_id": e["video_id"]})
-                if v and v.get("status") == "ready": vids.append(v)
+                v = await self.db.videos.find_one(
+                    {"channel_id": channel_id, "video_id": e["video_id"]}
+                )
+                if v and v.get("status") == "ready":
+                    vids.append(v)
         else:
             v = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-            if not v or v.get("status") != "ready": raise ValueError("Video not ready")
+            if not v or v.get("status") != "ready":
+                raise ValueError("Video not ready")
             vids = [v]
-        if not vids: raise ValueError("No videos to schedule")
-        if scheduled_at and video_id.lower() != "all": slots = [scheduled_at]
+        if not vids:
+            raise ValueError("No videos to schedule")
+        if scheduled_at and video_id.lower() != "all":
+            slots = [scheduled_at]
         else:
             analysis = await self.db.analysis.find_one({"channel_id": channel_id})
-            if not analysis: raise ValueError("No analysis found")
-            existing = await self.db.schedule_queue.find({"channel_id": channel_id}).to_list(length=None)
-            slots = compute_schedule_slots(analysis["best_posting_times"], [e.get("scheduled_at") for e in existing], len(vids), settings.TIMEZONE)
-        if len(slots) < len(vids): raise ValueError("Not enough slots")
+            if not analysis:
+                raise ValueError("No analysis found")
+            existing = await self.db.schedule_queue.find({"channel_id": channel_id}).to_list(
+                length=None
+            )
+            slots = compute_schedule_slots(
+                analysis["best_posting_times"],
+                [e.get("scheduled_at") for e in existing],
+                len(vids),
+                settings.TIMEZONE,
+            )
+        if len(slots) < len(vids):
+            raise ValueError("Not enough slots")
         res = []
         for v_doc, slot in zip(vids, slots):
             if platform == "youtube":
-                r = await enqueue_video_for_youtube(db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot)
+                r = await enqueue_video_for_youtube(
+                    db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot
+                )
             else:
-                r = await schedule_single_video_instagram(db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot)
+                r = await schedule_single_video_instagram(
+                    db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot
+                )
             res.append(r)
         return {"ok": True, "videos": res}
 
-    async def reschedule_video(self, channel_id: str, video_id: str, new_time: datetime) -> Dict[str, Any]:
+    async def reschedule_video(
+        self, channel_id: str, video_id: str, new_time: datetime
+    ) -> Dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video: raise ValueError("Video not found")
-        if video.get("status") != "queued": raise ValueError("Video not queued")
+        if not video:
+            raise ValueError("Video not found")
+        if video.get("status") != "queued":
+            raise ValueError("Video not queued")
         now = now_ist()
-        await self.db.videos.update_one({"_id": video["_id"]}, {"$set": {"scheduled_at": new_time, "updated_at": now}})
-        await self.db.schedule_queue.update_one({"channel_id": channel_id, "video_id": video_id}, {"$set": {"scheduled_at": new_time}})
+        await self.db.videos.update_one(
+            {"_id": video["_id"]}, {"$set": {"scheduled_at": new_time, "updated_at": now}}
+        )
+        await self.db.schedule_queue.update_one(
+            {"channel_id": channel_id, "video_id": video_id}, {"$set": {"scheduled_at": new_time}}
+        )
         return {"ok": True, "scheduled_at": to_ist_iso(new_time)}
 
-    async def update_video_metadata(self, channel_id: str, video_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_video_metadata(
+        self, channel_id: str, video_id: str, metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video: raise ValueError("Video not found")
+        if not video:
+            raise ValueError("Video not found")
         upd: dict = {"updated_at": now_ist()}
         for key in ("title", "description", "category", "thumbnail_url"):
-            if metadata.get(key) is not None: upd[key] = metadata[key]
+            if metadata.get(key) is not None:
+                upd[key] = metadata[key]
         if metadata.get("tags") is not None:
-            if metadata.get("tag_mode") == "append": upd["tags"] = list(set((video.get("tags") or []) + metadata["tags"]))
-            else: upd["tags"] = metadata["tags"]
+            if metadata.get("tag_mode") == "append":
+                upd["tags"] = list(set((video.get("tags") or []) + metadata["tags"]))
+            else:
+                upd["tags"] = metadata["tags"]
         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
         return {"ok": True}
 
-    async def sync_videos(self, channel_id: str, instructions: str = None) -> Dict[str, Any]:
+    async def sync_videos(self, channel_id: str, instructions: Optional[str] = None) -> Dict[str, Any]:
         channel = await self.db.channels.find_one({"channel_id": channel_id})
-        if not channel: raise ValueError("Channel not found")
+        if not channel:
+            raise ValueError("Channel not found")
         platform = get_channel_platform(channel)
         if platform == "youtube":
             yt = await self._get_youtube_service(channel_id)
-            if not yt: raise ValueError("No YouTube token")
+            if not yt:
+                raise ValueError("No YouTube token")
             yt_vids = self._fetch_all_youtube_videos(yt, channel["youtube_channel_id"])
-            db_ids = {doc["youtube_video_id"] async for doc in self.db.videos.find({"channel_id": channel_id, "youtube_video_id": {"$ne": None}}, {"youtube_video_id": 1})}
+            db_ids = {
+                doc["youtube_video_id"]
+                async for doc in self.db.videos.find(
+                    {"channel_id": channel_id, "youtube_video_id": {"$ne": None}},
+                    {"youtube_video_id": 1},
+                )
+            }
             new_vids = [v for v in yt_vids if v["youtube_video_id"] not in db_ids]
             for v in [v for v in yt_vids if v["youtube_video_id"] in db_ids]:
-                await self.db.videos.update_one({"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]}, {"$set": {"title": v["title"], "description": v["description"], "metadata.views": v["views"], "updated_at": now_ist()}})
-            
-            if not new_vids: return {"ok": True, "synced": 0}
-            schema = await get_content_schema_for_prompt(self.db, channel_id, True)
-            cats = [{"name": c["name"], "description": c.get("description", "")} async for c in self.db.categories.find({"channel_id": channel_id})]
+                await self.db.videos.update_one(
+                    {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]},
+                    {
+                        "$set": {
+                            "title": v["title"],
+                            "description": v["description"],
+                            "metadata.views": v["views"],
+                            "updated_at": now_ist(),
+                        }
+                    },
+                )
+
+            if not new_vids:
+                return {"ok": True, "synced": 0}
+            schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
+            cats = [
+                {"name": c["name"], "description": c.get("description", "")}
+                async for c in self.db.categories.find({"channel_id": channel_id})
+            ]
             inserted = 0
             for i in range(0, len(new_vids), 10):
-                batch = new_vids[i:i+10]
-                results = await self._extract_params_and_categorize_batch(schema, cats, batch, instructions, "youtube")
+                batch = new_vids[i : i + 10]
+                results = await self._extract_params_and_categorize_batch(
+                    schema, cats, batch, instructions, "youtube"
+                )
                 res_map = {r["youtube_video_id"]: r for r in results if "youtube_video_id" in r}
                 for v in batch:
                     ana = res_map.get(v["youtube_video_id"], {})
                     cat = ana.get("category", "Uncategorized")
                     if cat not in [c["name"] for c in cats]:
-                        await self.db.categories.insert_one({"id": str(uuid.uuid4()), "channel_id": channel_id, "name": cat, "status": "active", "created_at": now_ist()})
+                        await self.db.categories.insert_one(
+                            {
+                                "id": str(uuid.uuid4()),
+                                "channel_id": channel_id,
+                                "name": cat,
+                                "status": "active",
+                                "created_at": now_ist(),
+                            }
+                        )
                         cats.append({"name": cat})
-                    await self.db.videos.insert_one({"channel_id": channel_id, "video_id": str(uuid.uuid4()), "youtube_video_id": v["youtube_video_id"], "title": v["title"], "description": v["description"], "category": cat, "status": "published", "published_at": v["published_at"], "content_params": ana.get("content_params"), "verification_status": "unverified", "created_at": now_ist()})
+                    await self.db.videos.insert_one(
+                        {
+                            "channel_id": channel_id,
+                            "video_id": str(uuid.uuid4()),
+                            "youtube_video_id": v["youtube_video_id"],
+                            "title": v["title"],
+                            "description": v["description"],
+                            "category": cat,
+                            "status": "published",
+                            "published_at": v["published_at"],
+                            "content_params": ana.get("content_params"),
+                            "verification_status": "unverified",
+                            "created_at": now_ist(),
+                        }
+                    )
                     inserted += 1
             return {"ok": True, "synced": inserted}
 
         if platform == "instagram":
             ig = await self._get_instagram_service(channel_id)
-            if not ig: raise ValueError("No Instagram token")
+            if not ig:
+                raise ValueError("No Instagram token")
             ig_reels = ig.get_reels(channel["instagram_user_id"])
-            db_ids = {doc["instagram_media_id"] async for doc in self.db.videos.find({"channel_id": channel_id, "instagram_media_id": {"$ne": None}}, {"instagram_media_id": 1})}
+            db_ids = {
+                doc["instagram_media_id"]
+                async for doc in self.db.videos.find(
+                    {"channel_id": channel_id, "instagram_media_id": {"$ne": None}},
+                    {"instagram_media_id": 1},
+                )
+            }
             new_vids = []
             for r in ig_reels:
                 if r["id"] not in db_ids:
-                    new_vids.append({
-                        "instagram_media_id": r["id"],
-                        "title": r.get("caption", "Untitled Reel"),
-                        "description": r.get("caption", ""),
-                        "published_at": r.get("timestamp"),
-                        "views": r.get("view_count", 0)
-                    })
+                    new_vids.append(
+                        {
+                            "instagram_media_id": r["id"],
+                            "title": r.get("caption", "Untitled Reel"),
+                            "description": r.get("caption", ""),
+                            "published_at": isoparse(r.get("timestamp")) if r.get("timestamp") else None,
+                            "views": r.get("view_count", 0),
+                        }
+                    )
                 else:
                     await self.db.videos.update_one(
                         {"channel_id": channel_id, "instagram_media_id": r["id"]},
-                        {"$set": {"metadata.views": r.get("view_count", 0), "updated_at": now_ist()}}
+                        {
+                            "$set": {
+                                "metadata.views": r.get("view_count", 0),
+                                "updated_at": now_ist(),
+                            }
+                        },
                     )
 
-            if not new_vids: return {"ok": True, "synced": 0}
-            schema = await get_content_schema_for_prompt(self.db, channel_id, True)
-            cats = [{"name": c["name"], "description": c.get("description", "")} async for c in self.db.categories.find({"channel_id": channel_id})]
+            if not new_vids:
+                return {"ok": True, "synced": 0}
+            schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
+            cats = [
+                {"name": c["name"], "description": c.get("description", "")}
+                async for c in self.db.categories.find({"channel_id": channel_id})
+            ]
             inserted = 0
             for i in range(0, len(new_vids), 10):
-                batch = new_vids[i:i+10]
-                results = await self._extract_params_and_categorize_batch(schema, cats, batch, instructions, "instagram")
+                batch = new_vids[i : i + 10]
+                results = await self._extract_params_and_categorize_batch(
+                    schema, cats, batch, instructions, "instagram"
+                )
                 res_map = {r["instagram_media_id"]: r for r in results if "instagram_media_id" in r}
                 for v in batch:
                     ana = res_map.get(v["instagram_media_id"], {})
                     cat = ana.get("category", "Uncategorized")
                     if cat not in [c["name"] for c in cats]:
-                        await self.db.categories.insert_one({"id": str(uuid.uuid4()), "channel_id": channel_id, "name": cat, "status": "active", "created_at": now_ist()})
+                        await self.db.categories.insert_one(
+                            {
+                                "id": str(uuid.uuid4()),
+                                "channel_id": channel_id,
+                                "name": cat,
+                                "status": "active",
+                                "created_at": now_ist(),
+                            }
+                        )
                         cats.append({"name": cat})
-                    await self.db.videos.insert_one({
-                        "channel_id": channel_id,
-                        "video_id": str(uuid.uuid4()),
-                        "instagram_media_id": v["instagram_media_id"],
-                        "title": v["title"],
-                        "description": v["description"],
-                        "category": cat,
-                        "status": "published",
-                        "published_at": v["published_at"],
-                        "content_params": ana.get("content_params"),
-                        "verification_status": "unverified",
-                        "created_at": now_ist()
-                    })
+                    await self.db.videos.insert_one(
+                        {
+                            "channel_id": channel_id,
+                            "video_id": str(uuid.uuid4()),
+                            "instagram_media_id": v["instagram_media_id"],
+                            "title": v["title"],
+                            "description": v["description"],
+                            "category": cat,
+                            "status": "published",
+                            "published_at": v["published_at"],
+                            "content_params": ana.get("content_params"),
+                            "verification_status": "unverified",
+                            "created_at": now_ist(),
+                        }
+                    )
                     inserted += 1
             return {"ok": True, "synced": inserted}
 
         return {"ok": True, "message": "Platform not supported"}
 
-    async def _extract_params_and_categorize_batch(self, schema, cats, batch, instructions, platform):
-        if not self.gemini: return []
+    async def _extract_params_and_categorize_batch(
+        self, schema, cats, batch, instructions, platform
+    ):
+        if not self.gemini:
+            return []
         id_key = "youtube_video_id" if platform == "youtube" else "instagram_media_id"
-        summaries = [{id_key: v[id_key], "title": v["title"], "description": v["description"][:500]} for v in batch]
+        summaries = [
+            {id_key: v[id_key], "title": v["title"], "description": v["description"][:500]}
+            for v in batch
+        ]
         prompt = f"Categorize these videos:\nSchema: {json.dumps(schema)}\nCategories: {json.dumps(cats)}\nVideos: {json.dumps(summaries)}\n{instructions}"
         try:
             res = await self.gemini._generate(prompt)
             return json.loads(res)
-        except: return []
+        except:
+            return []
 
     def _fetch_all_youtube_videos(self, yt, youtube_channel_id: str):
         uploads_playlist_id = "UU" + youtube_channel_id[2:]
         video_ids = []
         next_page = None
         while True:
-            request = yt._youtube.playlistItems().list(part="contentDetails", playlistId=uploads_playlist_id, maxResults=50, pageToken=next_page)
+            request = yt._youtube.playlistItems().list(
+                part="contentDetails",
+                playlistId=uploads_playlist_id,
+                maxResults=50,
+                pageToken=next_page,
+            )
             response = request.execute()
-            for item in response.get("items", []): video_ids.append(item["contentDetails"]["videoId"])
+            for item in response.get("items", []):
+                video_ids.append(item["contentDetails"]["videoId"])
             next_page = response.get("nextPageToken")
-            if not next_page: break
+            if not next_page:
+                break
         videos = []
         for i in range(0, len(video_ids), 50):
-            batch = video_ids[i:i+50]
-            resp = yt._youtube.videos().list(part="snippet,statistics,contentDetails,status", id=",".join(batch)).execute()
+            batch = video_ids[i : i + 50]
+            resp = (
+                yt._youtube.videos()
+                .list(part="snippet,statistics,contentDetails,status", id=",".join(batch))
+                .execute()
+            )
             for item in resp.get("items", []):
-                snippet, stats, content = item.get("snippet", {}), item.get("statistics", {}), item.get("contentDetails", {})
-                views, likes, comments = int(stats.get("viewCount", 0)), int(stats.get("likeCount", 0)), int(stats.get("commentCount", 0))
-                videos.append({"youtube_video_id": item["id"], "title": snippet.get("title", ""), "description": snippet.get("description", ""), "tags": snippet.get("tags", []), "published_at": snippet.get("publishedAt", ""), "views": views, "likes": likes, "comments": comments, "duration_seconds": self._parse_duration(content.get("duration")), **self._compute_rates(views, likes, comments)})
+                snippet, stats, content = (
+                    item.get("snippet", {}),
+                    item.get("statistics", {}),
+                    item.get("contentDetails", {}),
+                )
+                views, likes, comments = (
+                    int(stats.get("viewCount", 0)),
+                    int(stats.get("likeCount", 0)),
+                    int(stats.get("commentCount", 0)),
+                )
+                videos.append(
+                    {
+                        "youtube_video_id": item["id"],
+                        "title": snippet.get("title", ""),
+                        "description": snippet.get("description", ""),
+                        "tags": snippet.get("tags", []),
+                        "published_at": isoparse(snippet.get("publishedAt")) if snippet.get("publishedAt") else None,
+                        "views": views,
+                        "likes": likes,
+                        "comments": comments,
+                        "duration_seconds": self._parse_duration(content.get("duration")),
+                        **self._compute_rates(views, likes, comments),
+                    }
+                )
         return videos
 
     def _parse_duration(self, duration: str) -> int:
         import re
+
         match = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", duration or "")
-        if not match: return 0
-        return int(match.group(1) or 0)*3600 + int(match.group(2) or 0)*60 + int(match.group(3) or 0)
+        if not match:
+            return 0
+        return (
+            int(match.group(1) or 0) * 3600
+            + int(match.group(2) or 0) * 60
+            + int(match.group(3) or 0)
+        )
 
     def _compute_rates(self, views: int, likes: int, comments: int) -> dict:
         if views > 0:
-            return {"engagement_rate": round((likes + comments) / views * 100, 4), "like_rate": round(likes / views * 100, 4), "comment_rate": round(comments / views * 100, 4)}
+            return {
+                "engagement_rate": round((likes + comments) / views * 100, 4),
+                "like_rate": round(likes / views * 100, 4),
+                "comment_rate": round(comments / views * 100, 4),
+            }
         return {"engagement_rate": None, "like_rate": None, "comment_rate": None}

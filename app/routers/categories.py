@@ -3,12 +3,11 @@
 import uuid
 from typing import List, Optional, Union
 
-from app.timezone import now_ist
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
@@ -30,6 +29,7 @@ router = APIRouter(
 
 from app.models.category import Category
 
+
 @router.get("/", response_model=list[Category])
 async def list_categories(
     channel_id: str,
@@ -41,9 +41,7 @@ async def list_categories(
     if status_filter:
         query["status"] = status_filter
 
-    categories = (
-        await db.categories.find(query).sort("score", -1).to_list(length=None)
-    )
+    categories = await db.categories.find(query).sort("score", -1).to_list(length=None)
     for c in categories:
         c.pop("_id", None)
 
@@ -87,7 +85,9 @@ async def add_categories(
 
     await db.categories.insert_many(docs)
     names = [item.name for item in items]
-    logger.success("✅ Created %d category(ies) for channel '%s': %s", len(names), channel_id, ", ".join(names))
+    logger.success(
+        "✅ Created %d category(ies) for channel '%s': %s", len(names), channel_id, ", ".join(names)
+    )
     return {
         "ok": True,
         "inserted_count": len(docs),
@@ -135,11 +135,10 @@ async def update_category(
     if new_name and new_name != old_name:
         await db.videos.update_many(
             {"channel_id": channel_id, "category": old_name},
-            {"$set": {"category": new_name, "updated_at": now_ist()}}
+            {"$set": {"category": new_name, "updated_at": now_ist()}},
         )
         await db.analysis_history.update_many(
-            {"channel_id": channel_id, "category": old_name},
-            {"$set": {"category": new_name}}
+            {"channel_id": channel_id, "category": old_name}, {"$set": {"category": new_name}}
         )
         await db.analysis.update_one(
             {"channel_id": channel_id, "category_analysis.category": old_name},
@@ -158,11 +157,17 @@ async def update_category(
             )
 
     if new_name and new_name != old_name:
-        logger.success("✅ Renamed category '%s' → '%s' for channel '%s'", old_name, new_name, channel_id)
+        logger.success(
+            "✅ Renamed category '%s' → '%s' for channel '%s'", old_name, new_name, channel_id
+        )
     elif update_data.get("status") == "archived":
-        logger.success("📦 Archived category '%s' for channel '%s'", new_name or old_name, channel_id)
+        logger.success(
+            "📦 Archived category '%s' for channel '%s'", new_name or old_name, channel_id
+        )
     else:
-        logger.success("✅ Updated category '%s' for channel '%s'", new_name or old_name, channel_id)
+        logger.success(
+            "✅ Updated category '%s' for channel '%s'", new_name or old_name, channel_id
+        )
 
     return {"ok": True, "category_id": category_id}
 
@@ -190,12 +195,11 @@ async def delete_category(
 
     await db.videos.update_many(
         {"channel_id": channel_id, "category": cat_name},
-        {"$set": {"category": "Uncategorized", "updated_at": now_ist()}}
+        {"$set": {"category": "Uncategorized", "updated_at": now_ist()}},
     )
 
     await db.analysis_history.update_many(
-        {"channel_id": channel_id, "category": cat_name},
-        {"$set": {"category": "Uncategorized"}}
+        {"channel_id": channel_id, "category": cat_name}, {"$set": {"category": "Uncategorized"}}
     )
 
     await db.analysis.update_one(
@@ -206,11 +210,14 @@ async def delete_category(
     await db.categories.delete_one({"id": category_id, "channel_id": channel_id})
 
     from app.services.todo_engine import recompute_category
-    uncat = await db.categories.find_one(
-        {"channel_id": channel_id, "name": "Uncategorized"}
-    )
+
+    uncat = await db.categories.find_one({"channel_id": channel_id, "name": "Uncategorized"})
     if uncat:
         await recompute_category(channel_id, "Uncategorized", db)
 
-    logger.success("🗑️ Deleted category '%s' for channel '%s' — videos moved to Uncategorized", cat_name, channel_id)
+    logger.success(
+        "🗑️ Deleted category '%s' for channel '%s' — videos moved to Uncategorized",
+        cat_name,
+        channel_id,
+    )
     return {"ok": True, "category_id": category_id, "deleted": True}

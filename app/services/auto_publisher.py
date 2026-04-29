@@ -12,11 +12,11 @@ import asyncio
 import os
 from typing import Any
 
-from app.logger import get_logger
-from app.services.schedule_operation import _build_instagram_caption
 from app.database import update_channel_task_status
-from app.timezone import now_ist
+from app.logger import get_logger
 from app.services.errors import get_error_service
+from app.services.schedule_operation import _build_instagram_caption
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
@@ -81,10 +81,10 @@ async def _publish_one_reel(
             media_id,
             channel_id,
         )
-        
+
         # Update channel task history
         await update_channel_task_status(db, channel_id, "auto_publisher")
-        
+
         return True
 
     except Exception as e:
@@ -96,17 +96,13 @@ async def _publish_one_reel(
             attempts,
             _MAX_PUBLISH_ATTEMPTS,
         )
-        
+
         error_service = get_error_service(db)
         await error_service.log_error(
             feature="Instagram Auto-Publisher",
             message=f"Failed to publish reel '{video_doc.get('title', video_id)}' (Attempt {attempts}/{_MAX_PUBLISH_ATTEMPTS})",
             exception=e,
-            context={
-                "video_id": video_id,
-                "channel_id": channel_id,
-                "attempt": attempts
-            }
+            context={"video_id": video_id, "channel_id": channel_id, "attempt": attempts},
         )
         if attempts >= _MAX_PUBLISH_ATTEMPTS:
             logger.error(
@@ -133,7 +129,6 @@ async def _publish_one_reel(
 
 async def run_auto_publisher(db: Any, r2_service: Any) -> None:
     """Long-running loop that publishes due Instagram reels every 5 minutes."""
-    from app.services.instagram import InstagramServiceManager
 
     logger.info("Auto-publisher started (poll interval: %ds)", _POLL_INTERVAL_SECONDS)
     from app.services.metrics import metrics_service
@@ -153,7 +148,7 @@ async def run_auto_publisher(db: Any, r2_service: Any) -> None:
             await error_service.log_error(
                 feature="Instagram Auto-Publisher Loop",
                 message="Auto-publisher encountered an error during poll cycle",
-                exception=e
+                exception=e,
             )
 
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
@@ -162,7 +157,7 @@ async def run_auto_publisher(db: Any, r2_service: Any) -> None:
 async def _poll_and_publish(db: Any, r2_service: Any) -> None:
     """One poll cycle: find due entries and publish them."""
     from app.main import instagram_service_manager  # type: ignore[import]
-    
+
     logger.info("Auto-publisher: checking schedule queue...")
     now = now_ist()
 
@@ -183,9 +178,11 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
         return
 
     if not due_entries:
-        logger.info("Auto-publisher: 0 due entries (next reel at %s, total queue: %d)", 
-                    (await db.schedule_queue.find_one(sort=[("scheduled_at", 1)]))["scheduled_at"],
-                    total_count)
+        logger.info(
+            "Auto-publisher: 0 due entries (next reel at %s, total queue: %d)",
+            (await db.schedule_queue.find_one(sort=[("scheduled_at", 1)]))["scheduled_at"],
+            total_count,
+        )
         return
 
     for entry in due_entries:
@@ -194,7 +191,9 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
 
         channel_doc = await db.channels.find_one({"channel_id": channel_id})
         if not channel_doc:
-            logger.warning("Auto-publisher: channel '%s' not found — removing queue entry", channel_id)
+            logger.warning(
+                "Auto-publisher: channel '%s' not found — removing queue entry", channel_id
+            )
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
             continue
 
@@ -202,9 +201,7 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
         if platform != "instagram":
             continue
 
-        video_doc = await db.videos.find_one(
-            {"channel_id": channel_id, "video_id": video_id}
-        )
+        video_doc = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video_doc:
             logger.warning("Auto-publisher: video '%s' not found — removing queue entry", video_id)
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
@@ -214,7 +211,8 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
         if video_doc.get("status") not in ("queued", "scheduled"):
             logger.warning(
                 "Auto-publisher: video '%s' status is '%s', not 'queued' — removing stale queue entry",
-                video_id, video_doc.get("status"),
+                video_id,
+                video_doc.get("status"),
             )
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
             continue

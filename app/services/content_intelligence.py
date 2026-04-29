@@ -7,7 +7,6 @@ insights to surface what's working and what needs to change.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from typing import Any
 
@@ -35,7 +34,7 @@ async def _fetch_competitor_video_metadata(
         return []
 
     channel = await db.channels.find_one({"channel_id": channel_id})
-    parent_platform = channel.get("platform", "youtube") if channel else "youtube"
+    channel.get("platform", "youtube") if channel else "youtube"
 
     all_videos: list[dict[str, Any]] = []
 
@@ -62,11 +61,9 @@ async def _fetch_competitor_video_metadata(
                 # Fetch snippet details (title, description, tags) in batches
                 snippet_map: dict[str, dict] = {}
                 for i in range(0, len(video_ids), 50):
-                    batch = video_ids[i:i + 50]
+                    batch = video_ids[i : i + 50]
                     resp = (
-                        service._youtube.videos()
-                        .list(part="snippet", id=",".join(batch))
-                        .execute()
+                        service._youtube.videos().list(part="snippet", id=",".join(batch)).execute()
                     )
                     for item in resp.get("items", []):
                         snip = item.get("snippet", {})
@@ -80,21 +77,23 @@ async def _fetch_competitor_video_metadata(
                     vid = rv["video_id"]
                     st = stats_map.get(vid, {})
                     snip = snippet_map.get(vid, {})
-                    all_videos.append({
-                        "platform_video_id": vid,
-                        "title": snip.get("title") or rv.get("title", ""),
-                        "description": snip.get("description", "")[:1000],
-                        "tags": (snip.get("tags") or [])[:20],
-                        "views": st.get("views", 0),
-                        "likes": st.get("likes", 0),
-                        "comments": st.get("comments", 0),
-                        "duration_seconds": st.get("duration_seconds", 0),
-                        "engagement_rate": st.get("engagement_rate", 0),
-                        "published_at": rv.get("published_at", ""),
-                        "competitor_name": comp_name,
-                        "platform": "youtube",
-                        "permalink": f"https://youtube.com/watch?v={vid}",
-                    })
+                    all_videos.append(
+                        {
+                            "platform_video_id": vid,
+                            "title": snip.get("title") or rv.get("title", ""),
+                            "description": snip.get("description", "")[:1000],
+                            "tags": (snip.get("tags") or [])[:20],
+                            "views": st.get("views", 0),
+                            "likes": st.get("likes", 0),
+                            "comments": st.get("comments", 0),
+                            "duration_seconds": st.get("duration_seconds", 0),
+                            "engagement_rate": st.get("engagement_rate", 0),
+                            "published_at": rv.get("published_at", ""),
+                            "competitor_name": comp_name,
+                            "platform": "youtube",
+                            "permalink": f"https://youtube.com/watch?v={vid}",
+                        }
+                    )
 
             elif platform == "instagram":
                 ig_username = comp.get("instagram_username")
@@ -107,29 +106,37 @@ async def _fetch_competitor_video_metadata(
                 if not own_ig_id:
                     continue
 
-                raw_reels = service.discover_competitor_media(own_ig_id, ig_username, max_results=50)
+                raw_reels = service.discover_competitor_media(
+                    own_ig_id, ig_username, max_results=50
+                )
                 for rr in raw_reels:
                     caption = rr.get("caption", "") or ""
-                    all_videos.append({
-                        "platform_video_id": rr["id"],
-                        "title": caption.split("\n")[0][:100] if caption else "Untitled",
-                        "description": caption[:1000],
-                        "tags": [w.strip("#") for w in caption.split() if w.startswith("#")][:20],
-                        "views": rr.get("views", 0),
-                        "likes": rr.get("like_count", 0),
-                        "comments": rr.get("comment_count", 0),
-                        "duration_seconds": 0,
-                        "engagement_rate": 0,
-                        "published_at": rr.get("published_at", ""),
-                        "competitor_name": comp_name,
-                        "platform": "instagram",
-                        "permalink": rr.get("permalink", ""),
-                    })
+                    all_videos.append(
+                        {
+                            "platform_video_id": rr["id"],
+                            "title": caption.split("\n")[0][:100] if caption else "Untitled",
+                            "description": caption[:1000],
+                            "tags": [w.strip("#") for w in caption.split() if w.startswith("#")][
+                                :20
+                            ],
+                            "views": rr.get("views", 0),
+                            "likes": rr.get("like_count", 0),
+                            "comments": rr.get("comment_count", 0),
+                            "duration_seconds": 0,
+                            "engagement_rate": 0,
+                            "published_at": rr.get("published_at", ""),
+                            "competitor_name": comp_name,
+                            "platform": "instagram",
+                            "permalink": rr.get("permalink", ""),
+                        }
+                    )
 
         except Exception as exc:
             logger.error(
                 "Content intel: failed to fetch competitor '%s' (%s): %s",
-                comp_name, platform, exc,
+                comp_name,
+                platform,
+                exc,
             )
 
     # Sort by views descending and take top N per competitor
@@ -204,7 +211,7 @@ async def _extract_and_store(
     failed = 0
 
     for i in range(0, len(new_videos), _BATCH_SIZE):
-        batch = new_videos[i:i + _BATCH_SIZE]
+        batch = new_videos[i : i + _BATCH_SIZE]
         gemini_input = [
             {
                 "video_id": v["platform_video_id"],
@@ -221,7 +228,8 @@ async def _extract_and_store(
 
         try:
             extractions = await gemini_service.extract_video_intelligence(
-                gemini_input, platform,
+                gemini_input,
+                platform,
             )
         except Exception as exc:
             logger.error("Gemini extraction failed for batch %d: %s", i // _BATCH_SIZE + 1, exc)
@@ -284,7 +292,12 @@ async def _extract_and_store(
             len(batch),
         )
 
-    return {"total": len(videos), "new": extracted, "skipped": len(videos) - len(new_videos), "failed": failed}
+    return {
+        "total": len(videos),
+        "new": extracted,
+        "skipped": len(videos) - len(new_videos),
+        "failed": failed,
+    }
 
 
 async def scan_competitor_videos(
@@ -299,13 +312,21 @@ async def scan_competitor_videos(
     logger.info("Content intel: scanning competitor videos for channel '%s'...", channel_id)
 
     videos = await _fetch_competitor_video_metadata(
-        channel_id, db, youtube_manager, instagram_manager,
+        channel_id,
+        db,
+        youtube_manager,
+        instagram_manager,
     )
     if not videos:
         return {"source": "competitor", "total": 0, "new": 0, "skipped": 0}
 
     result = await _extract_and_store(
-        videos, "competitor", channel_id, platform, db, gemini_service,
+        videos,
+        "competitor",
+        channel_id,
+        platform,
+        db,
+        gemini_service,
     )
     result["source"] = "competitor"
     return result
@@ -325,7 +346,12 @@ async def scan_own_videos(
         return {"source": "own", "total": 0, "new": 0, "skipped": 0}
 
     result = await _extract_and_store(
-        videos, "own", channel_id, platform, db, gemini_service,
+        videos,
+        "own",
+        channel_id,
+        platform,
+        db,
+        gemini_service,
     )
     result["source"] = "own"
     return result
@@ -376,7 +402,9 @@ async def generate_insights(
     comp_slim = [_slim(d) for d in comp_docs]
 
     insights = await gemini_service.compare_content_patterns(
-        own_slim, comp_slim, platform,
+        own_slim,
+        comp_slim,
+        platform,
     )
 
     insights["channel_id"] = channel_id

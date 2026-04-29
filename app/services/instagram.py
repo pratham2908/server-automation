@@ -36,8 +36,9 @@ class InstagramService:
 
     def _get(self, endpoint: str, params: dict | None = None) -> dict:
         import time
+
         from app.services.metrics import metrics_service
-        
+
         headers = {"Authorization": f"Bearer {self._token}"}
         start_time = time.time()
         try:
@@ -48,7 +49,7 @@ class InstagramService:
                 timeout=30,
             )
             duration = (time.time() - start_time) * 1000
-            
+
             if not resp.ok:
                 metrics_service.record_external_call("instagram", duration, "error")
                 try:
@@ -58,7 +59,7 @@ class InstagramService:
                     logger.error("Instagram API GET failed (%d): %s", resp.status_code, resp.text)
             else:
                 metrics_service.record_external_call("instagram", duration, "success")
-                
+
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -85,7 +86,9 @@ class InstagramService:
             "biography": data.get("biography", ""),
         }
 
-    def discover_business_account(self, own_ig_user_id: str, target_username: str) -> dict[str, Any]:
+    def discover_business_account(
+        self, own_ig_user_id: str, target_username: str
+    ) -> dict[str, Any]:
         """Fetch metadata for *any* Business/Creator account using Business Discovery.
 
         Requires an authenticated business account (own_ig_user_id) to perform
@@ -109,30 +112,32 @@ class InstagramService:
         self, own_ig_user_id: str, target_username: str, max_results: int = 50
     ) -> list[dict[str, Any]]:
         """Fetch recent reels/videos from *any* Business account using Business Discovery.
-        
+
         Note: The Business Discovery API has strict limitations on pagination depth.
         """
         fields = (
             f"business_discovery.username({target_username})"
             f"{{media{{id,caption,media_type,media_url,timestamp,permalink,like_count,comments_count}}}}"
         )
-        
+
         try:
             data = self._get(own_ig_user_id, {"fields": fields})
             media_list = data.get("business_discovery", {}).get("media", {}).get("data", [])
-            
+
             reels: list[dict[str, Any]] = []
             for item in media_list:
                 if item.get("media_type") in ("VIDEO", "REEL"):
-                    reels.append({
-                        "id": item.get("id"),
-                        "caption": item.get("caption", ""),
-                        "permalink": item.get("permalink", ""),
-                        "published_at": item.get("timestamp", ""),
-                        "like_count": int(item.get("like_count", 0)),
-                        "comment_count": int(item.get("comments_count", 0)),
-                        "views": 0, # Business Discovery does NOT provide view counts for public media
-                    })
+                    reels.append(
+                        {
+                            "id": item.get("id"),
+                            "caption": item.get("caption", ""),
+                            "permalink": item.get("permalink", ""),
+                            "published_at": item.get("timestamp", ""),
+                            "like_count": int(item.get("like_count", 0)),
+                            "comment_count": int(item.get("comments_count", 0)),
+                            "views": 0,  # Business Discovery does NOT provide view counts for public media
+                        }
+                    )
                 if len(reels) >= max_results:
                     break
             return reels
@@ -150,10 +155,7 @@ class InstagramService:
         Paginates through ``/{ig_user_id}/media`` and filters by
         ``media_type`` to keep only video/reel content.
         """
-        fields = (
-            "id,caption,media_type,media_url,"
-            "timestamp,permalink,like_count,comments_count"
-        )
+        fields = "id,caption,media_type,media_url,timestamp,permalink,like_count,comments_count"
         reels: list[dict[str, Any]] = []
         url = f"{ig_user_id}/media"
         params: dict = {"fields": fields, "limit": "100"}
@@ -166,7 +168,7 @@ class InstagramService:
             paging = body.get("paging", {})
             next_url = paging.get("next")
             if next_url:
-                # The 'next' URL is absolute and contains all tokens, 
+                # The 'next' URL is absolute and contains all tokens,
                 # but our _get helper prepends _GRAPH_BASE.
                 # So we strip the base if it's there, or just use requests.get directly for paging.
                 params = {}
@@ -195,15 +197,17 @@ class InstagramService:
         while url:
             body = self._get(url, params=params)
             for item in body.get("data", []):
-                comments.append({
-                    "comment_id": item.get("id", ""),
-                    "text": item.get("text", ""),
-                    "like_count": int(item.get("like_count", 0)),
-                    "author": item.get("username", ""),
-                    "published_at": item.get("timestamp", ""),
-                    "video_url": f"https://www.instagram.com/reels/{media_id}/",
-                    "comment_url": f"https://www.instagram.com/reels/comments/{item.get('id', '')}/",
-                })
+                comments.append(
+                    {
+                        "comment_id": item.get("id", ""),
+                        "text": item.get("text", ""),
+                        "like_count": int(item.get("like_count", 0)),
+                        "author": item.get("username", ""),
+                        "published_at": item.get("timestamp", ""),
+                        "video_url": f"https://www.instagram.com/reels/{media_id}/",
+                        "comment_url": f"https://www.instagram.com/reels/comments/{item.get('id', '')}/",
+                    }
+                )
             paging = body.get("paging", {})
             next_url = paging.get("next")
             if next_url:
@@ -215,14 +219,17 @@ class InstagramService:
         return comments
 
     def get_media_comments_since(
-        self, media_id: str, cutoff_timestamp: str | datetime,
+        self,
+        media_id: str,
+        cutoff_timestamp: str | datetime,
     ) -> list[dict[str, Any]]:
         """Fetch comments newer than *cutoff_timestamp*.
 
         The Instagram API does not support server-side time filtering,
         so this fetches all comments and filters client-side.
         """
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
 
         if isinstance(cutoff_timestamp, str):
             cutoff = _dt.fromisoformat(cutoff_timestamp.replace("Z", "+00:00"))
@@ -280,8 +287,9 @@ class InstagramService:
 
     def _post(self, endpoint: str, params: dict | None = None) -> dict:
         import time
+
         from app.services.metrics import metrics_service
-        
+
         payload = params or {}
         headers = {"Authorization": f"Bearer {self._token}"}
         start_time = time.time()
@@ -293,7 +301,7 @@ class InstagramService:
                 timeout=60,
             )
             duration = (time.time() - start_time) * 1000
-            
+
             if not resp.ok:
                 metrics_service.record_external_call("instagram", duration, "error")
                 try:
@@ -303,7 +311,7 @@ class InstagramService:
                     logger.error("Instagram API POST failed (%d): %s", resp.status_code, resp.text)
             else:
                 metrics_service.record_external_call("instagram", duration, "success")
-                
+
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -332,7 +340,9 @@ class InstagramService:
         container_id = data.get("id", "")
         upload_uri = data.get("uri", "")
         logger.info(
-            "Created reel container %s for IG user %s", container_id, ig_user_id,
+            "Created reel container %s for IG user %s",
+            container_id,
+            ig_user_id,
         )
         return {"container_id": container_id, "upload_uri": upload_uri}
 
@@ -347,7 +357,7 @@ class InstagramService:
             "file_size": str(file_size),
             "Content-Type": "application/octet-stream",
         }
-        
+
         # Read file into memory to avoid 'Transfer-Encoding: chunked' issues with Instagram
         with open(file_path, "rb") as f:
             binary_data = f.read()
@@ -358,10 +368,10 @@ class InstagramService:
             data=binary_data,
             timeout=600,
         )
-        
+
         if not resp.ok:
             logger.error("Instagram upload failed (%d): %s", resp.status_code, resp.text)
-        
+
         resp.raise_for_status()
         logger.info("Uploaded video (%d bytes) to %s", file_size, upload_uri[:80])
 
@@ -428,7 +438,7 @@ class InstagramService:
 
     async def refresh_token(self, app_id: str, app_secret: str) -> str | None:
         """Exchange the current long-lived token for a new one (60-day window).
-        
+
         Returns the new token string, or ``None`` on failure.
         """
         try:
@@ -446,12 +456,9 @@ class InstagramService:
             data = resp.json()
             new_token = data.get("access_token")
             if new_token and self._db is not None and self._channel_id:
-                import asyncio
-
                 expires_in = data.get("expires_in", 5184000)
                 expires_at = (
-                    datetime.now(timezone.utc)
-                    + timedelta(seconds=expires_in)
+                    datetime.now(timezone.utc) + timedelta(seconds=expires_in)
                 ).isoformat()
 
                 async def _save() -> None:

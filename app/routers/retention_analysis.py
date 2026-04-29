@@ -8,7 +8,6 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
-from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
@@ -27,23 +26,23 @@ router = APIRouter(
 @router.get("/history")
 async def list_retention_analyses(
     channel_id: str,
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status: pending, analyzing, completed, failed"),
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="Filter by status: pending, analyzing, completed, failed"
+    ),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """List retention analyses for a channel, newest first."""
-    query: dict = {
-        "channel_id": channel_id,
-        "retention": {"$ne": None}
-    }
+    query: dict = {"channel_id": channel_id, "retention": {"$ne": None}}
     if status_filter:
         query["retention.status"] = status_filter
 
-    cursor = db.videos.find(
-        query,
-        {"retention": 1, "video_id": 1, "channel_id": 1}
-    ).sort("retention.created_at", -1).limit(limit)
-    
+    cursor = (
+        db.videos.find(query, {"retention": 1, "video_id": 1, "channel_id": 1})
+        .sort("retention.created_at", -1)
+        .limit(limit)
+    )
+
     docs = await cursor.to_list(length=limit)
     results = []
     for d in docs:
@@ -70,7 +69,7 @@ async def get_retention_analysis(
     """Get the retention analysis for a specific video."""
     video = await db.videos.find_one(
         {"channel_id": channel_id, "video_id": video_id},
-        {"retention": 1, "video_id": 1, "channel_id": 1}
+        {"retention": 1, "video_id": 1, "channel_id": 1},
     )
     if not video or not video.get("retention"):
         raise HTTPException(
@@ -83,6 +82,7 @@ async def get_retention_analysis(
     doc["channel_id"] = video["channel_id"]
 
     from app.services.retention_analysis import compute_comparison
+
     doc["comparison"] = compute_comparison(doc)
 
     return doc
@@ -103,9 +103,7 @@ async def trigger_retention_analysis(
 
     The video must have an R2 file (``r2_object_key``).
     """
-    video = await db.videos.find_one(
-        {"channel_id": channel_id, "video_id": video_id}
-    )
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
     if not video:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -125,7 +123,8 @@ async def trigger_retention_analysis(
         )
 
     import asyncio
-    from app.main import r2_service, gemini_service  # type: ignore[import]
+
+    from app.main import gemini_service, r2_service  # type: ignore[import]
     from app.services.retention_analysis import run_retention_analysis
 
     if not r2_service or not gemini_service:
@@ -158,8 +157,7 @@ async def delete_retention_analysis(
 ):
     """Delete the retention analysis for a specific video."""
     result = await db.videos.update_one(
-        {"channel_id": channel_id, "video_id": video_id},
-        {"$unset": {"retention": ""}}
+        {"channel_id": channel_id, "video_id": video_id}, {"$unset": {"retention": ""}}
     )
     if result.modified_count == 0:
         raise HTTPException(
@@ -181,6 +179,7 @@ async def list_pacing_templates(
 ):
     """List all defined pacing templates for a channel."""
     from app.services.pacing_templates import PacingTemplateService
+
     service = PacingTemplateService(db)
     templates = await service.get_templates(channel_id)
     return [t.dict() for t in templates]
@@ -198,13 +197,10 @@ async def discover_pacing_templates(
 ):
     """Analyze top-performing videos to discover new pacing templates."""
     from app.services.pacing_templates import PacingTemplateService
+
     service = PacingTemplateService(db)
     templates = await service.discover_templates(channel_id)
-    return {
-        "ok": True,
-        "count": len(templates),
-        "templates": [t.dict() for t in templates]
-    }
+    return {"ok": True, "count": len(templates), "templates": [t.dict() for t in templates]}
 
 
 # ------------------------------------------------------------------

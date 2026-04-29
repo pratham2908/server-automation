@@ -18,18 +18,18 @@ DRY_RUN = "--fix" not in sys.argv
 
 
 async def main() -> None:
+
     from app.config import get_settings
-    from app.database import connect_db, close_db
-    from app.timezone import now_ist, UTC
-    from datetime import timedelta
+    from app.database import close_db, connect_db
+    from app.timezone import now_ist
 
     settings = get_settings()
     db = await connect_db(settings.MONGODB_URI, settings.MONGODB_DB_NAME, create_indexes=False)
 
     mode = "AUDIT ONLY (pass --fix to apply)" if DRY_RUN else "AUDIT + FIX"
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Database Audit — {mode}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     channels = await db.channels.find({}, {"channel_id": 1}).to_list(length=None)
     channel_ids = [c["channel_id"] for c in channels]
@@ -40,7 +40,13 @@ async def main() -> None:
     # ------------------------------------------------------------------
     print("--- 1. Duplicate analysis_history entries ---")
     pipeline = [
-        {"$group": {"_id": {"channel_id": "$channel_id", "video_id": "$video_id"}, "count": {"$sum": 1}, "ids": {"$push": "$_id"}}},
+        {
+            "$group": {
+                "_id": {"channel_id": "$channel_id", "video_id": "$video_id"},
+                "count": {"$sum": 1},
+                "ids": {"$push": "$_id"},
+            }
+        },
         {"$match": {"count": {"$gt": 1}}},
     ]
     duplicates = await db.analysis_history.aggregate(pipeline).to_list(length=None)
@@ -70,7 +76,9 @@ async def main() -> None:
         if not video or video.get("status") != "scheduled":
             orphaned_queue += 1
             actual = video.get("status", "NOT FOUND") if video else "VIDEO MISSING"
-            print(f"  Orphan: channel={entry['channel_id']} video={entry['video_id']} actual_status={actual}")
+            print(
+                f"  Orphan: channel={entry['channel_id']} video={entry['video_id']} actual_status={actual}"
+            )
             if not DRY_RUN:
                 await db.schedule_queue.delete_one({"_id": entry["_id"]})
     if orphaned_queue:
@@ -93,7 +101,9 @@ async def main() -> None:
         if not video or video.get("status") != "ready":
             orphaned_posting += 1
             actual = video.get("status", "NOT FOUND") if video else "VIDEO MISSING"
-            print(f"  Orphan: channel={entry['channel_id']} video={entry['video_id']} actual_status={actual}")
+            print(
+                f"  Orphan: channel={entry['channel_id']} video={entry['video_id']} actual_status={actual}"
+            )
             if not DRY_RUN:
                 await db.posting_queue.delete_one({"_id": entry["_id"]})
     if orphaned_posting:
@@ -121,23 +131,25 @@ async def main() -> None:
             old_meta_total = (cat.get("metadata") or {}).get("total_videos", 0)
 
             drifted = (
-                old_vc != new_vc
-                or old_meta_total != new_vc
-                or sorted(old_vids) != sorted(new_vids)
+                old_vc != new_vc or old_meta_total != new_vc or sorted(old_vids) != sorted(new_vids)
             )
             if drifted:
-                print(f"    DRIFT '{name}': video_count {old_vc}->{new_vc}, "
-                      f"metadata.total_videos {old_meta_total}->{new_vc}, "
-                      f"video_ids {len(old_vids)}->{len(new_vids)}")
+                print(
+                    f"    DRIFT '{name}': video_count {old_vc}->{new_vc}, "
+                    f"metadata.total_videos {old_meta_total}->{new_vc}, "
+                    f"video_ids {len(old_vids)}->{len(new_vids)}"
+                )
                 if not DRY_RUN:
                     await db.categories.update_one(
                         {"_id": cat["_id"]},
-                        {"$set": {
-                            "metadata": meta,
-                            "video_count": new_vc,
-                            "video_ids": new_vids,
-                            "updated_at": now_ist(),
-                        }},
+                        {
+                            "$set": {
+                                "metadata": meta,
+                                "video_count": new_vc,
+                                "video_ids": new_vids,
+                                "updated_at": now_ist(),
+                            }
+                        },
                     )
             else:
                 print(f"    OK '{name}': video_count={new_vc}, video_ids={len(new_vids)}")
@@ -195,9 +207,7 @@ async def main() -> None:
     # 7. Check for videos with status='published' but no published_at
     # ------------------------------------------------------------------
     print("\n--- 7. Published videos missing published_at ---")
-    missing_pub = await db.videos.count_documents(
-        {"status": "published", "published_at": None}
-    )
+    missing_pub = await db.videos.count_documents({"status": "published", "published_at": None})
     if missing_pub:
         print(f"  FOUND {missing_pub} published videos with no published_at.")
     else:
@@ -206,14 +216,21 @@ async def main() -> None:
     # ------------------------------------------------------------------
     # 8. Summary stats
     # ------------------------------------------------------------------
-    print(f"\n--- 8. Collection counts ---")
-    for coll_name in ["channels", "videos", "categories", "analysis", "analysis_history",
-                       "posting_queue", "schedule_queue"]:
+    print("\n--- 8. Collection counts ---")
+    for coll_name in [
+        "channels",
+        "videos",
+        "categories",
+        "analysis",
+        "analysis_history",
+        "posting_queue",
+        "schedule_queue",
+    ]:
         count = await db[coll_name].count_documents({})
         print(f"  {coll_name}: {count}")
 
     # Video status breakdown
-    print(f"\n--- Video status breakdown ---")
+    print("\n--- Video status breakdown ---")
     for ch_id in channel_ids:
         pipeline = [
             {"$match": {"channel_id": ch_id}},
@@ -225,13 +242,13 @@ async def main() -> None:
         print(f"  {ch_id}: {counts}")
 
     await close_db()
-    print(f"\n{'='*60}")
-    print(f"  Audit complete.")
+    print(f"\n{'=' * 60}")
+    print("  Audit complete.")
     if DRY_RUN:
-        print(f"  Re-run with --fix to apply changes.")
+        print("  Re-run with --fix to apply changes.")
     else:
-        print(f"  All fixes applied.")
-    print(f"{'='*60}\n")
+        print("  All fixes applied.")
+    print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":

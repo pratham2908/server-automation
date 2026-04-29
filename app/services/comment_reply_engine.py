@@ -6,15 +6,15 @@ Entry-point: ``run_comment_reply_cycle(channel_id, ...)``
 """
 
 import random
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
 from app.services.gemini import GeminiService
-from app.services.youtube import YouTubeService
 from app.services.instagram import InstagramService
+from app.services.youtube import YouTubeService
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -91,11 +91,18 @@ async def run_comment_reply_cycle(
         return stats
 
     cutoff = now_ist() - timedelta(days=recency_days)
-    videos = await db.videos.find({
-        "channel_id": channel_id,
-        "status": "published",
-        "published_at": {"$gte": cutoff},
-    }).sort("published_at", -1).limit(max_videos).to_list(length=max_videos)
+    videos = (
+        await db.videos.find(
+            {
+                "channel_id": channel_id,
+                "status": "published",
+                "published_at": {"$gte": cutoff},
+            }
+        )
+        .sort("published_at", -1)
+        .limit(max_videos)
+        .to_list(length=max_videos)
+    )
 
     logger.info("Found %d videos for comment-reply cycle on channel '%s'", len(videos), channel_id)
 
@@ -110,7 +117,8 @@ async def run_comment_reply_cycle(
 
         stats["videos_processed"] += 1
         platform_vid_id = (
-            video.get("youtube_video_id") if platform == "youtube"
+            video.get("youtube_video_id")
+            if platform == "youtube"
             else video.get("instagram_media_id")
         )
         if not platform_vid_id:
@@ -155,7 +163,9 @@ async def run_comment_reply_cycle(
             ).to_list(length=None)
             already_replied = {d["comment_id"] for d in existing}
 
-        candidates = [c for c in filtered if c.get("comment_id") and c["comment_id"] not in already_replied]
+        candidates = [
+            c for c in filtered if c.get("comment_id") and c["comment_id"] not in already_replied
+        ]
         if not candidates:
             continue
 
@@ -164,7 +174,7 @@ async def run_comment_reply_cycle(
         sentiment_counts = {"positive": 0, "negative": 0, "neutral": 0, "spam": 0}
 
         for i in range(0, len(candidates), _SENTIMENT_BATCH_SIZE):
-            batch = candidates[i:i + _SENTIMENT_BATCH_SIZE]
+            batch = candidates[i : i + _SENTIMENT_BATCH_SIZE]
             try:
                 results = await gemini_service.classify_comment_sentiment(batch)
             except Exception as exc:
@@ -172,7 +182,9 @@ async def run_comment_reply_cycle(
                 stats["errors"] += 1
                 continue
 
-            sentiment_map = {r["comment_id"]: r.get("sentiment", "") for r in results if isinstance(r, dict)}
+            sentiment_map = {
+                r["comment_id"]: r.get("sentiment", "") for r in results if isinstance(r, dict)
+            }
             for c in batch:
                 sent = sentiment_map.get(c["comment_id"], "neutral")
                 sentiment_counts[sent] = sentiment_counts.get(sent, 0) + 1
@@ -180,21 +192,27 @@ async def run_comment_reply_cycle(
                     positive_comments.append(c)
                 else:
                     # Mark as skipped in DB to avoid re-analysis
-                    status_val = f"skipped_{sent}" if sent in ("negative", "neutral", "spam") else "skipped_other"
-                    await db.comment_replies.insert_one({
-                        "channel_id": channel_id,
-                        "video_id": video.get("video_id", ""),
-                        "video_title": video.get("title", ""),
-                        "video_url": c.get("video_url", ""),
-                        "platform": platform,
-                        "comment_id": c["comment_id"],
-                        "comment_text": c.get("text", ""),
-                        "comment_author": c.get("author", ""),
-                        "comment_url": c.get("comment_url", ""),
-                        "sentiment": sent,
-                        "status": status_val,
-                        "replied_at": now_ist(), # processed_at
-                    })
+                    status_val = (
+                        f"skipped_{sent}"
+                        if sent in ("negative", "neutral", "spam")
+                        else "skipped_other"
+                    )
+                    await db.comment_replies.insert_one(
+                        {
+                            "channel_id": channel_id,
+                            "video_id": video.get("video_id", ""),
+                            "video_title": video.get("title", ""),
+                            "video_url": c.get("video_url", ""),
+                            "platform": platform,
+                            "comment_id": c["comment_id"],
+                            "comment_text": c.get("text", ""),
+                            "comment_author": c.get("author", ""),
+                            "comment_url": c.get("comment_url", ""),
+                            "sentiment": sent,
+                            "status": status_val,
+                            "replied_at": now_ist(),  # processed_at
+                        }
+                    )
 
         logger.info(
             "Video '%s': %d total comments, %d positive, %d negative, %d neutral, %d spam",
@@ -203,7 +221,7 @@ async def run_comment_reply_cycle(
             sentiment_counts["positive"],
             sentiment_counts["negative"],
             sentiment_counts["neutral"],
-            sentiment_counts["spam"]
+            sentiment_counts["spam"],
         )
 
         # Reply to positive comments
@@ -217,7 +235,7 @@ async def run_comment_reply_cycle(
                 reply_text = await gemini_service.generate_comment_reply(
                     comment_text=c.get("text", ""),
                     video_title=video.get("title", ""),
-                    platform=platform
+                    platform=platform,
                 )
             except Exception as exc:
                 logger.warning("AI reply generation failed, falling back to template: %s", exc)
@@ -237,22 +255,24 @@ async def run_comment_reply_cycle(
                 stats["errors"] += 1
                 continue
 
-            await db.comment_replies.insert_one({
-                "channel_id": channel_id,
-                "video_id": video.get("video_id", ""),
-                "video_title": video.get("title", ""),
-                "video_url": c.get("video_url", ""),
-                "platform": platform,
-                "comment_id": c["comment_id"],
-                "comment_text": c.get("text", ""),
-                "comment_author": c.get("author", ""),
-                "comment_url": c.get("comment_url", ""),
-                "sentiment": "positive",
-                "status": "replied",
-                "reply_text": reply_text,
-                "reply_id": reply_id,
-                "replied_at": now_ist(),
-            })
+            await db.comment_replies.insert_one(
+                {
+                    "channel_id": channel_id,
+                    "video_id": video.get("video_id", ""),
+                    "video_title": video.get("title", ""),
+                    "video_url": c.get("video_url", ""),
+                    "platform": platform,
+                    "comment_id": c["comment_id"],
+                    "comment_text": c.get("text", ""),
+                    "comment_author": c.get("author", ""),
+                    "comment_url": c.get("comment_url", ""),
+                    "sentiment": "positive",
+                    "status": "replied",
+                    "reply_text": reply_text,
+                    "reply_id": reply_id,
+                    "replied_at": now_ist(),
+                }
+            )
             total_replies += 1
             stats["replied"] += 1
 
@@ -260,6 +280,9 @@ async def run_comment_reply_cycle(
 
     logger.info(
         "Comment reply cycle for '%s': %d replies, %d skipped, %d errors",
-        channel_id, stats["replied"], stats["skipped"], stats["errors"],
+        channel_id,
+        stats["replied"],
+        stats["skipped"],
+        stats["errors"],
     )
     return stats

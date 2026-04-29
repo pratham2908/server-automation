@@ -1,10 +1,13 @@
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
 import asyncio
-from app.logger import get_logs
 import os
 
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse, StreamingResponse
+
+from app.logger import get_logs
+
 router = APIRouter(tags=["ui"])
+
 
 @router.get("/logs", response_class=HTMLResponse)
 async def get_log_viewer():
@@ -739,12 +742,14 @@ async def get_log_viewer():
     """
     return HTMLResponse(content=html_content)
 
+
 @router.get("/api/v1/logs/stream")
 async def stream_logs():
     """Streams journalctl logs in real-time using Server-Sent Events."""
+
     async def log_generator():
         # Fallback to internal logs if not posix
-        if os.name != 'posix':
+        if os.name != "posix":
             yield "data: [Internal Log Fallback (Non-Linux OS)]\n\n"
             for log in get_logs():
                 yield f"data: {log}\n\n"
@@ -753,41 +758,54 @@ async def stream_logs():
         try:
             # Absolute path to journalctl
             process = await asyncio.create_subprocess_exec(
-                "/usr/bin/journalctl", "-u", "automation-server", "-f", "-n", "50",
+                "/usr/bin/journalctl",
+                "-u",
+                "automation-server",
+                "-f",
+                "-n",
+                "50",
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
             )
-            
+
             while True:
-                line = await process.stdout.readline()
+                if process.stdout:
+                    line = await process.stdout.readline()
+                else:
+                    line = b""
+
                 if not line:
                     if process.returncode is not None:
-                        error = await process.stderr.read()
-                        err_msg = error.decode().strip()
+                        err_msg = ""
+                        if process.stderr:
+                            error = await process.stderr.read()
+                            err_msg = error.decode().strip()
                         yield f"data: [Stream Disconnected (Code {process.returncode}): {err_msg}]\n\n"
                         break
+
                     # Keep-alive in case of silence
                     await asyncio.sleep(0.5)
                     continue
-                
+
                 clean_line = line.decode().strip()
                 if clean_line:
                     yield f"data: {clean_line}\n\n"
-                
+
         except Exception as e:
             yield f"data: [Error: {str(e)}]\n\n"
             for log in get_logs():
                 yield f"data: {log}\n\n"
 
     return StreamingResponse(
-        log_generator(), 
+        log_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+            "X-Accel-Buffering": "no",
+        },
     )
+
 
 @router.get("/api/v1/logs")
 async def get_logs_api():

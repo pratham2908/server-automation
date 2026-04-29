@@ -3,11 +3,11 @@
 from typing import Any, Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
-from app.database import get_db, get_channel_platform
+from app.database import get_channel_platform, get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.timezone import now_ist
@@ -34,8 +34,12 @@ config_router = APIRouter(
 
 
 class CommentAnalysisConfigUpdate(BaseModel):
-    analysis_hour: int = Field(..., ge=0, le=23, description="Hour of day (0-23) in IST when the cron runs")
-    enabled: Optional[bool] = Field(None, description="Whether the automated daily analysis is enabled")
+    analysis_hour: int = Field(
+        ..., ge=0, le=23, description="Hour of day (0-23) in IST when the cron runs"
+    )
+    enabled: Optional[bool] = Field(
+        None, description="Whether the automated daily analysis is enabled"
+    )
 
 
 @config_router.get("/")
@@ -119,7 +123,11 @@ async def trigger_comment_analysis(
 
     platform = get_channel_platform(channel)
 
-    from app.main import youtube_service_manager, instagram_service_manager, gemini_service  # type: ignore[import]
+    from app.main import (  # type: ignore[import]
+        gemini_service,
+        instagram_service_manager,
+        youtube_service_manager,
+    )
 
     if gemini_service is None:
         raise HTTPException(
@@ -148,7 +156,9 @@ async def trigger_comment_analysis(
 async def get_comment_analysis_history(
     channel_id: str,
     source: Optional[str] = Query(None, description="Filter by 'own' or 'competitor'"),
-    competitor_channel_id: Optional[str] = Query(None, description="Filter by specific competitor ID"),
+    competitor_channel_id: Optional[str] = Query(
+        None, description="Filter by specific competitor ID"
+    ),
     platform: Optional[str] = Query(None, description="Filter by 'youtube' or 'instagram'"),
     limit: Optional[int] = Query(None, description="Max results"),
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -181,16 +191,16 @@ async def get_comment_analysis_history(
 async def aggregate_comment_insights(
     channel_id: str,
     source: Optional[str] = Query(None, description="Filter by 'own' or 'competitor'"),
-    competitor_channel_id: Optional[str] = Query(None, description="Filter by specific competitor ID"),
+    competitor_channel_id: Optional[str] = Query(
+        None, description="Filter by specific competitor ID"
+    ),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Aggregate all comment analyses into a channel-level intelligence report."""
     from app.services.comment_analysis_engine import aggregate_comment_analyses
 
     return await aggregate_comment_analyses(
-        db, channel_id, 
-        source_filter=source, 
-        competitor_channel_id=competitor_channel_id
+        db, channel_id, source_filter=source, competitor_channel_id=competitor_channel_id
     )
 
 
@@ -270,7 +280,8 @@ async def delete_all_comment_analyses(
 
     logger.info(
         "Deleted %d comment analyses for channel '%s'",
-        result.deleted_count, channel_id,
+        result.deleted_count,
+        channel_id,
     )
 
     return {
@@ -278,5 +289,3 @@ async def delete_all_comment_analyses(
         "channel_id": channel_id,
         "deleted_count": result.deleted_count,
     }
-
-

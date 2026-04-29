@@ -6,7 +6,6 @@ Uses the ``google-genai`` SDK to interact with the Gemini API.
 """
 
 import json
-import logging
 from typing import Any
 
 from google import genai
@@ -28,17 +27,13 @@ class GeminiService:
         "gemini-2.5-flash",
     ]
 
-    def __init__(
-        self, 
-        project: str, 
-        location: str = "us-central1"
-    ) -> None:
-        logger.info("Initializing Gemini with Vertex AI routing (Project: %s, Location: %s)", project, location)
-        self._client = genai.Client(
-            vertexai=True,
-            project=project,
-            location=location
+    def __init__(self, project: str, location: str = "us-central1") -> None:
+        logger.info(
+            "Initializing Gemini with Vertex AI routing (Project: %s, Location: %s)",
+            project,
+            location,
         )
+        self._client = genai.Client(vertexai=True, project=project, location=location)
 
     # ------------------------------------------------------------------
     # Internal — model fallback
@@ -47,9 +42,10 @@ class GeminiService:
     async def _generate(self, prompt: str, specific_model: str | None = None) -> str:
         """Try each model in the fallback chain until one succeeds."""
         import asyncio
-        from app.services.metrics import metrics_service
         import time
-        
+
+        from app.services.metrics import metrics_service
+
         last_error: Exception | None = None
         models_to_try = [specific_model] if specific_model else self._MODEL_CHAIN
 
@@ -69,7 +65,12 @@ class GeminiService:
                 )
                 duration = (time.time() - start_time) * 1000
                 metrics_service.record_ai_call(model, duration, "success")
-                logger.info("Gemini response from model '%s' (%.2fms)", model, duration, extra={"color": "CYAN"})
+                logger.info(
+                    "Gemini response from model '%s' (%.2fms)",
+                    model,
+                    duration,
+                    extra={"color": "CYAN"},
+                )
                 return response.text
             except Exception as exc:
                 duration = (time.time() - start_time) * 1000
@@ -81,7 +82,9 @@ class GeminiService:
                 else:
                     logger.warning(
                         "⚠️ Model '%s' failed (%.2fms): %s — trying next fallback",
-                        model, duration, exc,
+                        model,
+                        duration,
+                        exc,
                     )
 
         raise last_error  # type: ignore[misc]
@@ -117,7 +120,9 @@ class GeminiService:
             (best_posting_times, category_analysis, content_param_analysis, best_combinations).
         """
         logger.info("Starting Gemini analysis for %d videos", len(video_data))
-        prompt = self._build_analysis_prompt(video_data, previous_analysis, content_schema, platform)
+        prompt = self._build_analysis_prompt(
+            video_data, previous_analysis, content_schema, platform
+        )
         text = await self._generate(prompt)
 
         try:
@@ -159,12 +164,12 @@ class GeminiService:
         platform: str = "youtube",
     ) -> list[dict[str, Any]]:
         """Cluster a list of video titles into distinct, proven concepts.
-        
+
         Parameters
         ----------
         videos:
             List of dicts with ``video_id``, ``title``, and ``views``.
-            
+
         Returns
         -------
         list[dict]
@@ -231,9 +236,16 @@ class GeminiService:
             channel_id,
         )
         prompt = self._build_content_prompt(
-            channel_id, category, category_analysis, count, existing_titles,
-            content_schema, content_param_analysis, best_combinations,
-            existing_content_params, platform,
+            channel_id,
+            category,
+            category_analysis,
+            count,
+            existing_titles,
+            content_schema,
+            content_param_analysis,
+            best_combinations,
+            existing_content_params,
+            platform,
         )
         text = await self._generate(prompt)
 
@@ -244,9 +256,7 @@ class GeminiService:
             # Fallback if Gemini returned a single object instead of a list
             return [result]
         except (json.JSONDecodeError, TypeError):
-            logger.error(
-                "🚨 Failed to parse JSON from Gemini content response: %s", text
-            )
+            logger.error("🚨 Failed to parse JSON from Gemini content response: %s", text)
             raise ValueError("Failed to parse Gemini content response")
 
     # ------------------------------------------------------------------
@@ -372,12 +382,11 @@ Guidelines:
         platform: str = "youtube",
     ) -> str:
         """Build the prompt for strict semantic clustering of video titles."""
-        
-        video_list_str = "\n".join([
-            f"{i}: {v['title']} ({v.get('views', 0)} views)"
-            for i, v in enumerate(videos)
-        ])
-        
+
+        video_list_str = "\n".join(
+            [f"{i}: {v['title']} ({v.get('views', 0)} views)" for i, v in enumerate(videos)]
+        )
+
         return f"""You are an expert content strategist specializing in niche trend analysis. Your goal is to identify **Proven Content Concepts** by clustering similar videos into distinct topic groups.
 
 ## ULTRA-GRANULAR CLUSTERING RULES
@@ -535,9 +544,9 @@ Guidelines:
                     continue
                 param_name = schema_entry["name"]
                 unique_param_names.append(param_name)
-                used_values = sorted({
-                    p[param_name] for p in existing_content_params if p.get(param_name)
-                })
+                used_values = sorted(
+                    {p[param_name] for p in existing_content_params if p.get(param_name)}
+                )
                 if used_values:
                     existing_section += (
                         f"\n\n## Already-Used `{param_name}` Values — DO NOT REPEAT\n"
@@ -629,11 +638,14 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
     async def _generate_with_video(self, video_path: str, prompt: str) -> str:
         """Upload a video file to Gemini, wait for processing, then generate."""
         import asyncio
-        from app.services.metrics import metrics_service
         import time
 
+        from app.services.metrics import metrics_service
+
         uploaded_file = await self._client.aio.files.upload(file=video_path)
-        logger.info("Uploaded video to Gemini (name=%s, state=%s)", uploaded_file.name, uploaded_file.state)
+        logger.info(
+            "Uploaded video to Gemini (name=%s, state=%s)", uploaded_file.name, uploaded_file.state
+        )
 
         try:
             # Poll until the file is ACTIVE (processing complete)
@@ -666,7 +678,12 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                     )
                     duration = (time.time() - start_time) * 1000
                     metrics_service.record_ai_call(model, duration, "success")
-                    logger.info("Gemini video analysis response from model '%s' (%.2fms)", model, duration, extra={"color": "CYAN"})
+                    logger.info(
+                        "Gemini video analysis response from model '%s' (%.2fms)",
+                        model,
+                        duration,
+                        extra={"color": "CYAN"},
+                    )
                     return response.text
                 except Exception as exc:
                     duration = (time.time() - start_time) * 1000
@@ -676,7 +693,12 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                     if is_last:
                         logger.error("All Gemini models failed for video analysis: %s", exc)
                     else:
-                        logger.warning("Model '%s' failed for video analysis (%.2fms): %s — trying next", model, duration, exc)
+                        logger.warning(
+                            "Model '%s' failed for video analysis (%.2fms): %s — trying next",
+                            model,
+                            duration,
+                            exc,
+                        )
 
             raise last_error  # type: ignore[misc]
         finally:
@@ -721,7 +743,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 
     @staticmethod
     def _build_retention_analysis_prompt(
-        video_title: str, 
+        video_title: str,
         platform: str = "youtube",
         pacing_templates: list[dict[str, Any]] | None = None,
     ) -> str:
@@ -943,12 +965,17 @@ Return a JSON object:
         """
         if previous_analysis:
             prompt = self._build_incremental_comment_analysis_prompt(
-                comments, previous_analysis, video_title, platform,
+                comments,
+                previous_analysis,
+                video_title,
+                platform,
                 total_previous_comments,
             )
         else:
             prompt = self._build_comment_analysis_prompt(
-                comments, video_title, platform,
+                comments,
+                video_title,
+                platform,
             )
 
         text = await self._generate(prompt)
@@ -1118,6 +1145,7 @@ Return a JSON object with exactly these keys:
         import asyncio
         import mimetypes
         import time
+
         from app.services.metrics import metrics_service
 
         with open(image_path, "rb") as f:
@@ -1143,7 +1171,12 @@ Return a JSON object with exactly these keys:
                 )
                 duration = (time.time() - start_time) * 1000
                 metrics_service.record_ai_call(model, duration, "success")
-                logger.info("Gemini thumbnail analysis from '%s' (%.2fms)", model, duration, extra={"color": "CYAN"})
+                logger.info(
+                    "Gemini thumbnail analysis from '%s' (%.2fms)",
+                    model,
+                    duration,
+                    extra={"color": "CYAN"},
+                )
 
                 return json.loads(response.text)
             except Exception as exc:
@@ -1154,7 +1187,12 @@ Return a JSON object with exactly these keys:
                 if is_last:
                     logger.error("All Gemini models failed for thumbnail analysis: %s", exc)
                 else:
-                    logger.warning("Model '%s' failed for thumbnail analysis (%.2fms): %s — trying next", model, duration, exc)
+                    logger.warning(
+                        "Model '%s' failed for thumbnail analysis (%.2fms): %s — trying next",
+                        model,
+                        duration,
+                        exc,
+                    )
 
         raise last_error  # type: ignore[misc]
 

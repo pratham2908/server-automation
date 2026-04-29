@@ -2,10 +2,11 @@
 
 from datetime import datetime
 from typing import Any, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db, get_channel_platform
+from app.database import get_channel_platform, get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.timezone import IST, UTC
@@ -21,9 +22,11 @@ router = APIRouter(
 
 async def _get_services(channel_id: str):
     """Lazy import to avoid circular dependency."""
-    from app.main import youtube_service_manager, gemini_service  # type: ignore[import]
+    from app.main import gemini_service, youtube_service_manager  # type: ignore[import]
 
-    youtube_service = await youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
+    youtube_service = (
+        await youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
+    )
     return youtube_service, gemini_service
 
 
@@ -78,7 +81,10 @@ async def run_analysis_update(
         )
 
     result = await run_analysis(
-        channel_id, db, youtube_service, gemini_service,
+        channel_id,
+        db,
+        youtube_service,
+        gemini_service,
         instagram_service=instagram_service,
         platform=platform,
     )
@@ -98,6 +104,7 @@ async def get_latest_analysis(
     """Return the latest channel summary for *channel_id*,
     plus counts of videos ready / not yet ready for analysis."""
     from datetime import timedelta
+
     from app.timezone import now_ist
 
     # 1. Fetch analysis doc (if any)
@@ -169,9 +176,9 @@ async def delete_analysis(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Delete all analysis data for *channel_id* and reset derived scores.
-    
-    Removes the channel summary (``analysis``), resets every category's 
-    score / video_count / video_ids / metadata, and zeros out 
+
+    Removes the channel summary (``analysis``), resets every category's
+    score / video_count / video_ids / metadata, and zeros out
     content-param value scores. It also unsets the ``performance`` field
     in all videos for this channel.
     The next ``POST /update`` will re-analyse everything from scratch.
@@ -183,8 +190,7 @@ async def delete_analysis(
 
     # 2. Unset performance sub-docs in all videos
     v_result = await db.videos.update_many(
-        {"channel_id": channel_id},
-        {"$unset": {"performance": ""}}
+        {"channel_id": channel_id}, {"$unset": {"performance": ""}}
     )
 
     # 3. Reset categories: score, video_count, video_ids, metadata
@@ -207,10 +213,7 @@ async def delete_analysis(
     ).to_list(length=None)
 
     for pdoc in param_docs:
-        zeroed = [
-            {"value": v["value"], "score": 0, "video_count": 0}
-            for v in pdoc["values"]
-        ]
+        zeroed = [{"value": v["value"], "score": 0, "video_count": 0} for v in pdoc["values"]]
         await db.content_params.update_one(
             {"_id": pdoc["_id"]},
             {"$set": {"values": zeroed, "updated_at": now_ist()}},
@@ -266,12 +269,23 @@ def _parse_datetime_ist(value: str) -> datetime:
 # GET /history  –  per-video analyses
 # ------------------------------------------------------------------
 
+
 @router.get("/history")
 async def get_analysis_history(
     channel_id: str,
-    from_date: Optional[str] = Query(None, alias="from", description="Filter published_at >= this (IST). e.g. 2026-02-08 or 2026-02-08T20:00:00"),
-    to_date: Optional[str] = Query(None, alias="to", description="Filter published_at <= this (IST). e.g. 2026-02-08 or 2026-02-08T23:59:59"),
-    limit: Optional[int] = Query(None, description="Max results; if omitted, returns entire history"),
+    from_date: Optional[str] = Query(
+        None,
+        alias="from",
+        description="Filter published_at >= this (IST). e.g. 2026-02-08 or 2026-02-08T20:00:00",
+    ),
+    to_date: Optional[str] = Query(
+        None,
+        alias="to",
+        description="Filter published_at <= this (IST). e.g. 2026-02-08 or 2026-02-08T23:59:59",
+    ),
+    limit: Optional[int] = Query(
+        None, description="Max results; if omitted, returns entire history"
+    ),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Return per-video analyses for *channel_id*.
@@ -303,12 +317,11 @@ async def get_analysis_history(
         query["performance.published_at"] = date_filter
 
     cursor = db.videos.find(
-        {**query, "performance": {"$ne": None}},
-        {"performance": 1, "video_id": 1, "channel_id": 1}
+        {**query, "performance": {"$ne": None}}, {"performance": 1, "video_id": 1, "channel_id": 1}
     ).sort("performance.published_at", -1)
     if limit is not None:
         cursor = cursor.limit(limit)
-    
+
     docs = await cursor.to_list(length=limit if limit is not None else None)
     results = []
     for doc in docs:
@@ -324,6 +337,7 @@ async def get_analysis_history(
 # GET /history/{video_id}  –  single video analysis
 # ------------------------------------------------------------------
 
+
 @router.get("/history/{video_id}")
 async def get_video_analysis(
     channel_id: str,
@@ -333,7 +347,7 @@ async def get_video_analysis(
     """Return the per-video analysis for a specific video."""
     video = await db.videos.find_one(
         {"channel_id": channel_id, "video_id": video_id},
-        {"performance": 1, "video_id": 1, "channel_id": 1}
+        {"performance": 1, "video_id": 1, "channel_id": 1},
     )
     if not video or not video.get("performance"):
         raise HTTPException(
@@ -350,6 +364,7 @@ async def get_video_analysis(
 # GET /compare  –  time-period comparison
 # ------------------------------------------------------------------
 
+
 @router.get("/compare")
 async def compare_periods(
     channel_id: str,
@@ -360,9 +375,9 @@ async def compare_periods(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Compare channel performance across two time periods.
-    
-    Aggregates per-video analyses from the unified ``videos`` collection 
-    (under the ``performance`` field) filtered by ``analyzed_at`` for 
+
+    Aggregates per-video analyses from the unified ``videos`` collection
+    (under the ``performance`` field) filtered by ``analyzed_at`` for
     each period, returning side-by-side averages.
     """
 
@@ -372,7 +387,7 @@ async def compare_periods(
                 "channel_id": channel_id,
                 "performance.analyzed_at": {"$gte": start, "$lte": end},
             },
-            {"performance": 1}
+            {"performance": 1},
         )
         docs = await cursor.to_list(length=None)
 
@@ -399,10 +414,16 @@ async def compare_periods(
             return round(sum(vals) / total, 2) if total else 0
 
         total_subs = sum(
-            d.get("performance", {}).get("stats_snapshot", {}).get("subscribers_gained", 0) for d in docs
+            d.get("performance", {}).get("stats_snapshot", {}).get("subscribers_gained", 0)
+            for d in docs
         )
         avg_rating = round(
-            sum(d.get("performance", {}).get("ai_insight", {}).get("performance_rating", 0) for d in docs) / total, 1
+            sum(
+                d.get("performance", {}).get("ai_insight", {}).get("performance_rating", 0)
+                for d in docs
+            )
+            / total,
+            1,
         )
 
         return {

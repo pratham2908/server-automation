@@ -1,30 +1,33 @@
 from __future__ import annotations
 
-import uuid
-import traceback
 import logging
+import traceback
+import uuid
 from typing import Any, Dict, Optional
+
 from motor.motor_asyncio import AsyncIOMotorDatabase
+
 from app.timezone import now_ist
 
 logger = logging.getLogger(__name__)
 
+
 class ErrorService:
     """Service to handle logging errors to the database."""
-    
+
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
 
     async def log_error(
-        self, 
-        feature: str, 
-        message: str, 
+        self,
+        feature: str,
+        message: str,
         exception: Optional[Exception] = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
     ):
         """
         Log an error to the database.
-        
+
         Args:
             feature: The name of the feature where the error occurred.
             message: A human-readable error message.
@@ -34,8 +37,10 @@ class ErrorService:
         try:
             stack_trace = None
             if exception:
-                stack_trace = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
-            
+                stack_trace = "".join(
+                    traceback.format_exception(type(exception), exception, exception.__traceback__)
+                )
+
             error_doc = {
                 "_id": str(uuid.uuid4()),
                 "feature": feature,
@@ -43,9 +48,9 @@ class ErrorService:
                 "stack_trace": stack_trace,
                 "context": context or {},
                 "timestamp": now_ist(),
-                "resolved": False
+                "resolved": False,
             }
-            
+
             await self.db.errors.insert_one(error_doc)
             logger.info(f"Logged error for feature '{feature}': {message}")
         except Exception as e:
@@ -53,8 +58,10 @@ class ErrorService:
             logger.error(f"Failed to log error to DB: {e}")
             logger.error(f"Original error ({feature}): {message}")
 
+
 # Singleton-like access if needed, though usually injected via FastAPI dependencies
 _error_service: Optional[ErrorService] = None
+
 
 def get_error_service(db: AsyncIOMotorDatabase) -> ErrorService:
     global _error_service

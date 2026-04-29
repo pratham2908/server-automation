@@ -10,7 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_db, get_channel_platform
+from app.database import get_channel_platform, get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.timezone import now_ist
@@ -72,7 +72,9 @@ async def create_thumbnail_analysis(
 
     suffix = _get_image_suffix(file.filename)
     tmp = tempfile.NamedTemporaryFile(
-        delete=False, suffix=suffix, prefix=f"thumb_{analysis_id}_",
+        delete=False,
+        suffix=suffix,
+        prefix=f"thumb_{analysis_id}_",
     )
     try:
         contents = await file.read()
@@ -110,7 +112,12 @@ async def create_thumbnail_analysis(
 
     asyncio.create_task(
         run_thumbnail_analysis(
-            analysis_id, tmp_path, title, platform, db, main_mod.gemini_service,
+            analysis_id,
+            tmp_path,
+            title,
+            platform,
+            db,
+            main_mod.gemini_service,
         )
     )
 
@@ -166,7 +173,7 @@ async def create_video_thumbnail_analysis(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Video-linked thumbnail fetch is only supported for YouTube. "
-                   "For Instagram, upload the thumbnail image manually via POST /thumbnail-analysis/",
+            "For Instagram, upload the thumbnail image manually via POST /thumbnail-analysis/",
         )
 
     async with httpx.AsyncClient(timeout=30) as client:
@@ -186,7 +193,9 @@ async def create_video_thumbnail_analysis(
     title = video.get("title", "Untitled")
 
     tmp = tempfile.NamedTemporaryFile(
-        delete=False, suffix=".jpg", prefix=f"thumb_{analysis_id}_",
+        delete=False,
+        suffix=".jpg",
+        prefix=f"thumb_{analysis_id}_",
     )
     try:
         tmp.write(image_bytes)
@@ -223,7 +232,12 @@ async def create_video_thumbnail_analysis(
 
     asyncio.create_task(
         run_thumbnail_analysis(
-            analysis_id, tmp_path, title, platform, db, main_mod.gemini_service,
+            analysis_id,
+            tmp_path,
+            title,
+            platform,
+            db,
+            main_mod.gemini_service,
         )
     )
 
@@ -270,6 +284,7 @@ async def get_thumbnail_analysis(
         prev_doc = await db.thumbnail_analysis.find_one({"analysis_id": prev_id})
         if prev_doc:
             from app.services.thumbnail_analysis import compute_thumbnail_comparison
+
             version_comparison = compute_thumbnail_comparison(doc, prev_doc)
 
     doc["version_comparison"] = version_comparison
@@ -288,9 +303,12 @@ async def list_thumbnail_analyses(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """List all active (not yet expired) thumbnail analyses for a channel."""
-    docs = await db.thumbnail_analysis.find(
-        {"channel_id": channel_id}
-    ).sort("created_at", -1).limit(limit).to_list(length=limit)
+    docs = (
+        await db.thumbnail_analysis.find({"channel_id": channel_id})
+        .sort("created_at", -1)
+        .limit(limit)
+        .to_list(length=limit)
+    )
 
     for d in docs:
         d.pop("_id", None)

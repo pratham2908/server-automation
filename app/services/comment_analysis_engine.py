@@ -9,15 +9,15 @@ Two entry-points:
                                (own videos + all competitors).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
 from app.services.gemini import GeminiService
-from app.services.youtube import YouTubeService
 from app.services.instagram import InstagramService
+from app.services.youtube import YouTubeService
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -30,10 +30,7 @@ _MIN_COMMENT_WORDS = 3
 
 def _filter_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Remove very short or empty comments that carry little signal."""
-    return [
-        c for c in comments
-        if len(c.get("text", "").split()) >= _MIN_COMMENT_WORDS
-    ]
+    return [c for c in comments if len(c.get("text", "").split()) >= _MIN_COMMENT_WORDS]
 
 
 def _newest_timestamp(comments: list[dict[str, Any]]) -> str | None:
@@ -83,10 +80,12 @@ async def run_comment_analysis(
     there was nothing to analyse.
     """
 
-    existing = await db.comment_analysis.find_one({
-        "channel_id": channel_id,
-        "platform_video_id": platform_video_id,
-    })
+    existing = await db.comment_analysis.find_one(
+        {
+            "channel_id": channel_id,
+            "platform_video_id": platform_video_id,
+        }
+    )
 
     is_incremental = existing is not None
     previous_analysis: dict[str, Any] | None = None
@@ -107,16 +106,20 @@ async def run_comment_analysis(
     if platform == "youtube" and youtube_service:
         if is_incremental and cutoff_timestamp:
             raw_comments = youtube_service.get_video_comments_since(
-                platform_video_id, cutoff_timestamp, max_comments=_MAX_COMMENTS_PER_VIDEO,
+                platform_video_id,
+                cutoff_timestamp,
+                max_comments=_MAX_COMMENTS_PER_VIDEO,
             )
         else:
             raw_comments = youtube_service.get_video_comments(
-                platform_video_id, max_comments=_MAX_COMMENTS_PER_VIDEO,
+                platform_video_id,
+                max_comments=_MAX_COMMENTS_PER_VIDEO,
             )
     elif platform == "instagram" and instagram_service:
         if is_incremental and cutoff_timestamp:
             raw_comments = instagram_service.get_media_comments_since(
-                platform_video_id, cutoff_timestamp,
+                platform_video_id,
+                cutoff_timestamp,
             )
         else:
             raw_comments = instagram_service.get_media_comments(platform_video_id)
@@ -125,7 +128,12 @@ async def run_comment_analysis(
         if existing and current_comment_count != existing.get("last_known_comment_count"):
             await db.comment_analysis.update_one(
                 {"_id": existing["_id"]},
-                {"$set": {"last_known_comment_count": current_comment_count, "updated_at": now_ist()}},
+                {
+                    "$set": {
+                        "last_known_comment_count": current_comment_count,
+                        "updated_at": now_ist(),
+                    }
+                },
             )
         return None
 
@@ -140,7 +148,7 @@ async def run_comment_analysis(
     batch_prev_count = total_previous_comments
 
     for i in range(0, len(filtered), _BATCH_SIZE):
-        batch = filtered[i: i + _BATCH_SIZE]
+        batch = filtered[i : i + _BATCH_SIZE]
         analysis_result = await gemini_service.analyze_comments(
             batch,
             video_title,
@@ -169,24 +177,29 @@ async def run_comment_analysis(
 
         await db.comment_analysis.update_one(
             {"_id": existing["_id"]},
-            {"$set": {
-                "total_comments_fetched": new_fetched,
-                "total_comments_analyzed": new_analyzed,
-                "last_known_comment_count": current_comment_count,
-                "comments_analyzed_upto": newest_ts,
-                "analysis": analysis_result,
-                "analyzed_at": now,
-                "version": new_version,
-                "updated_at": now,
-                "video_title": video_title,
-                "video_published_at": video_published_at,
-            }},
+            {
+                "$set": {
+                    "total_comments_fetched": new_fetched,
+                    "total_comments_analyzed": new_analyzed,
+                    "last_known_comment_count": current_comment_count,
+                    "comments_analyzed_upto": newest_ts,
+                    "analysis": analysis_result,
+                    "analyzed_at": now,
+                    "version": new_version,
+                    "updated_at": now,
+                    "video_title": video_title,
+                    "video_published_at": video_published_at,
+                }
+            },
         )
         logger.info(
             "📝 [%s] [%s] [%s] Incremental comment analysis v%d for '%s' (+%d new comments)",
-            channel_name or channel_id, source_label or source,
+            channel_name or channel_id,
+            source_label or source,
             progress_label or "1/1",
-            new_version, video_title[:50], len(filtered),
+            new_version,
+            video_title[:50],
+            len(filtered),
         )
     else:
         doc = {
@@ -215,15 +228,19 @@ async def run_comment_analysis(
         )
         logger.info(
             "📝 [%s] [%s] [%s] Fresh comment analysis for '%s' (%d comments)",
-            channel_name or channel_id, source_label or source,
+            channel_name or channel_id,
+            source_label or source,
             progress_label or "1/1",
-            video_title[:50], len(filtered),
+            video_title[:50],
+            len(filtered),
         )
 
-    result = await db.comment_analysis.find_one({
-        "channel_id": channel_id,
-        "platform_video_id": platform_video_id,
-    })
+    result = await db.comment_analysis.find_one(
+        {
+            "channel_id": channel_id,
+            "platform_video_id": platform_video_id,
+        }
+    )
     if result:
         result.pop("_id", None)
     return result
@@ -271,61 +288,70 @@ async def run_cron_cycle(
                 try:
                     latest = youtube_service.get_channel_latest_videos(comp_yt_id)
                     for v in latest:
-                        videos_to_process.append({
-                            "platform_video_id": v["video_id"],
-                            "platform": "youtube",
-                            "source": "competitor",
-                            "source_name": comp_name,
-                            "competitor_channel_id": comp_yt_id,
-                            "video_title": v.get("title", ""),
-                            "video_published_at": v.get("published_at"),
-                            "current_comment_count": v.get("comment_count", 0),
-                        })
+                        videos_to_process.append(
+                            {
+                                "platform_video_id": v["video_id"],
+                                "platform": "youtube",
+                                "source": "competitor",
+                                "source_name": comp_name,
+                                "competitor_channel_id": comp_yt_id,
+                                "video_title": v.get("title", ""),
+                                "video_published_at": v.get("published_at"),
+                                "current_comment_count": v.get("comment_count", 0),
+                            }
+                        )
                 except Exception as exc:
                     logger.warning(
                         "Failed to fetch latest videos for competitor %s: %s",
-                        comp_yt_id, exc,
+                        comp_yt_id,
+                        exc,
                     )
                     stats["errors"] += 1
 
     # ---- Own channel videos (last 30 days only) ----
     from datetime import timedelta
-    from app.timezone import UTC
+
     thirty_days_ago = now_ist() - timedelta(days=30)
 
-    own_videos = await db.videos.find({
-        "channel_id": channel_id,
-        "status": "published",
-        "published_at": {"$gte": thirty_days_ago},
-    }).to_list(length=None)
+    own_videos = await db.videos.find(
+        {
+            "channel_id": channel_id,
+            "status": "published",
+            "published_at": {"$gte": thirty_days_ago},
+        }
+    ).to_list(length=None)
 
     for v in own_videos:
         if platform == "youtube" and v.get("youtube_video_id"):
             pid = v["youtube_video_id"]
             meta = v.get("metadata") or {}
-            videos_to_process.append({
-                "platform_video_id": pid,
-                "platform": "youtube",
-                "source": "own",
-                "source_name": channel_name,
-                "competitor_channel_id": None,
-                "video_title": v.get("title", ""),
-                "video_published_at": v.get("published_at"),
-                "current_comment_count": meta.get("comments", 0) or 0,
-            })
+            videos_to_process.append(
+                {
+                    "platform_video_id": pid,
+                    "platform": "youtube",
+                    "source": "own",
+                    "source_name": channel_name,
+                    "competitor_channel_id": None,
+                    "video_title": v.get("title", ""),
+                    "video_published_at": v.get("published_at"),
+                    "current_comment_count": meta.get("comments", 0) or 0,
+                }
+            )
         elif platform == "instagram" and v.get("instagram_media_id"):
             pid = v["instagram_media_id"]
             meta = v.get("metadata") or {}
-            videos_to_process.append({
-                "platform_video_id": pid,
-                "platform": "instagram",
-                "source": "own",
-                "source_name": channel_name,
-                "competitor_channel_id": None,
-                "video_title": v.get("title", ""),
-                "video_published_at": v.get("published_at"),
-                "current_comment_count": meta.get("comments", 0) or 0,
-            })
+            videos_to_process.append(
+                {
+                    "platform_video_id": pid,
+                    "platform": "instagram",
+                    "source": "own",
+                    "source_name": channel_name,
+                    "competitor_channel_id": None,
+                    "video_title": v.get("title", ""),
+                    "video_published_at": v.get("published_at"),
+                    "current_comment_count": meta.get("comments", 0) or 0,
+                }
+            )
 
     # ---- Deduplicate by platform_video_id ----
     seen: set[str] = set()
@@ -343,10 +369,12 @@ async def run_cron_cycle(
     total_processed = 0
 
     for vp in unique_videos:
-        existing = await db.comment_analysis.find_one({
-            "channel_id": channel_id,
-            "platform_video_id": vp["platform_video_id"],
-        })
+        existing = await db.comment_analysis.find_one(
+            {
+                "channel_id": channel_id,
+                "platform_video_id": vp["platform_video_id"],
+            }
+        )
 
         if existing:
             if vp["current_comment_count"] <= existing.get("last_known_comment_count", 0):
@@ -396,14 +424,20 @@ async def run_cron_cycle(
         except Exception as exc:
             logger.warning(
                 "[%s] [%s] Comment analysis failed for video %s: %s",
-                channel_name, progress_label, vp["platform_video_id"], exc,
+                channel_name,
+                progress_label,
+                vp["platform_video_id"],
+                exc,
             )
             stats["errors"] += 1
 
     logger.info(
         "🔍 Comment analysis cycle for '%s': %d fresh, %d incremental, %d skipped, %d errors",
-        channel_id, stats["analyzed"], stats["re_analyzed"],
-        stats["skipped"], stats["errors"],
+        channel_id,
+        stats["analyzed"],
+        stats["re_analyzed"],
+        stats["skipped"],
+        stats["errors"],
     )
     return stats
 
@@ -459,9 +493,13 @@ async def aggregate_comment_analyses(
     for d in docs:
         analysis = d.get("analysis")
         if not isinstance(analysis, dict):
-            logger.warning("Skipping analysis for video %s: 'analysis' field is not a dict (%s)", d.get("platform_video_id"), type(analysis))
+            logger.warning(
+                "Skipping analysis for video %s: 'analysis' field is not a dict (%s)",
+                d.get("platform_video_id"),
+                type(analysis),
+            )
             continue
-            
+
         n_comments = d.get("total_comments_analyzed", 1) or 1
 
         sent = analysis.get("sentiment_summary", {})
@@ -480,9 +518,7 @@ async def aggregate_comment_analyses(
                     "representative_quotes": [],
                 }
             loves[key]["count"] += signal.get("count", 1)
-            loves[key]["representative_quotes"].extend(
-                signal.get("representative_quotes", [])[:2]
-            )
+            loves[key]["representative_quotes"].extend(signal.get("representative_quotes", [])[:2])
 
         for signal in analysis.get("complaints", []):
             key = signal.get("theme", "").lower().strip()

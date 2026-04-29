@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
-from app.services.metrics import metrics_service
+
 from app.config import get_settings
 from app.database import get_db
+from app.services.metrics import metrics_service
 
 router = APIRouter(tags=["observability"])
+
 
 async def verify_api_key(api_key: str = Query(...)):
     settings = get_settings()
@@ -15,11 +17,13 @@ async def verify_api_key(api_key: str = Query(...)):
         )
     return api_key
 
+
 @router.get("/dashboard", response_class=HTMLResponse)
 async def get_dashboard(api_key: str = Depends(verify_api_key)):
     """A premium, high-fidelity observability dashboard for the automation server."""
     metrics_service.cleanse_legacy_metrics()
-    html_content = """
+    html_content = (
+        """
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -476,7 +480,9 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
             <div class="card span-2 log-section">
                 <div class="log-header">
                     <h3>Live System Feed</h3>
-                    <a href="/logs?api_key=""" + api_key + """" style="color: var(--primary); font-size: 0.75rem; font-weight: 700; text-decoration: none">View Full Logs →</a>
+                    <a href="/logs?api_key="""
+        + api_key
+        + """" style="color: var(--primary); font-size: 0.75rem; font-weight: 700; text-decoration: none">View Full Logs →</a>
                 </div>
                 <div id="log-feed" class="log-content">
                     <div class="log-line">_ Connecting to system socket...</div>
@@ -485,7 +491,9 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
         </div>
 
         <script>
-            window.apiKey = '""" + api_key + """';
+            window.apiKey = '"""
+        + api_key
+        + """';
             let trafficChart, modelChart;
             
             // Initialize Chart
@@ -712,7 +720,9 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
     </body>
     </html>
     """
+    )
     return HTMLResponse(content=html_content)
+
 
 @router.get("/api/v1/observability/metrics")
 async def get_metrics_api(api_key: str = Depends(verify_api_key)):

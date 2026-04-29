@@ -16,13 +16,13 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.logger import get_logger
-from app.timezone import now_ist, to_ist_iso
 from app.database import update_channel_task_status
+from app.logger import get_logger
 from app.services.schedule_operation import (
     enqueue_video_for_youtube,
     schedule_single_video_instagram,
 )
+from app.timezone import now_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
@@ -36,20 +36,33 @@ async def _refresh_last_video_stats(
     platform: str,
 ) -> int:
     """Fetch live views for the specific video and update the DB doc.
-    
+
     Returns the updated view count.
     """
-    from app.routers.videos import sync_videos
-    
+    from app.services.video_service import VideoService
+    import app.main as main_mod
+
+    assert main_mod.r2_service is not None
+    service = VideoService(
+        db=db,
+        r2_service=main_mod.r2_service,
+        gemini_service=main_mod.gemini_service,
+        youtube_manager=main_mod.youtube_service_manager,
+        instagram_manager=main_mod.instagram_service_manager,
+    )
+
+
     video_id = video_doc["video_id"]
-    logger.info("Velocity Booster: refreshing stats for last video '%s' (channel: %s)", video_id, channel_id)
-    
+    logger.info(
+        "Velocity Booster: refreshing stats for last video '%s' (channel: %s)", video_id, channel_id
+    )
+
     try:
         # We use the existing sync_videos logic which handles both platforms
-        # By passing video_id filter, we'd need to modify sync_videos, 
+        # By passing video_id filter, we'd need to modify sync_videos,
         # but for now we'll just run a full sync for the channel as it's safer.
-        await sync_videos(channel_id=channel_id, db=db, body=None)
-        
+        await service.sync_videos(channel_id=channel_id, instructions=None)
+
         # Re-fetch the updated video doc
         updated_doc = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         views = (updated_doc.get("metadata", {}) or {}).get("views", 0)
@@ -67,7 +80,7 @@ async def process_velocity_booster_for_channel(
     """Check conditions and trigger an auto-schedule if necessary."""
     channel_id = channel_doc["channel_id"]
     platform = channel_doc.get("platform", "youtube")
-    
+
     config = channel_doc.get("automation_config", {}).get("velocity_booster", {})
     if not config.get("enabled"):
         return
@@ -78,12 +91,13 @@ async def process_velocity_booster_for_channel(
 
     # 1. Find the most recently published video
     last_published = await db.videos.find_one(
-        {"channel_id": channel_id, "status": "published"},
-        sort=[("published_at", -1)]
+        {"channel_id": channel_id, "status": "published"}, sort=[("published_at", -1)]
     )
 
     if not last_published:
-        logger.info("Velocity Booster: no published videos found for channel '%s' — skipping", channel_id)
+        logger.info(
+            "Velocity Booster: no published videos found for channel '%s' — skipping", channel_id
+        )
         return
 
     published_at = last_published.get("published_at")
@@ -96,33 +110,38 @@ async def process_velocity_booster_for_channel(
     if time_since_upload < timedelta(hours=min_hours):
         logger.info(
             "Velocity Booster: last video on '%s' is only %s old (threshold: %dh) — skipping",
-            channel_id, time_since_upload, min_hours
+            channel_id,
+            time_since_upload,
+            min_hours,
         )
         return
 
     # 2. Get current views (Live Refresh)
     views = await _refresh_last_video_stats(db, channel_id, last_published, platform)
-    
+
     if views >= min_views:
         logger.info(
             "Velocity Booster: last video on '%s' has %d views (threshold: %d) — pace is healthy",
-            channel_id, views, min_views
+            channel_id,
+            views,
+            min_views,
         )
         return
 
     logger.warning(
         "Velocity Booster TRIGGERED for '%s': last video has only %d views after %s. Boosting pace!",
-        channel_id, views, time_since_upload
+        channel_id,
+        views,
+        time_since_upload,
     )
 
     # 3. Pull next video from posting queue
-    next_up = await db.posting_queue.find_one(
-        {"channel_id": channel_id},
-        sort=[("position", 1)]
-    )
+    next_up = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", 1)])
 
     if not next_up:
-        logger.error("Velocity Booster: TRIGGERED but posting_queue is empty for channel '%s'!", channel_id)
+        logger.error(
+            "Velocity Booster: TRIGGERED but posting_queue is empty for channel '%s'!", channel_id
+        )
         return
 
     video_id = next_up["video_id"]
@@ -133,7 +152,7 @@ async def process_velocity_booster_for_channel(
 
     # 4. Schedule for immediate release
     scheduled_at = now + timedelta(minutes=delay_min)
-    
+
     try:
         if platform == "youtube":
             await enqueue_video_for_youtube(
@@ -149,20 +168,27 @@ async def process_velocity_booster_for_channel(
                 video_doc=video_doc,
                 scheduled_at=scheduled_at,
             )
-        
+
         logger.success(
             "Velocity Booster: successfully scheduled boost video '%s' for %s",
             video_doc.get("title", video_id),
-            to_ist_iso(scheduled_at)
+            to_ist_iso(scheduled_at),
         )
-        
+
         await update_channel_task_status(db, channel_id, "velocity_booster")
-        
+
     except Exception:
-        logger.exception("Velocity Booster: failed to schedule boost video for channel %s", channel_id)
+        logger.exception(
+            "Velocity Booster: failed to schedule boost video for channel %s", channel_id
+        )
 
 
-async def run_velocity_booster(db: AsyncIOMotorDatabase) -> None:
+async def run_velocity_booster(
+    db: AsyncIOMotorDatabase,
+    youtube_service_manager: Any,
+    instagram_service_manager: Any,
+    gemini_service: Any,
+) -> None:
     """Infinite loop for the Velocity Booster automation."""
     logger.info("Velocity Booster service started (poll interval: %ds)", _POLL_INTERVAL_SECONDS)
 

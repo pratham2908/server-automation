@@ -19,9 +19,9 @@ from typing import Any
 from fastapi import HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.database import get_channel_platform, update_channel_task_status
 from app.logger import get_logger
 from app.services.analysis_engine import run_analysis
-from app.database import update_channel_task_status, get_channel_platform
 from app.services.gemini import GeminiService
 
 logger = get_logger(__name__)
@@ -37,7 +37,8 @@ async def _get_config(db: AsyncIOMotorDatabase) -> dict:
 
 
 async def _count_unanalyzed_videos(
-    db: AsyncIOMotorDatabase, channel_id: str,
+    db: AsyncIOMotorDatabase,
+    channel_id: str,
 ) -> int:
     """Count published videos that have no performance analysis in the videos collection."""
     count = await db.videos.count_documents(
@@ -63,7 +64,18 @@ async def run_sync_analysis_for_channel(
 
     Returns a summary dict with sync and analysis results.
     """
-    from app.routers.videos import sync_videos
+    from app.services.video_service import VideoService
+    import app.main as main_mod
+
+    assert main_mod.r2_service is not None
+    service = VideoService(
+        db=db,
+        r2_service=main_mod.r2_service,
+        gemini_service=gemini_service,
+        youtube_manager=youtube_service_manager,
+        instagram_manager=instagram_service_manager,
+    )
+
 
     platform = get_channel_platform(channel)
     result: dict[str, Any] = {
@@ -75,18 +87,22 @@ async def run_sync_analysis_for_channel(
 
     # --- Sync ---
     try:
-        sync_result = await sync_videos(
-            channel_id=channel_id, body=None, db=db,
+        await service.sync_videos(
+            channel_id=channel_id,
+            instructions=None,
         )
         result["sync"] = "ok"
         logger.info(
             "Auto-sync completed for '%s' (%s)",
-            channel_id, platform,
+            channel_id,
+            platform,
         )
     except HTTPException as exc:
         result["sync"] = f"skipped ({exc.detail})"
         logger.warning(
-            "Auto-sync skipped for '%s': %s", channel_id, exc.detail,
+            "Auto-sync skipped for '%s': %s",
+            channel_id,
+            exc.detail,
         )
         return result
     except Exception as exc:
@@ -101,7 +117,9 @@ async def run_sync_analysis_for_channel(
     if unanalyzed < analysis_threshold:
         logger.info(
             "Channel '%s': %d unanalyzed video(s) < threshold %d — skipping analysis",
-            channel_id, unanalyzed, analysis_threshold,
+            channel_id,
+            unanalyzed,
+            analysis_threshold,
         )
         await update_channel_task_status(db, channel_id, "sync_analysis")
         return result
@@ -116,15 +134,19 @@ async def run_sync_analysis_for_channel(
         if platform == "instagram" and instagram_service_manager:
             instagram_service = await instagram_service_manager.get_service(channel_id)
 
-        analysis_result = await run_analysis(
-            channel_id, db, youtube_service, gemini_service,
+        await run_analysis(
+            channel_id,
+            db,
+            youtube_service,
+            gemini_service,
             instagram_service=instagram_service,
             platform=platform,
         )
         result["analysis"] = "ok"
         logger.info(
             "Auto-analysis completed for '%s' (%d unanalyzed videos triggered it)",
-            channel_id, unanalyzed,
+            channel_id,
+            unanalyzed,
         )
     except Exception as exc:
         result["analysis"] = f"error ({exc})"
@@ -144,7 +166,8 @@ async def run_sync_analysis_cron(
 
     logger.info(
         "Sync-analysis cron started (default interval: %dh, threshold: %d)",
-        _DEFAULT_INTERVAL_HOURS, _DEFAULT_ANALYSIS_THRESHOLD,
+        _DEFAULT_INTERVAL_HOURS,
+        _DEFAULT_ANALYSIS_THRESHOLD,
     )
 
     while True:
@@ -155,7 +178,8 @@ async def run_sync_analysis_cron(
 
         logger.info(
             "Sync-analysis cron: sleeping %.0f min until next run (enabled=%s)",
-            interval_seconds / 60, enabled,
+            interval_seconds / 60,
+            enabled,
         )
         await asyncio.sleep(interval_seconds)
 
@@ -195,7 +219,8 @@ async def run_sync_analysis_cron(
                 except Exception as exc:
                     logger.error(
                         "Sync-analysis cron failed for channel '%s': %s",
-                        channel_id, exc,
+                        channel_id,
+                        exc,
                     )
 
             metrics_service.track_task_end("sync_analysis", "success")

@@ -10,11 +10,8 @@ Two-step pipeline:
           analysis, best combinations), stored in ``analysis``.
 """
 
-import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
-
-from app.timezone import now_ist
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -22,6 +19,7 @@ from app.logger import get_logger
 from app.services.gemini import GeminiService
 from app.services.todo_engine import update_categories_from_analysis
 from app.services.youtube import YouTubeService
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
@@ -64,6 +62,7 @@ async def run_analysis(
         return {}
 
     from app.database import get_content_schema_for_prompt
+
     content_schema = await get_content_schema_for_prompt(db, channel_id)
 
     subscriber_count = 0
@@ -98,9 +97,7 @@ async def run_analysis(
     ):
         already_analysed_ids.add(v_doc["video_id"])
 
-    new_videos = [
-        v for v in done_videos if v["video_id"] not in already_analysed_ids
-    ]
+    new_videos = [v for v in done_videos if v["video_id"] not in already_analysed_ids]
 
     logger.info(
         "📊 Found %d published videos, %d already analysed, %d new to analyse.",
@@ -112,6 +109,7 @@ async def run_analysis(
 
     # Exclude videos less than 3 days old.
     from app.timezone import UTC
+
     three_days_ago = now_ist() - timedelta(days=3)
 
     filtered_videos = []
@@ -167,11 +165,21 @@ async def run_analysis(
                 stats = {
                     k: meta[k]
                     for k in (
-                        "views", "likes", "comments", "duration_seconds",
-                        "engagement_rate", "like_rate", "comment_rate",
-                        "avg_percentage_viewed", "avg_view_duration_seconds",
-                        "estimated_minutes_watched", "subscribers_gained",
-                        "shares", "impressions", "ctr", "engaged_views",
+                        "views",
+                        "likes",
+                        "comments",
+                        "duration_seconds",
+                        "engagement_rate",
+                        "like_rate",
+                        "comment_rate",
+                        "avg_percentage_viewed",
+                        "avg_view_duration_seconds",
+                        "estimated_minutes_watched",
+                        "subscribers_gained",
+                        "shares",
+                        "impressions",
+                        "ctr",
+                        "engaged_views",
                     )
                     if meta.get(k) is not None
                 }
@@ -198,7 +206,7 @@ async def run_analysis(
         curve = {}
         if platform == "youtube" and youtube_service and v.get("youtube_video_id"):
             curve = youtube_service.get_audience_retention_curve(v["youtube_video_id"])
-            
+
         video_data_for_gemini = {
             "title": v.get("title", ""),
             "category": v.get("category", ""),
@@ -209,9 +217,13 @@ async def run_analysis(
 
         # Call Gemini for per-video analysis
         try:
-            ai_insight = await gemini_service.analyze_single_video(video_data_for_gemini, platform=platform)
+            ai_insight = await gemini_service.analyze_single_video(
+                video_data_for_gemini, platform=platform
+            )
         except Exception as exc:
-            logger.warning("Gemini per-video analysis failed for '%s': %s", v.get("title", v["video_id"]), exc)
+            logger.warning(
+                "Gemini per-video analysis failed for '%s': %s", v.get("title", v["video_id"]), exc
+            )
             ai_insight = {
                 "performance_rating": 0,
                 "what_worked": "Analysis failed",
@@ -221,7 +233,7 @@ async def run_analysis(
 
         per_video_count += 1
         logger.info(
-            "🔍 Analyzed [%d/%d] — \"%s\" (rating: %s)",
+            '🔍 Analyzed [%d/%d] — "%s" (rating: %s)',
             per_video_count,
             len(new_videos),
             v.get("title", "Untitled")[:50],
@@ -247,26 +259,34 @@ async def run_analysis(
 
         await db.videos.update_one(
             {"channel_id": channel_id, "video_id": v["video_id"]},
-            {"$set": {"performance": performance_data}}
+            {"$set": {"performance": performance_data}},
         )
 
         # Backfill actual metrics into videos.retention (if a prediction exists)
         if v.get("retention") and not v["retention"].get("actuals_populated_at"):
             await db.videos.update_one(
                 {"channel_id": channel_id, "video_id": v["video_id"]},
-                {"$set": {
-                    "retention.actual_avg_percentage_viewed": stats.get("avg_percentage_viewed"),
-                    "retention.actual_engagement_rate": stats.get("engagement_rate"),
-                    "retention.actual_views": stats.get("views"),
-                    "retention.actual_like_rate": stats.get("like_rate"),
-                    "retention.actual_comment_rate": stats.get("comment_rate"),
-                    "retention.actual_views_per_subscriber": stats.get("views_per_subscriber"),
-                    "retention.actual_performance_rating": (ai_insight or {}).get("performance_rating"),
-                    "retention.actual_stats_snapshot": stats,
-                    "retention.actual_retention_curve": {str(k): v_curve for k, v_curve in (curve or {}).items()},
-                    "retention.actuals_populated_at": now_ist(),
-                    "retention.updated_at": now_ist(),
-                }},
+                {
+                    "$set": {
+                        "retention.actual_avg_percentage_viewed": stats.get(
+                            "avg_percentage_viewed"
+                        ),
+                        "retention.actual_engagement_rate": stats.get("engagement_rate"),
+                        "retention.actual_views": stats.get("views"),
+                        "retention.actual_like_rate": stats.get("like_rate"),
+                        "retention.actual_comment_rate": stats.get("comment_rate"),
+                        "retention.actual_views_per_subscriber": stats.get("views_per_subscriber"),
+                        "retention.actual_performance_rating": (ai_insight or {}).get(
+                            "performance_rating"
+                        ),
+                        "retention.actual_stats_snapshot": stats,
+                        "retention.actual_retention_curve": {
+                            str(k): v_curve for k, v_curve in (curve or {}).items()
+                        },
+                        "retention.actuals_populated_at": now_ist(),
+                        "retention.updated_at": now_ist(),
+                    }
+                },
             )
             logger.info(
                 "Backfilled actual metrics into retention for '%s'",
@@ -293,13 +313,15 @@ async def run_analysis(
     for pv in all_per_video:
         perf = pv.get("performance") or {}
         all_analysed_ids.append(pv["video_id"])
-        video_summaries.append({
-            "title": pv.get("title") or perf.get("title", ""),
-            "category": pv.get("category") or perf.get("category", ""),
-            "content_params": pv.get("content_params") or perf.get("content_params") or {},
-            "stats": perf.get("stats_snapshot", {}),
-            "ai_insight": perf.get("ai_insight", {}),
-        })
+        video_summaries.append(
+            {
+                "title": pv.get("title") or perf.get("title", ""),
+                "category": pv.get("category") or perf.get("category", ""),
+                "content_params": pv.get("content_params") or perf.get("content_params") or {},
+                "stats": perf.get("stats_snapshot", {}),
+                "ai_insight": perf.get("ai_insight", {}),
+            }
+        )
 
     logger.info(
         "🧠 Running channel summary across %d per-video analyses...",
@@ -333,7 +355,9 @@ async def run_analysis(
         )
 
         running_analysis = await gemini_service.analyze_videos(
-            batch, running_analysis, content_schema=content_schema or None,
+            batch,
+            running_analysis,
+            content_schema=content_schema or None,
             platform=platform,
         )
 
@@ -406,7 +430,11 @@ async def _update_content_param_scores(
 
     all_history = await db.videos.find(
         {"channel_id": channel_id, "performance": {"$ne": None}},
-        {"content_params": 1, "performance.content_params": 1, "performance.ai_insight.performance_rating": 1},
+        {
+            "content_params": 1,
+            "performance.content_params": 1,
+            "performance.ai_insight.performance_rating": 1,
+        },
     ).to_list(length=None)
 
     for pdoc in param_docs:
@@ -433,25 +461,31 @@ async def _update_content_param_scores(
             val = v_entry["value"]
             stats = value_stats.get(val)
             if stats and stats["count"] > 0:
-                updated_values.append({
-                    "value": val,
-                    "score": round(stats["total_rating"] / stats["count"], 1),
-                    "video_count": stats["count"],
-                })
+                updated_values.append(
+                    {
+                        "value": val,
+                        "score": round(stats["total_rating"] / stats["count"], 1),
+                        "video_count": stats["count"],
+                    }
+                )
             else:
-                updated_values.append({
-                    "value": val,
-                    "score": 0,
-                    "video_count": 0,
-                })
+                updated_values.append(
+                    {
+                        "value": val,
+                        "score": 0,
+                        "video_count": 0,
+                    }
+                )
 
         for val, stats in value_stats.items():
             if val not in existing_value_names and stats["count"] > 0:
-                updated_values.append({
-                    "value": val,
-                    "score": round(stats["total_rating"] / stats["count"], 1),
-                    "video_count": stats["count"],
-                })
+                updated_values.append(
+                    {
+                        "value": val,
+                        "score": round(stats["total_rating"] / stats["count"], 1),
+                        "video_count": stats["count"],
+                    }
+                )
 
         await db.content_params.update_one(
             {"_id": pdoc["_id"]},

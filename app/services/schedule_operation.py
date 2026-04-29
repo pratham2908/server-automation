@@ -10,10 +10,8 @@ import os
 from datetime import datetime
 from typing import Any
 
-import pytz
-
 from app.logger import get_logger
-from app.timezone import IST, UTC, now_ist, to_ist_iso
+from app.timezone import UTC, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
@@ -43,7 +41,7 @@ def _build_instagram_caption(video_doc: dict[str, Any]) -> str:
             h = f"#{tag.replace(' ', '')}" if not tag.startswith("#") else tag
             if h.lower() not in desc.lower():
                 hashtag_list.append(h)
-        
+
         if hashtag_list:
             parts.append(" ".join(hashtag_list))
 
@@ -51,14 +49,16 @@ def _build_instagram_caption(video_doc: dict[str, Any]) -> str:
 
 
 async def _move_to_schedule_queue(
-    db, channel_id: str, video_id: str, scheduled_at: datetime, platform: str = "youtube",
+    db,
+    channel_id: str,
+    video_id: str,
+    scheduled_at: datetime,
+    platform: str = "youtube",
 ) -> None:
     """Remove from ready queue and insert into scheduled queue."""
     now = now_ist()
 
-    await db.posting_queue.delete_one(
-        {"channel_id": channel_id, "video_id": video_id}
-    )
+    await db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
 
     last = await db.schedule_queue.find_one(
         {"channel_id": channel_id},

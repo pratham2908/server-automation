@@ -1,7 +1,8 @@
-
 import os
-from pymongo import MongoClient
+
 from dotenv import load_dotenv
+from pymongo import MongoClient
+
 
 def test_conn():
     load_dotenv(".env")
@@ -9,7 +10,7 @@ def test_conn():
     db_name = os.getenv("MONGODB_DB_NAME")
     print(f"URI: {uri}")
     print(f"DB: {db_name}")
-    
+
     client = MongoClient(uri)
     db = client[db_name]
     try:
@@ -19,6 +20,7 @@ def test_conn():
         print(f"Error: {e}")
     finally:
         client.close()
+
 
 if __name__ == "__main__":
     test_conn()

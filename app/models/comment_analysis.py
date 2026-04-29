@@ -49,7 +49,7 @@ class DemandSignal(BaseModel):
 class CommentAnalysisResult(BaseModel):
     """Structured output from Gemini comment analysis."""
 
-    sentiment_summary: SentimentSummary = Field(default_factory=SentimentSummary)
+    sentiment_summary: SentimentSummary = Field(default_factory=lambda: SentimentSummary())
     what_audience_loves: list[AudienceSignal] = Field(default_factory=list)
     complaints: list[AudienceSignal] = Field(default_factory=list)
     demands: list[DemandSignal] = Field(default_factory=list)
@@ -69,17 +69,20 @@ class CommentAnalysis(BaseModel):
     platform: str = Field("youtube", description="'youtube' or 'instagram'")
     source: str = Field("competitor", description="'own' or 'competitor'")
     competitor_channel_id: Optional[str] = Field(
-        None, description="Competitor's channel ID; null for own channel videos",
+        None,
+        description="Competitor's channel ID; null for own channel videos",
     )
     video_title: str = Field("")
     video_url: str = Field("")
     total_comments_fetched: int = Field(0, description="Cumulative across all analysis runs")
     total_comments_analyzed: int = Field(0, description="Cumulative, after spam/short filter")
     last_known_comment_count: int = Field(
-        0, description="Comment count from platform stats; used as cheap pre-check for new comments",
+        0,
+        description="Comment count from platform stats; used as cheap pre-check for new comments",
     )
     comments_analyzed_upto: Optional[datetime] = Field(
-        None, description="Timestamp of newest comment analyzed; cutoff for next incremental fetch",
+        None,
+        description="Timestamp of newest comment analyzed; cutoff for next incremental fetch",
     )
     analysis: CommentAnalysisResult = Field(default_factory=CommentAnalysisResult)
     analyzed_at: datetime = Field(default_factory=now_ist)

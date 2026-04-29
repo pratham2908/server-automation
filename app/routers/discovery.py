@@ -3,13 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+import app.main as main_app
 from app.database import get_db
 from app.dependencies import verify_api_key
-import app.main as main_app
+from app.models.topic_discovery import DoneTopic, TopicDiscoveryResult
 from app.services.discovery_service import DiscoveryService
-from app.models.topic_discovery import TopicDiscoveryResult, DoneTopic
 
-router = APIRouter(
+router: APIRouter = APIRouter(
     prefix="/api/v1/discovery",
     tags=["Discovery"],
     dependencies=[Depends(verify_api_key)],
@@ -17,6 +17,13 @@ router = APIRouter(
 
 
 def get_discovery_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> DiscoveryService:
+    assert main_app.gemini_service is not None
+    assert main_app.youtube_service_manager is not None
+    from app.main import instagram_service_manager, youtube_service_manager
+    assert youtube_service_manager is not None
+    assert instagram_service_manager is not None
+
+
     return DiscoveryService(
         db=db,
         gemini_service=main_app.gemini_service,
@@ -41,14 +48,12 @@ async def trigger_discovery_scan(
         )
 
     result = await service.discover_proven_ideas(channel_id)
-    
+
     # Persist the latest result
     await db.discovery_results.replace_one(
-        {"channel_id": channel_id},
-        result.model_dump(),
-        upsert=True
+        {"channel_id": channel_id}, result.model_dump(), upsert=True
     )
-    
+
     return result
 
 
@@ -78,7 +83,7 @@ async def mark_topic_as_done(
     await db.done_topics.update_one(
         {"channel_id": channel_id, "topic_name": topic_name},
         {"$set": done_topic.model_dump()},
-        upsert=True
+        upsert=True,
     )
     return {"status": "success", "topic_name": topic_name}
 

@@ -44,6 +44,10 @@ async def trigger_comment_replies(
     import app.main as main_mod
     from app.services.comment_reply_engine import run_comment_reply_cycle
 
+    assert main_mod.youtube_service_manager is not None
+    assert main_mod.instagram_service_manager is not None
+    assert main_mod.gemini_service is not None
+
     stats = await run_comment_reply_cycle(
         channel_id=channel_id,
         db=db,
@@ -64,7 +68,9 @@ async def trigger_comment_replies(
 async def get_reply_history(
     channel_id: str,
     video_id: Optional[str] = Query(None, description="Filter by video_id"),
-    status: Optional[str] = Query(None, description="Filter by status (replied, skipped_negative, etc)"),
+    status: Optional[str] = Query(
+        None, description="Filter by status (replied, skipped_negative, etc)"
+    ),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -75,12 +81,15 @@ async def get_reply_history(
     if status:
         query["status"] = status
 
-    docs = await db.comment_replies.find(query).sort(
-        "replied_at", -1
-    ).limit(limit).to_list(length=limit)
+    docs = (
+        await db.comment_replies.find(query)
+        .sort("replied_at", -1)
+        .limit(limit)
+        .to_list(length=limit)
+    )
 
     for d in docs:
-        d.pop("_id", None)
+        if d: d.pop("_id", None)
 
     return docs
 
@@ -155,5 +164,6 @@ async def update_comment_reply_config(
     )
 
     doc = await db.config.find_one({"key": "comment_reply_config"})
-    doc.pop("_id", None)
-    return {"ok": True, **doc}
+    if doc:
+        doc.pop("_id", None)
+    return {"ok": True, **(doc or {})}

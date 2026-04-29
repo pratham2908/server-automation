@@ -92,12 +92,14 @@ async def connect_db(
         [("channel_id", 1), ("replied_at", -1)],
     )
     await _db.preview_analysis.create_index(
-        "expires_at", expireAfterSeconds=0,
+        "expires_at",
+        expireAfterSeconds=0,
     )
     await _db.preview_analysis.create_index("preview_id", unique=True)
 
     await _db.thumbnail_analysis.create_index(
-        "expires_at", expireAfterSeconds=0,
+        "expires_at",
+        expireAfterSeconds=0,
     )
     await _db.thumbnail_analysis.create_index("analysis_id", unique=True)
     await _db.errors.create_index([("feature", 1), ("resolved", 1)])
@@ -164,7 +166,7 @@ async def get_content_schema_for_prompt(
         ]
 
     docs = await db.content_params.find(query).to_list(length=None)
-    
+
     result = []
     for d in docs:
         param = {
@@ -176,8 +178,9 @@ async def get_content_schema_for_prompt(
         if include_belongs_to:
             param["belongs_to"] = d.get("belongs_to", ["all"])
         result.append(param)
-        
+
     return result
+
 
 async def update_channel_task_status(db: AsyncIOMotorDatabase, channel_id: str, task_name: str):
     """Update the last run timestamp for a specific task on a channel."""
@@ -198,6 +201,10 @@ def get_channel_platform(channel: dict | None) -> str:
     if not channel:
         return "youtube"
     platform = channel.get("platform", "youtube")
-    if platform == "youtube" and channel.get("instagram_user_id") and not channel.get("youtube_channel_id"):
+    if (
+        platform == "youtube"
+        and channel.get("instagram_user_id")
+        and not channel.get("youtube_channel_id")
+    ):
         return "instagram"
     return platform
