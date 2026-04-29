@@ -12,6 +12,7 @@ from app.database import get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.services.video_service import VideoService
+from app.services.errors import get_error_service
 
 logger = get_logger(__name__)
 
@@ -196,8 +197,17 @@ async def schedule_video(
     """Schedule video(s) on the platform."""
     try:
         return await service.schedule_video(channel_id, video_id, body.scheduled_at if body else None)
-    except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        error_service = get_error_service(service.db)
+        await error_service.log_error(
+            feature="Video Scheduling",
+            message=str(e),
+            exception=e,
+            context={"channel_id": channel_id, "video_id": video_id}
+        )
+        if isinstance(e, ValueError):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise e
 
 @router.patch("/{video_id}/reschedule")
 async def reschedule_video(
@@ -209,8 +219,17 @@ async def reschedule_video(
     """Reschedule a queued video."""
     try:
         return await service.reschedule_video(channel_id, video_id, body.scheduled_at)
-    except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        error_service = get_error_service(service.db)
+        await error_service.log_error(
+            feature="Video Rescheduling",
+            message=str(e),
+            exception=e,
+            context={"channel_id": channel_id, "video_id": video_id, "scheduled_at": str(body.scheduled_at)}
+        )
+        if isinstance(e, ValueError):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise e
 
 @router.patch("/{video_id}/metadata")
 async def update_video_metadata(

@@ -51,7 +51,27 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception as e:
-            # Log the crash
+            # Log the crash to the Error Queue
+            try:
+                from app.database import get_db
+                from app.services.errors import get_error_service
+                db = get_db()
+                error_service = get_error_service(db)
+                await error_service.log_error(
+                    feature=f"API Crash: {method} {path}",
+                    message=f"Unhandled exception: {str(e)}",
+                    exception=e,
+                    context={
+                        "method": method, 
+                        "path": path, 
+                        "request_id": request_id,
+                        "query": query
+                    }
+                )
+            except Exception as log_err:
+                logger.error(f"Failed to log API crash to Error Queue: {log_err}")
+
+            # Log the crash for console/journalctl
             duration = (time.time() - start_time) * 1000
             error_data = {
                 "id": request_id,
