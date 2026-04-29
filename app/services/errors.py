@@ -41,18 +41,26 @@ class ErrorService:
                     traceback.format_exception(type(exception), exception, exception.__traceback__)
                 )
 
-            error_doc = {
-                "_id": str(uuid.uuid4()),
-                "feature": feature,
-                "message": message,
-                "stack_trace": stack_trace,
-                "context": context or {},
-                "timestamp": now_ist(),
-                "resolved": False,
-            }
-
-            await self.db.errors.insert_one(error_doc)
-            logger.info(f"Logged error for feature '{feature}': {message}")
+            now = now_ist()
+            # Group errors by feature, message, and unresolved status
+            await self.db.errors.update_one(
+                {"feature": feature, "message": message, "resolved": False},
+                {
+                    "$inc": {"count": 1},
+                    "$set": {
+                        "last_occurred_at": now,
+                        "stack_trace": stack_trace,
+                        "context": context or {},
+                    },
+                    "$setOnInsert": {
+                        "_id": str(uuid.uuid4()),
+                        "timestamp": now,
+                        "resolved": False,
+                    },
+                },
+                upsert=True,
+            )
+            logger.info(f"Logged/Updated error for feature '{feature}': {message}")
         except Exception as e:
             # Fallback to standard logging if DB logging fails
             logger.error(f"Failed to log error to DB: {e}")

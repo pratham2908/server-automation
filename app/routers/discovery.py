@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 import app.main as main_app
@@ -18,17 +20,16 @@ router: APIRouter = APIRouter(
 
 def get_discovery_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> DiscoveryService:
     assert main_app.gemini_service is not None
-    assert main_app.youtube_service_manager is not None
-    from app.main import instagram_service_manager, youtube_service_manager
-    assert youtube_service_manager is not None
-    assert instagram_service_manager is not None
-
+    ytm = main_app.youtube_service_manager
+    igm = main_app.instagram_service_manager
+    assert ytm is not None
+    assert igm is not None
 
     return DiscoveryService(
         db=db,
         gemini_service=main_app.gemini_service,
-        youtube_manager=main_app.youtube_service_manager,
-        instagram_manager=main_app.instagram_service_manager,
+        youtube_manager=ytm,
+        instagram_manager=igm,
     )
 
 

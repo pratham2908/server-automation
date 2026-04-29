@@ -171,9 +171,18 @@ async def get_log_viewer():
             }
 
             .error-card .time {
-                float: right;
                 font-size: 0.65rem;
                 color: var(--text-muted);
+            }
+
+            .count-badge {
+                background: var(--error);
+                color: #fff;
+                font-size: 0.65rem;
+                font-weight: 800;
+                padding: 0.1rem 0.4rem;
+                border-radius: 999px;
+                box-shadow: 0 2px 4px rgba(248, 113, 113, 0.3);
             }
 
             .error-card .msg {
@@ -541,8 +550,13 @@ async def get_log_viewer():
 
                 errorList.innerHTML = errors.map(err => `
                     <div class="error-card">
-                        <span class="time">${new Date(err.timestamp).toLocaleTimeString()}</span>
-                        <span class="feature">${err.feature}</span>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem">
+                            <span class="feature">${err.feature}</span>
+                            <div style="display:flex; align-items:center; gap:0.5rem">
+                                ${err.count > 1 ? `<span class="count-badge">x${err.count}</span>` : ''}
+                                <span class="time">${new Date(err.last_occurred_at || err.timestamp).toLocaleTimeString()}</span>
+                            </div>
+                        </div>
                         <div class="msg">${err.message}</div>
                         <div class="actions">
                             <button class="action-btn" onclick="removeError('${err._id}')">

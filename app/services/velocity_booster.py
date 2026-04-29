@@ -81,7 +81,7 @@ async def process_velocity_booster_for_channel(
     channel_id = channel_doc["channel_id"]
     platform = channel_doc.get("platform", "youtube")
 
-    config = channel_doc.get("automation_config", {}).get("velocity_booster", {})
+    config = (channel_doc.get("automation_config") or {}).get("velocity_booster", {})
     if not config.get("enabled"):
         return
 

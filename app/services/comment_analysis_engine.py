@@ -170,7 +170,7 @@ async def run_comment_analysis(
     # ---- Persist ----
     now = now_ist()
 
-    if is_incremental:
+    if existing is not None:
         new_fetched = existing.get("total_comments_fetched", 0) + len(raw_comments)
         new_analyzed = existing.get("total_comments_analyzed", 0) + len(filtered)
         new_version = existing.get("version", 1) + 1
@@ -556,7 +556,8 @@ async def aggregate_comment_analyses(
         key_insights.update(analysis.get("key_insights", []))
 
     def _signal_strength(count: int) -> int:
-        return min(10, max(1, round(count / max(1, total_comments) * 100)))
+        from typing import cast
+        return cast(int, min(10, max(1, round(count / max(1, total_comments) * 100))))
 
     def _build_sorted(items: dict, key_field: str) -> list[dict]:
         result = []

@@ -17,6 +17,8 @@ class ErrorEntry(BaseModel):
     stack_trace: Optional[str] = None
     context: Dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=now_ist)
+    last_occurred_at: datetime = Field(default_factory=now_ist)
+    count: int = 1
     resolved: bool = False
 
 

@@ -314,6 +314,7 @@ class VideoService:
             shutil.copyfileobj(file.file, tmp)
             tpath = tmp.name
         with open(tpath, "rb") as f:
+            assert self.r2 is not None
             self.r2.upload_video(f, key)
         now = now_ist()
         await self.db.videos.update_one(
@@ -359,6 +360,7 @@ class VideoService:
         if data.get("instant"):
             from app.services.downloader import download_youtube_video_to_r2
 
+            assert self.r2 is not None
             key = await download_youtube_video_to_r2(video["youtube_video_id"], tid, self.r2)
             await self.db.videos.update_one(
                 {"video_id": new_id},
@@ -450,6 +452,7 @@ class VideoService:
             raise ValueError("Video not found")
         schema = await get_content_schema_for_prompt(self.db, channel_id)
         if not schema:
+            # mypy: disable-error-code: attr-defined
             raise ValueError("No schema defined")
         prompt = f"Extract params:\nSchema: {json.dumps(schema)}\nVideo: {video.get('title')}\n{video.get('description')[:1000]}"
         try:
@@ -615,7 +618,7 @@ class VideoService:
         return {"ok": True, "videos": res}
 
     async def reschedule_video(
-        self, channel_id: str, video_id: str, new_time: datetime
+        self, channel_id: str, video_id: str, new_time: Optional[datetime] = None
     ) -> Dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
@@ -629,7 +632,7 @@ class VideoService:
         await self.db.schedule_queue.update_one(
             {"channel_id": channel_id, "video_id": video_id}, {"$set": {"scheduled_at": new_time}}
         )
-        return {"ok": True, "scheduled_at": to_ist_iso(new_time)}
+        return {"ok": True, "scheduled_at": to_ist_iso(new_time) if new_time else None}
 
     async def update_video_metadata(
         self, channel_id: str, video_id: str, metadata: Dict[str, Any]

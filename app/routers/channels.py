@@ -558,8 +558,9 @@ async def update_content_param(
     await db.content_params.update_one({"_id": existing["_id"]}, {"$set": update_fields})
 
     updated = await db.content_params.find_one({"_id": existing["_id"]})
-    updated.pop("_id", None)
-    return updated
+    if updated:
+        updated.pop("_id", None)
+    return updated or {}
 
 
 @router.post("/{channel_id}/content-params/sync", status_code=status.HTTP_200_OK)
