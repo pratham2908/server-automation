@@ -1,12 +1,17 @@
 import asyncio
+import os
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timedelta, timezone
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
 async def migrate_errors():
-    client = AsyncIOMotorClient("mongodb://localhost:27017")
-    db = client.automation_db
+    mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+    db_name = os.getenv("MONGODB_DB_NAME", "youtube_automation")
+    
+    print(f"Connecting to {mongodb_uri}, DB: {db_name}")
+    client = AsyncIOMotorClient(mongodb_uri)
+    db = client[db_name]
     
     # Update all documents missing count or last_occurred_at
     cursor = db.errors.find({
@@ -24,7 +29,7 @@ async def migrate_errors():
         if "count" not in doc:
             upd["count"] = 1
         if "timestamp" not in doc:
-            upd["timestamp"] = now
+            upd["timestamp"] = doc.get("timestamp") or now
         if "last_occurred_at" not in doc:
             upd["last_occurred_at"] = doc.get("timestamp") or now
             
