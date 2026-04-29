@@ -436,6 +436,70 @@ async def get_log_viewer():
             .box-success { border-left: 3px solid var(--success); }
             .box-warning { border-left: 3px solid var(--warning); }
             .box-error { border-left: 3px solid var(--error); }
+
+            /* Modal Styles */
+            .modal-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.7);
+                backdrop-filter: blur(4px);
+                display: none;
+                align-items: center;
+                justify-content: center;
+                z-index: 100;
+            }
+            .modal {
+                background: #1e293b;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 1rem;
+                padding: 2rem;
+                max-width: 400px;
+                width: 90%;
+                box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+                transform: scale(0.95);
+                transition: transform 0.2s ease;
+            }
+            .modal.show { transform: scale(1); }
+            .modal h3 {
+                margin-bottom: 1rem;
+                font-size: 1.25rem;
+                color: var(--error);
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+            }
+            .modal p {
+                color: var(--text-muted);
+                margin-bottom: 2rem;
+                line-height: 1.5;
+            }
+            .modal-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 1rem;
+            }
+            .modal-btn {
+                padding: 0.6rem 1.2rem;
+                border-radius: 0.5rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+            .modal-btn-cancel {
+                background: transparent;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                color: var(--text-muted);
+            }
+            .modal-btn-cancel:hover { background: rgba(255, 255, 255, 0.05); color: var(--text-main); }
+            .modal-btn-confirm {
+                background: var(--error);
+                border: 1px solid var(--error);
+                color: white;
+            }
+            .modal-btn-confirm:hover { background: #ef4444; }
         </style>
     </head>
     <body>
@@ -481,6 +545,18 @@ async def get_log_viewer():
             </aside>
         </div>
 
+        <!-- Custom Confirmation Modal -->
+        <div id="confirm-modal" class="modal-overlay">
+            <div class="modal">
+                <h3><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> Clear Error?</h3>
+                <p>Are you sure you want to permanently remove this error from the database? This action cannot be undone.</p>
+                <div class="modal-actions">
+                    <button class="modal-btn modal-btn-cancel" onclick="closeModal()">Cancel</button>
+                    <button id="modal-confirm-btn" class="modal-btn modal-btn-confirm">Clear Error</button>
+                </div>
+            </div>
+        </div>
+
         <div class="controls">
             <button id="copy-btn" class="btn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
@@ -515,6 +591,7 @@ async def get_log_viewer():
             let eventSource = null;
             let activeLevel = 'all';
             let searchTerm = '';
+            let errorIdToClear = null;
 
             async function fetchErrors() {
                 try {
@@ -527,15 +604,40 @@ async def get_log_viewer():
                 }
             }
 
-            async function removeError(id) {
-                if (!confirm('Permanently remove this error from DB?')) return;
+            function removeError(id) {
+                errorIdToClear = id;
+                const modal = document.getElementById('confirm-modal');
+                modal.style.display = 'flex';
+                setTimeout(() => modal.querySelector('.modal').classList.add('show'), 10);
+            }
+
+            function closeModal() {
+                const modal = document.getElementById('confirm-modal');
+                modal.querySelector('.modal').classList.remove('show');
+                setTimeout(() => {
+                    modal.style.display = 'none';
+                    errorIdToClear = null;
+                }, 200);
+            }
+
+            document.getElementById('modal-confirm-btn').onclick = async () => {
+                if (!errorIdToClear) return;
                 try {
-                    await fetch(`/api/errors/${id}`, { method: 'DELETE' });
+                    const btn = document.getElementById('modal-confirm-btn');
+                    btn.disabled = true;
+                    btn.innerText = 'Clearing...';
+                    
+                    await fetch(`/api/errors/${errorIdToClear}`, { method: 'DELETE' });
+                    closeModal();
                     fetchErrors();
                 } catch (e) {
                     alert('Failed to remove error');
+                } finally {
+                    const btn = document.getElementById('modal-confirm-btn');
+                    btn.disabled = false;
+                    btn.innerText = 'Clear Error';
                 }
-            }
+            };
 
             function renderErrors(errors) {
                 if (!errors || errors.length === 0) {
