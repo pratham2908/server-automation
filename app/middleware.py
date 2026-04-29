@@ -63,8 +63,13 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
 
                 db = get_db()
                 error_service = get_error_service(db)
+                # Normalize path to group crashes by endpoint (remove numeric/UUID IDs)
+                import re
+                normalized_path = re.sub(r"\/[0-9a-f-]{8,}", "/{id}", path) # UUIDs
+                normalized_path = re.sub(r"\/[0-9]+", "/{id}", normalized_path) # Numeric IDs
+                
                 await error_service.log_error(
-                    feature=f"API Crash: {method} {path}",
+                    feature=f"API: {method} {normalized_path}",
                     message=f"Unhandled exception: {str(e)}",
                     exception=e,
                     context={

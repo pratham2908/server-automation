@@ -15,15 +15,24 @@ router = APIRouter(prefix="/api/errors", tags=["errors"])
 
 @router.post("/", response_model=ErrorEntry, status_code=status.HTTP_201_CREATED)
 async def create_error(error: ErrorCreate, db: AsyncIOMotorDatabase = Depends(get_db)):
-    """Log a new error to the queue."""
-    error_id = str(uuid.uuid4())
-    error_doc = error.dict()
-    error_doc["_id"] = error_id
-    error_doc["timestamp"] = now_ist()
-    error_doc["resolved"] = False
+    """Log a new error to the queue with clubbing support."""
+    from app.services.errors import get_error_service
 
-    await db.errors.insert_one(error_doc)
-    return error_doc
+    error_service = get_error_service(db)
+    # Using log_error to handle clubbing/grouping
+    await error_service.log_error(
+        feature=error.feature,
+        message=error.message,
+        exception=None,  # No exception object here as it's from API
+        context=error.context,
+    )
+
+    # Find the newly created/updated doc to return it
+    # Note: Since log_error might have incremented a count, we return the current state
+    doc = await db.errors.find_one(
+        {"feature": error.feature, "message": error.message, "resolved": False}
+    )
+    return doc
 
 
 @router.get("/", response_model=list[ErrorEntry])
