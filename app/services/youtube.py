@@ -19,6 +19,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 from app.logger import get_logger
+from app.services.metrics import metrics_service
 
 logger = get_logger(__name__)
 
