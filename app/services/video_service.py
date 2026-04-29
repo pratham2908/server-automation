@@ -643,16 +643,22 @@ class VideoService:
         }
         new_vids = [v for v in yt_vids if v["youtube_video_id"] not in db_ids]
         for v in [v for v in yt_vids if v["youtube_video_id"] in db_ids]:
+            existing = await self.db.videos.find_one(
+                {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]}
+            )
+            upd: dict[str, Any] = {
+                "title": v["title"],
+                "description": v["description"],
+                "metadata.views": v["views"],
+                "updated_at": now_ist(),
+            }
+            if existing and existing.get("status") in ("scheduled", "queued"):
+                upd["status"] = "published"
+                upd["published_at"] = v["published_at"] or now_ist()
+
             await self.db.videos.update_one(
                 {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]},
-                {
-                    "$set": {
-                        "title": v["title"],
-                        "description": v["description"],
-                        "metadata.views": v["views"],
-                        "updated_at": now_ist(),
-                    }
-                },
+                {"$set": upd},
             )
 
         if not new_vids:

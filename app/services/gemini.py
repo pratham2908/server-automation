@@ -365,8 +365,9 @@ Return a JSON object with exactly these keys:
 
 Guidelines:
 - **best_posting_times**: Optimal posting schedule for each day (monday–sunday).
-  - `video_count` = how many videos to post on that day.
+  - `video_count` = how many videos to post on that day (MAX 2).
   - `times` = exactly `video_count` optimal posting times (HH:MM, 24-hour format).
+  - If previous analysis is provided, try to stick to the existing times unless performance data strongly suggests a change.
 - **category_analysis**: For each content category:
   - Identify the most effective **title patterns** only (no description/tags analysis).
   - Score each category from 0-100 based on engagement, retention, AND subscriber growth impact.

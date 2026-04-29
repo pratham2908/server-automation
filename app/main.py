@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     db = await connect_db(settings.MONGODB_URI, settings.MONGODB_DB_NAME)
     logger.info("Connected to MongoDB (%s)", settings.MONGODB_DB_NAME)
 
+
     # ---- R2 ----
     from app.services.r2 import R2Service
 
