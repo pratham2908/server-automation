@@ -11,11 +11,7 @@ async def main():
     channels = await db.channels.find({}).to_list(length=None)
     for c in channels:
         if not c.get("platform"):
-            platform = (
-                "instagram"
-                if c.get("instagram_user_id") and not c.get("youtube_channel_id")
-                else "youtube"
-            )
+            platform = "instagram" if c.get("instagram_user_id") and not c.get("youtube_channel_id") else "youtube"
             await db.channels.update_one({"_id": c["_id"]}, {"$set": {"platform": platform}})
             print(f"Fixed {c.get('channel_id')} -> {platform}")
 

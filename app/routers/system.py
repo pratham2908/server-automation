@@ -437,7 +437,5 @@ async def start_server(api_key: str = Depends(verify_api_key)):
     if not has_systemctl():
         return {"ok": False, "error": "Not supported on this OS"}
 
-    code, stdout, stderr = await run_shell_command(
-        ["sudo", "systemctl", "start", "automation-server"]
-    )
+    code, stdout, stderr = await run_shell_command(["sudo", "systemctl", "start", "automation-server"])
     return {"ok": code == 0, "message": "Start command executed", "output": stdout, "error": stderr}

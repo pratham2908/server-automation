@@ -40,7 +40,9 @@ async def _get_reply_config(db: AsyncIOMotorDatabase) -> dict[str, Any]:
             "max_videos_per_run": _DEFAULT_MAX_VIDEOS,
             "video_recency_days": _DEFAULT_RECENCY_DAYS,
         }
-    return doc
+    from typing import cast
+
+    return cast(dict[str, Any], doc)
 
 
 def _pick_template(templates: list[str]) -> str:
@@ -116,11 +118,7 @@ async def run_comment_reply_cycle(
             break
 
         stats["videos_processed"] += 1
-        platform_vid_id = (
-            video.get("youtube_video_id")
-            if platform == "youtube"
-            else video.get("instagram_media_id")
-        )
+        platform_vid_id = video.get("youtube_video_id") if platform == "youtube" else video.get("instagram_media_id")
         if not platform_vid_id:
             continue
 
@@ -145,9 +143,8 @@ async def run_comment_reply_cycle(
             if platform == "youtube":
                 if c.get("author_channel_id") == own_yt_channel_id:
                     continue
-            else:
-                if c.get("author", "").lower() == own_ig_username:
-                    continue
+            elif c.get("author", "").lower() == own_ig_username:
+                continue
             filtered.append(c)
 
         if not filtered:
@@ -161,11 +158,11 @@ async def run_comment_reply_cycle(
                 {"channel_id": channel_id, "comment_id": {"$in": comment_ids}},
                 {"comment_id": 1},
             ).to_list(length=None)
-            already_replied = {d["comment_id"] for d in existing}
+            from typing import cast
 
-        candidates = [
-            c for c in filtered if c.get("comment_id") and c["comment_id"] not in already_replied
-        ]
+            already_replied = {cast(str, d["comment_id"]) for d in existing}
+
+        candidates = [c for c in filtered if c.get("comment_id") and c["comment_id"] not in already_replied]
         if not candidates:
             continue
 
@@ -182,9 +179,7 @@ async def run_comment_reply_cycle(
                 stats["errors"] += 1
                 continue
 
-            sentiment_map = {
-                r["comment_id"]: r.get("sentiment", "") for r in results if isinstance(r, dict)
-            }
+            sentiment_map = {r["comment_id"]: r.get("sentiment", "") for r in results if isinstance(r, dict)}
             for c in batch:
                 sent = sentiment_map.get(c["comment_id"], "neutral")
                 sentiment_counts[sent] = sentiment_counts.get(sent, 0) + 1
@@ -192,11 +187,7 @@ async def run_comment_reply_cycle(
                     positive_comments.append(c)
                 else:
                     # Mark as skipped in DB to avoid re-analysis
-                    status_val = (
-                        f"skipped_{sent}"
-                        if sent in ("negative", "neutral", "spam")
-                        else "skipped_other"
-                    )
+                    status_val = f"skipped_{sent}" if sent in ("negative", "neutral", "spam") else "skipped_other"
                     await db.comment_replies.insert_one(
                         {
                             "channel_id": channel_id,

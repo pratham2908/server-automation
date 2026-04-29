@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Instagram Graph API service.
 
 Wraps the Instagram Graph API (accessed via Facebook) to fetch account
@@ -7,12 +5,16 @@ info, list reels, and retrieve per-reel insights.  Tokens are stored in
 the MongoDB ``channels`` collection and refreshed automatically.
 """
 
+from __future__ import annotations
+
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 import requests
 
 from app.logger import get_logger
+from app.services.metrics import metrics_service
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -35,9 +37,6 @@ class InstagramService:
         self._channel_id = channel_id
 
     def _get(self, endpoint: str, params: dict | None = None) -> dict:
-        import time
-
-        from app.services.metrics import metrics_service
 
         headers = {"Authorization": f"Bearer {self._token}"}
         start_time = time.time()
@@ -51,21 +50,23 @@ class InstagramService:
             duration = (time.time() - start_time) * 1000
 
             if not resp.ok:
-                metrics_service.record_external_call("instagram", duration, "error")
+                metrics_service.record_external_call("instagram", duration, False)
                 try:
                     error_data = resp.json()
                     logger.error("Instagram API GET failed (%d): %s", resp.status_code, error_data)
                 except Exception:
                     logger.error("Instagram API GET failed (%d): %s", resp.status_code, resp.text)
             else:
-                metrics_service.record_external_call("instagram", duration, "success")
+                metrics_service.record_external_call("instagram", duration, True)
 
             resp.raise_for_status()
-            return resp.json()
+            from typing import cast
+
+            return cast(dict, resp.json())
         except Exception as e:
             if not isinstance(e, requests.HTTPError):
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_external_call("instagram", duration, "error")
+                metrics_service.record_external_call("instagram", duration, False)
             raise e
 
     # ------------------------------------------------------------------
@@ -86,9 +87,7 @@ class InstagramService:
             "biography": data.get("biography", ""),
         }
 
-    def discover_business_account(
-        self, own_ig_user_id: str, target_username: str
-    ) -> dict[str, Any]:
+    def discover_business_account(self, own_ig_user_id: str, target_username: str) -> dict[str, Any]:
         """Fetch metadata for *any* Business/Creator account using Business Discovery.
 
         Requires an authenticated business account (own_ig_user_id) to perform
@@ -157,7 +156,7 @@ class InstagramService:
         """
         fields = "id,caption,media_type,media_url,timestamp,permalink,like_count,comments_count"
         reels: list[dict[str, Any]] = []
-        url = f"{ig_user_id}/media"
+        url: str | None = f"{ig_user_id}/media"
         params: dict = {"fields": fields, "limit": "100"}
 
         while url:
@@ -191,7 +190,7 @@ class InstagramService:
         """
         fields = "id,text,timestamp,like_count,username"
         comments: list[dict[str, Any]] = []
-        url = f"{media_id}/comments"
+        url: str | None = f"{media_id}/comments"
         params: dict = {"fields": fields, "limit": "100"}
 
         while url:
@@ -257,7 +256,9 @@ class InstagramService:
         Requires ``instagram_manage_comments`` permission.
         Returns the ID of the newly created reply.
         """
-        return self._post(f"{comment_id}/replies", {"message": message}).get("id", "")
+        from typing import cast
+
+        return cast(str, self._post(f"{comment_id}/replies", {"message": message}).get("id", ""))
 
     def get_reel_insights(self, media_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Fetch per-reel insights (views, reach, saved, shares).
@@ -303,21 +304,23 @@ class InstagramService:
             duration = (time.time() - start_time) * 1000
 
             if not resp.ok:
-                metrics_service.record_external_call("instagram", duration, "error")
+                metrics_service.record_external_call("instagram", duration, False)
                 try:
                     error_data = resp.json()
                     logger.error("Instagram API POST failed (%d): %s", resp.status_code, error_data)
                 except Exception:
                     logger.error("Instagram API POST failed (%d): %s", resp.status_code, resp.text)
             else:
-                metrics_service.record_external_call("instagram", duration, "success")
+                metrics_service.record_external_call("instagram", duration, True)
 
             resp.raise_for_status()
-            return resp.json()
+            from typing import cast
+
+            return cast(dict, resp.json())
         except Exception as e:
             if not isinstance(e, requests.HTTPError):
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_external_call("instagram", duration, "error")
+                metrics_service.record_external_call("instagram", duration, False)
             raise e
 
     def create_reel_container(
@@ -382,7 +385,9 @@ class InstagramService:
         ``"IN_PROGRESS"``, ``"ERROR"``).
         """
         data = self._get(container_id, {"fields": "status_code"})
-        return data.get("status_code", "UNKNOWN")
+        from typing import cast
+
+        return cast(str, data.get("status_code", "UNKNOWN"))
 
     def publish_container(self, ig_user_id: str, container_id: str) -> str:
         """Publish a processed container as a Reel.
@@ -395,7 +400,9 @@ class InstagramService:
         )
         media_id = data.get("id", "")
         logger.success("Published reel %s for IG user %s", media_id, ig_user_id)
-        return media_id
+        from typing import cast
+
+        return cast(str, media_id)
 
     def publish_reel(
         self,
@@ -426,9 +433,7 @@ class InstagramService:
                 raise RuntimeError(f"Instagram container {cid} processing failed")
             time.sleep(poll_interval)
         else:
-            raise TimeoutError(
-                f"Instagram container {cid} not ready after {max_polls * poll_interval}s"
-            )
+            raise TimeoutError(f"Instagram container {cid} not ready after {max_polls * poll_interval}s")
 
         return self.publish_container(ig_user_id, cid)
 
@@ -457,9 +462,7 @@ class InstagramService:
             new_token = data.get("access_token")
             if new_token and self._db is not None and self._channel_id:
                 expires_in = data.get("expires_in", 5184000)
-                expires_at = (
-                    datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-                ).isoformat()
+                expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
                 async def _save() -> None:
                     await self._db.channels.update_one(
@@ -476,7 +479,7 @@ class InstagramService:
                 await _save()
                 self._token = new_token
                 logger.info("Refreshed Instagram token for channel '%s'", self._channel_id)
-            return new_token
+            return cast(str, new_token)
         except Exception as exc:
             logger.warning("Instagram token refresh failed: %s", exc)
             return None

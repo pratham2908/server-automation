@@ -62,9 +62,7 @@ async def _fetch_competitor_video_metadata(
                 snippet_map: dict[str, dict] = {}
                 for i in range(0, len(video_ids), 50):
                     batch = video_ids[i : i + 50]
-                    resp = (
-                        service._youtube.videos().list(part="snippet", id=",".join(batch)).execute()
-                    )
+                    resp = service._youtube.videos().list(part="snippet", id=",".join(batch)).execute()
                     for item in resp.get("items", []):
                         snip = item.get("snippet", {})
                         snippet_map[item["id"]] = {
@@ -106,9 +104,7 @@ async def _fetch_competitor_video_metadata(
                 if not own_ig_id:
                     continue
 
-                raw_reels = service.discover_competitor_media(
-                    own_ig_id, ig_username, max_results=50
-                )
+                raw_reels = service.discover_competitor_media(own_ig_id, ig_username, max_results=50)
                 for rr in raw_reels:
                     caption = rr.get("caption", "") or ""
                     all_videos.append(
@@ -116,9 +112,7 @@ async def _fetch_competitor_video_metadata(
                             "platform_video_id": rr["id"],
                             "title": caption.split("\n")[0][:100] if caption else "Untitled",
                             "description": caption[:1000],
-                            "tags": [w.strip("#") for w in caption.split() if w.startswith("#")][
-                                :20
-                            ],
+                            "tags": [w.strip("#") for w in caption.split() if w.startswith("#")][:20],
                             "views": rr.get("views", 0),
                             "likes": rr.get("like_count", 0),
                             "comments": rr.get("comment_count", 0),
@@ -193,7 +187,7 @@ async def _extract_and_store(
     platform: str,
     db: AsyncIOMotorDatabase,
     gemini_service: GeminiService,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Extract intelligence from videos in batches and store results."""
     # Filter out videos already in the collection
     existing_ids = set()

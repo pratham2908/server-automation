@@ -4,7 +4,7 @@ import asyncio
 import tempfile
 import uuid
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -35,8 +35,8 @@ async def create_preview_analysis(
     channel_id: str,
     file: UploadFile = File(...),
     title: str = Form("Untitled"),
-    label: Optional[str] = Form(None),
-    previous_preview_id: Optional[str] = Form(None),
+    label: str | None = Form(None),
+    previous_preview_id: str | None = Form(None),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Upload a video for ephemeral retention prediction.
@@ -194,9 +194,7 @@ async def delete_preview_analysis(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Manually delete a preview analysis before its TTL expires."""
-    result = await db.preview_analysis.delete_one(
-        {"channel_id": channel_id, "preview_id": preview_id}
-    )
+    result = await db.preview_analysis.delete_one({"channel_id": channel_id, "preview_id": preview_id})
     if result.deleted_count == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

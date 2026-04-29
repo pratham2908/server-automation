@@ -24,9 +24,7 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
     github_repo = os.environ.get("GITHUB_REPO")  # Format: owner/repo
 
     if not github_token or not github_repo:
-        raise RuntimeError(
-            "GITHUB_TOKEN or GITHUB_REPO environment variables not set. Cannot trigger GitHub Action."
-        )
+        raise RuntimeError("GITHUB_TOKEN or GITHUB_REPO environment variables not set. Cannot trigger GitHub Action.")
 
     # Trigger the GitHub Action
     api_url = f"https://api.github.com/repos/{github_repo}/dispatches"
@@ -43,9 +41,7 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
     response = requests.post(api_url, headers=headers, json=data)
 
     if response.status_code != 204:
-        raise RuntimeError(
-            f"Failed to trigger GitHub Action: {response.status_code} {response.text}"
-        )
+        raise RuntimeError(f"Failed to trigger GitHub Action: {response.status_code} {response.text}")
 
     print("GitHub Action triggered successfully.")
 
@@ -54,9 +50,7 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
     return r2_key
 
 
-async def download_youtube_video_to_r2(
-    youtube_video_id: str, channel_id: str, r2_service: "R2Service"
-) -> str:
+async def download_youtube_video_to_r2(youtube_video_id: str, channel_id: str, r2_service: "R2Service") -> str:
     """Async wrapper to download a YouTube video and upload it straight to R2.
 
     Returns the R2 object key.

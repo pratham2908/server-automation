@@ -109,17 +109,21 @@ async def _upload_one_video(
         error_service = get_error_service(db)
         await error_service.log_error(
             feature="YouTube Uploader",
-            message=f"Failed to upload video '{video_doc.get('title', video_id)}' (Attempt {attempts}/{_MAX_UPLOAD_ATTEMPTS})",
+            message=(
+                f"Failed to upload video '{video_doc.get('title', video_id)}' "
+                f"(Attempt {attempts}/{_MAX_UPLOAD_ATTEMPTS})"
+            ),
             exception=e,
             context={"video_id": video_id, "channel_id": channel_id, "attempt": attempts},
         )
 
         if attempts >= _MAX_UPLOAD_ATTEMPTS:
             logger.error(
-                "YouTube uploader: giving up on video '%s' after %d attempts — resetting to 'ready'",
+                "YouTube uploader: giving up on video '%s' after %d attempts",
                 video_id,
                 _MAX_UPLOAD_ATTEMPTS,
             )
+
             now = now_ist()
             await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
             await db.videos.update_one(
@@ -133,9 +137,7 @@ async def _upload_one_video(
                 },
             )
             # Restore posting_queue entry so it can be re-scheduled
-            last = await db.posting_queue.find_one(
-                {"channel_id": channel_id}, sort=[("position", -1)]
-            )
+            last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
             next_pos = (last["position"] + 1) if last else 1
             await db.posting_queue.insert_one(
                 {
@@ -182,9 +184,7 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
         channel_doc = await db.channels.find_one({"channel_id": channel_id})
         if not channel_doc:
-            logger.warning(
-                "YouTube uploader: channel '%s' not found — removing stale entry", channel_id
-            )
+            logger.warning("YouTube uploader: channel '%s' not found — removing stale entry", channel_id)
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
             continue
 
@@ -195,9 +195,7 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
         video_doc = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video_doc:
-            logger.warning(
-                "YouTube uploader: video '%s' not found — removing stale entry", video_id
-            )
+            logger.warning("YouTube uploader: video '%s' not found — removing stale entry", video_id)
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
             continue
 

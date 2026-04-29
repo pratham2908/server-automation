@@ -64,17 +64,21 @@ class GeminiService:
                     timeout=90.0,
                 )
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, "success")
+                metrics_service.record_ai_call(model, duration, True)
                 logger.info(
                     "Gemini response from model '%s' (%.2fms)",
                     model,
                     duration,
                     extra={"color": "CYAN"},
                 )
-                return response.text
+                from typing import cast
+
+                return cast(str, response.text)
+
             except Exception as exc:
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, "error")
+                metrics_service.record_ai_call(model, duration, False)
+
                 last_error = exc
                 is_last = model == models_to_try[-1]
                 if is_last:
@@ -120,13 +124,14 @@ class GeminiService:
             (best_posting_times, category_analysis, content_param_analysis, best_combinations).
         """
         logger.info("Starting Gemini analysis for %d videos", len(video_data))
-        prompt = self._build_analysis_prompt(
-            video_data, previous_analysis, content_schema, platform
-        )
+        prompt = self._build_analysis_prompt(video_data, previous_analysis, content_schema, platform)
         text = await self._generate(prompt)
 
         try:
-            return json.loads(text)
+            from typing import cast
+
+            return cast(dict[str, Any], json.loads(text))
+
         except (json.JSONDecodeError, TypeError):
             logger.error("🚨 Failed to parse JSON from Gemini analysis response: %s", text)
             raise ValueError("Failed to parse Gemini analysis response")
@@ -153,7 +158,10 @@ class GeminiService:
         text = await self._generate(prompt)
 
         try:
-            return json.loads(text)
+            from typing import cast
+
+            return cast(dict[str, Any], json.loads(text))
+
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse Gemini per-video analysis response: %s", text)
             raise ValueError("Failed to parse Gemini per-video analysis response")
@@ -181,8 +189,11 @@ class GeminiService:
         text = await self._generate(prompt)
 
         try:
-            result = json.loads(text)
-            return result.get("topics", [])
+            from typing import cast
+
+            result = cast(dict[str, Any], json.loads(text))
+            return cast(list[dict[str, Any]], result.get("topics", []))
+
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse Gemini topic clustering response: %s", text)
             return []
@@ -383,9 +394,7 @@ Guidelines:
     ) -> str:
         """Build the prompt for strict semantic clustering of video titles."""
 
-        video_list_str = "\n".join(
-            [f"{i}: {v['title']} ({v.get('views', 0)} views)" for i, v in enumerate(videos)]
-        )
+        video_list_str = "\n".join([f"{i}: {v['title']} ({v.get('views', 0)} views)" for i, v in enumerate(videos)])
 
         return f"""You are an expert content strategist specializing in niche trend analysis. Your goal is to identify **Proven Content Concepts** by clustering similar videos into distinct topic groups.
 
@@ -544,9 +553,7 @@ Guidelines:
                     continue
                 param_name = schema_entry["name"]
                 unique_param_names.append(param_name)
-                used_values = sorted(
-                    {p[param_name] for p in existing_content_params if p.get(param_name)}
-                )
+                used_values = sorted({p[param_name] for p in existing_content_params if p.get(param_name)})
                 if used_values:
                     existing_section += (
                         f"\n\n## Already-Used `{param_name}` Values — DO NOT REPEAT\n"
@@ -578,7 +585,9 @@ Guidelines:
         if platform == "instagram":
             strategist = "top-tier Instagram Reels content strategist obsessed with virality, reach, saves, and shares"
         else:
-            strategist = "top-tier YouTube content strategist obsessed with virality, click-through rate, and watch time"
+            strategist = (
+                "top-tier YouTube content strategist obsessed with virality, click-through rate, and watch time"
+            )
 
         return f"""You are a {strategist}. Generate metadata for {count} completely distinct new videos in the "{category}" category.
 
@@ -643,24 +652,24 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
         from app.services.metrics import metrics_service
 
         uploaded_file = await self._client.aio.files.upload(file=video_path)
-        logger.info(
-            "Uploaded video to Gemini (name=%s, state=%s)", uploaded_file.name, uploaded_file.state
-        )
+        logger.info("Uploaded video to Gemini (name=%s, state=%s)", uploaded_file.name, uploaded_file.state)
 
         try:
             # Poll until the file is ACTIVE (processing complete)
             poll_count = 0
-            while uploaded_file.state.name == "PROCESSING":
+            while uploaded_file.state and uploaded_file.state.name == "PROCESSING":
                 poll_count += 1
                 if poll_count > 60:
                     raise TimeoutError("Gemini file processing exceeded 5-minute timeout")
                 await asyncio.sleep(5)
+                assert uploaded_file.name is not None
                 uploaded_file = await self._client.aio.files.get(name=uploaded_file.name)
 
-            if uploaded_file.state.name == "FAILED":
+            if uploaded_file.state and uploaded_file.state.name == "FAILED":
                 raise RuntimeError(f"Gemini file processing failed: {uploaded_file.state}")
 
-            logger.info("Gemini file ready (state=%s)", uploaded_file.state.name)
+            state_name = uploaded_file.state.name if uploaded_file.state else "UNKNOWN"
+            logger.info("Gemini file ready (state=%s)", state_name)
 
             last_error: Exception | None = None
             for model in self._MODEL_CHAIN:
@@ -677,17 +686,19 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                         timeout=180.0,
                     )
                     duration = (time.time() - start_time) * 1000
-                    metrics_service.record_ai_call(model, duration, "success")
+                    metrics_service.record_ai_call(model, duration, True)
                     logger.info(
                         "Gemini video analysis response from model '%s' (%.2fms)",
                         model,
                         duration,
                         extra={"color": "CYAN"},
                     )
-                    return response.text
+                    from typing import cast
+
+                    return cast(str, response.text)
                 except Exception as exc:
                     duration = (time.time() - start_time) * 1000
-                    metrics_service.record_ai_call(model, duration, "error")
+                    metrics_service.record_ai_call(model, duration, False)
                     last_error = exc
                     is_last = model == self._MODEL_CHAIN[-1]
                     if is_last:
@@ -700,10 +711,15 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                             exc,
                         )
 
-            raise last_error  # type: ignore[misc]
+            if last_error:
+                raise last_error
+            raise RuntimeError("Unknown error in Gemini video analysis")
+
         finally:
             try:
+                assert uploaded_file.name is not None
                 await self._client.aio.files.delete(name=uploaded_file.name)
+
                 logger.info("Deleted Gemini uploaded file %s", uploaded_file.name)
             except Exception as exc:
                 logger.warning("Failed to delete Gemini file %s: %s", uploaded_file.name, exc)
@@ -736,7 +752,10 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
         text = await self._generate_with_video(video_path, prompt)
 
         try:
-            return json.loads(text)
+            from typing import cast
+
+            return cast(dict[str, Any], json.loads(text))
+
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse Gemini video retention response: %s", text)
             raise ValueError("Failed to parse Gemini video retention analysis response")
@@ -864,10 +883,7 @@ Be thorough, objective, and data-driven. Predict the curve at 5% intervals exact
 
         Returns a list of ``{"comment_id": "...", "sentiment": "positive|negative|neutral|spam"}``.
         """
-        batch = [
-            {"comment_id": c["comment_id"], "text": c["text"], "author": c.get("author", "")}
-            for c in comments
-        ]
+        batch = [{"comment_id": c["comment_id"], "text": c["text"], "author": c.get("author", "")} for c in comments]
 
         prompt = f"""Classify the sentiment of each comment below.
 
@@ -889,7 +905,10 @@ Classify every comment. Do not skip any."""
 
         text = await self._generate(prompt)
         try:
-            return json.loads(text)
+            from typing import cast
+
+            return cast(list[dict[str, Any]], json.loads(text))
+
         except (json.JSONDecodeError, TypeError):
             return []
 
@@ -905,7 +924,9 @@ Classify every comment. Do not skip any."""
         Returns the raw reply string.
         """
         if platform == "instagram":
-            cta = "politely encourage them to follow for more reels like this or ask a question to drive more engagement"
+            cta = (
+                "politely encourage them to follow for more reels like this or ask a question to drive more engagement"
+            )
         else:
             cta = "politely encourage them to subscribe for more videos like this or ask a question to drive more engagement"
 
@@ -926,7 +947,9 @@ Return a JSON object:
         text = await self._generate(prompt)
         try:
             result = json.loads(text)
-            return result.get("reply", "")
+            from typing import cast
+
+            return cast(str, result.get("reply", ""))
         except (json.JSONDecodeError, TypeError):
             return ""
 
@@ -981,7 +1004,10 @@ Return a JSON object:
         text = await self._generate(prompt)
 
         try:
-            return json.loads(text)
+            from typing import cast
+
+            return cast(dict[str, Any], json.loads(text))
+
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse Gemini comment analysis response: %s", text)
             raise ValueError("Failed to parse Gemini comment analysis response")
@@ -1170,7 +1196,8 @@ Return a JSON object with exactly these keys:
                     timeout=90.0,
                 )
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, "success")
+                metrics_service.record_ai_call(model, duration, True)
+
                 logger.info(
                     "Gemini thumbnail analysis from '%s' (%.2fms)",
                     model,
@@ -1178,10 +1205,17 @@ Return a JSON object with exactly these keys:
                     extra={"color": "CYAN"},
                 )
 
-                return json.loads(response.text)
+                if response.text is None:
+                    raise ValueError("Gemini returned empty response text")
+
+                from typing import cast
+
+                return cast(dict[str, Any], json.loads(response.text))
+
             except Exception as exc:
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, "error")
+                metrics_service.record_ai_call(model, duration, False)
+
                 last_error = exc
                 is_last = model == self._MODEL_CHAIN[-1]
                 if is_last:
@@ -1212,7 +1246,9 @@ Return a JSON object with exactly these keys:
                 "Click-through rate (CTR) is the primary metric — the thumbnail must grab attention in under "
                 "1 second at small sizes (120px tall in mobile suggested)."
             )
-            aspect_note = "Aspect ratio context: 16:9 landscape. Must be readable at both full size and small mobile preview."
+            aspect_note = (
+                "Aspect ratio context: 16:9 landscape. Must be readable at both full size and small mobile preview."
+            )
 
         return f"""You are an elite Thumbnail Analyst and Visual CTR Specialist. Analyze this thumbnail image and provide a comprehensive quality and click-worthiness assessment.
 
@@ -1306,7 +1342,10 @@ Be thorough, specific, and ruthlessly honest. Generic feedback is useless."""
         text = await self._generate(prompt)
 
         try:
-            return json.loads(text)
+            from typing import cast
+
+            return cast(dict[str, Any], json.loads(text))
+
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse Gemini scorecard response: %s", text)
             raise ValueError("Failed to parse Gemini scorecard response")
@@ -1460,7 +1499,10 @@ Return a JSON array with one object per video:
 
         text = await self._generate(prompt)
         try:
-            return json.loads(text)
+            from typing import cast
+
+            return cast(list[dict[str, Any]], json.loads(text))
+
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse video intelligence extraction: %s", text[:500])
             return []
@@ -1554,7 +1596,10 @@ Return a JSON object:
 
         text = await self._generate(prompt)
         try:
-            return json.loads(text)
+            from typing import cast
+
+            return cast(dict[str, Any], json.loads(text))
+
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse content pattern comparison: %s", text[:500])
             raise ValueError("Failed to parse content pattern comparison response")

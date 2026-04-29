@@ -1,7 +1,7 @@
 """Analysis router – run analysis updates, retrieve results, compare periods."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -24,9 +24,7 @@ async def _get_services(channel_id: str):
     """Lazy import to avoid circular dependency."""
     from app.main import gemini_service, youtube_service_manager  # type: ignore[import]
 
-    youtube_service = (
-        await youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
-    )
+    youtube_service = await youtube_service_manager.get_service(channel_id) if youtube_service_manager else None
     return youtube_service, gemini_service
 
 
@@ -116,9 +114,7 @@ async def get_latest_analysis(
 
     # 2. Calculate analysis_status (ready/unverified/waiting)
     already_analysed_ids: set[str] = set()
-    async for v_doc in db.videos.find(
-        {"channel_id": channel_id, "performance": {"$ne": None}}, {"video_id": 1}
-    ):
+    async for v_doc in db.videos.find({"channel_id": channel_id, "performance": {"$ne": None}}, {"video_id": 1}):
         already_analysed_ids.add(v_doc["video_id"])
 
     now = now_ist()
@@ -189,9 +185,7 @@ async def delete_analysis(
     await db.analysis.delete_one({"channel_id": channel_id})
 
     # 2. Unset performance sub-docs in all videos
-    v_result = await db.videos.update_many(
-        {"channel_id": channel_id}, {"$unset": {"performance": ""}}
-    )
+    v_result = await db.videos.update_many({"channel_id": channel_id}, {"$unset": {"performance": ""}})
 
     # 3. Reset categories: score, video_count, video_ids, metadata
     cat_result = await db.categories.update_many(
@@ -208,9 +202,9 @@ async def delete_analysis(
     )
 
     # 4. Zero out content_params value scores and video counts
-    param_docs = await db.content_params.find(
-        {"channel_id": channel_id, "values.0": {"$exists": True}}
-    ).to_list(length=None)
+    param_docs = await db.content_params.find({"channel_id": channel_id, "values.0": {"$exists": True}}).to_list(
+        length=None
+    )
 
     for pdoc in param_docs:
         zeroed = [{"value": v["value"], "score": 0, "video_count": 0} for v in pdoc["values"]]
@@ -255,9 +249,7 @@ def _parse_datetime_ist(value: str) -> datetime:
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        raise ValueError(
-            f"Invalid date format: {value!r}. Use ISO 8601 e.g. 2026-02-08 or 2026-02-08T20:00:00"
-        )
+        raise ValueError(f"Invalid date format: {value!r}. Use ISO 8601 e.g. 2026-02-08 or 2026-02-08T20:00:00")
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=IST)
     else:
@@ -273,19 +265,17 @@ def _parse_datetime_ist(value: str) -> datetime:
 @router.get("/history")
 async def get_analysis_history(
     channel_id: str,
-    from_date: Optional[str] = Query(
+    from_date: str | None = Query(
         None,
         alias="from",
         description="Filter published_at >= this (IST). e.g. 2026-02-08 or 2026-02-08T20:00:00",
     ),
-    to_date: Optional[str] = Query(
+    to_date: str | None = Query(
         None,
         alias="to",
         description="Filter published_at <= this (IST). e.g. 2026-02-08 or 2026-02-08T23:59:59",
     ),
-    limit: Optional[int] = Query(
-        None, description="Max results; if omitted, returns entire history"
-    ),
+    limit: int | None = Query(None, description="Max results; if omitted, returns entire history"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Return per-video analyses for *channel_id*.
@@ -295,8 +285,8 @@ async def get_analysis_history(
     """
     query: dict[str, Any] = {"channel_id": channel_id}
 
-    from_dt: Optional[datetime] = None
-    to_dt: Optional[datetime] = None
+    from_dt: datetime | None = None
+    to_dt: datetime | None = None
     if from_date:
         try:
             from_dt = _parse_datetime_ist(from_date)
@@ -413,16 +403,9 @@ async def compare_periods(
             vals = [d.get("performance", {}).get("stats_snapshot", {}).get(key, 0) for d in docs]
             return round(sum(vals) / total, 2) if total else 0
 
-        total_subs = sum(
-            d.get("performance", {}).get("stats_snapshot", {}).get("subscribers_gained", 0)
-            for d in docs
-        )
+        total_subs = sum(d.get("performance", {}).get("stats_snapshot", {}).get("subscribers_gained", 0) for d in docs)
         avg_rating = round(
-            sum(
-                d.get("performance", {}).get("ai_insight", {}).get("performance_rating", 0)
-                for d in docs
-            )
-            / total,
+            sum(d.get("performance", {}).get("ai_insight", {}).get("performance_rating", 0) for d in docs) / total,
             1,
         )
 

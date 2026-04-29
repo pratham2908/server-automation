@@ -46,9 +46,7 @@ class PacingTemplateService:
 
         candidate_analyses = await cursor.to_list(length=100)
         if not candidate_analyses:
-            logger.info(
-                "No high-performing videos found for template discovery in channel %s", channel_id
-            )
+            logger.info("No high-performing videos found for template discovery in channel %s", channel_id)
             return []
 
         # 2. Group by narrative structure (or cluster)
@@ -166,18 +164,13 @@ class PacingTemplateService:
 
                     # Compute cosine similarity or MSE for density
                     mse = (
-                        sum(
-                            (a - b) ** 2
-                            for a, b in zip(current_density, t.cut_density_distribution)
-                        )
+                        sum((a - b) ** 2 for a, b in zip(current_density, t.cut_density_distribution, strict=False))
                         / 10
                     )
                     density_score = max(0, 100 * (1 - (mse * 5)))  # Heuristic scaling
 
             # Final match score
-            total_match_score = int(
-                (interval_score * 0.4) + (pacing_score_match * 0.3) + (density_score * 0.3)
-            )
+            total_match_score = int((interval_score * 0.4) + (pacing_score_match * 0.3) + (density_score * 0.3))
 
             if total_match_score > 50:  # Only return decent matches
                 deviations = []
@@ -187,14 +180,10 @@ class PacingTemplateService:
                     deviations.append(
                         f"Cuts are significantly slower than {t.name} (avg {analysis.avg_cut_interval_seconds:.1f}s vs target {t.target_avg_cut_interval:.1f}s)"
                     )
-                    recommendations.append(
-                        f"Increase cut frequency to match the energetic {t.name} style."
-                    )
+                    recommendations.append(f"Increase cut frequency to match the energetic {t.name} style.")
                 elif analysis.avg_cut_interval_seconds < t.target_avg_cut_interval * 0.5:
                     deviations.append(f"Cuts are much faster than {t.name}")
-                    recommendations.append(
-                        "Consider slowing down the pacing to allow viewers to digest the content."
-                    )
+                    recommendations.append("Consider slowing down the pacing to allow viewers to digest the content.")
 
                 matches.append(
                     PacingMatch(

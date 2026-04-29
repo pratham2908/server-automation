@@ -1,6 +1,6 @@
 """Sync-analysis pipeline router -- config API and manual trigger."""
 
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -58,11 +58,9 @@ async def get_auto_pipeline_config(
 
 
 class AutoPipelineConfigUpdate(BaseModel):
-    enabled: Optional[bool] = Field(None, description="Enable or disable the auto-sync cron")
-    interval_hours: Optional[int] = Field(None, ge=1, le=168, description="Sync interval in hours")
-    analysis_threshold: Optional[int] = Field(
-        None, ge=1, le=50, description="Min unanalyzed videos to trigger analysis"
-    )
+    enabled: bool | None = Field(None, description="Enable or disable the auto-sync cron")
+    interval_hours: int | None = Field(None, ge=1, le=168, description="Sync interval in hours")
+    analysis_threshold: int | None = Field(None, ge=1, le=50, description="Min unanalyzed videos to trigger analysis")
 
 
 @config_router.put("/")
@@ -98,7 +96,6 @@ async def update_auto_pipeline_config(
     return {"ok": True, **(doc or {})}
 
 
-
 # ------------------------------------------------------------------
 # POST /sync-analysis/trigger  --  manually run one cycle
 # ------------------------------------------------------------------
@@ -106,7 +103,7 @@ async def update_auto_pipeline_config(
 
 @trigger_router.post("/trigger")
 async def trigger_sync_analysis(
-    channel_id: Optional[str] = Query(None, description="Restrict to a single channel"),
+    channel_id: str | None = Query(None, description="Restrict to a single channel"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Manually trigger a sync + analysis cycle.

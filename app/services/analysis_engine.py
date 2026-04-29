@@ -92,9 +92,7 @@ async def run_analysis(
     ).to_list(length=None)
 
     already_analysed_ids: set[str] = set()
-    async for v_doc in db.videos.find(
-        {"channel_id": channel_id, "performance": {"$ne": None}}, {"video_id": 1}
-    ):
+    async for v_doc in db.videos.find({"channel_id": channel_id, "performance": {"$ne": None}}, {"video_id": 1}):
         already_analysed_ids.add(v_doc["video_id"])
 
     new_videos = [v for v in done_videos if v["video_id"] not in already_analysed_ids]
@@ -199,9 +197,7 @@ async def run_analysis(
 
         stats["subscriber_count_at_analysis"] = subscriber_count
         views = stats.get("views", 0) or 0
-        stats["views_per_subscriber"] = (
-            round(views / subscriber_count, 4) if subscriber_count > 0 else 0
-        )
+        stats["views_per_subscriber"] = round(views / subscriber_count, 4) if subscriber_count > 0 else 0
 
         curve = {}
         if platform == "youtube" and youtube_service and v.get("youtube_video_id"):
@@ -217,13 +213,9 @@ async def run_analysis(
 
         # Call Gemini for per-video analysis
         try:
-            ai_insight = await gemini_service.analyze_single_video(
-                video_data_for_gemini, platform=platform
-            )
+            ai_insight = await gemini_service.analyze_single_video(video_data_for_gemini, platform=platform)
         except Exception as exc:
-            logger.warning(
-                "Gemini per-video analysis failed for '%s': %s", v.get("title", v["video_id"]), exc
-            )
+            logger.warning("Gemini per-video analysis failed for '%s': %s", v.get("title", v["video_id"]), exc)
             ai_insight = {
                 "performance_rating": 0,
                 "what_worked": "Analysis failed",
@@ -268,21 +260,15 @@ async def run_analysis(
                 {"channel_id": channel_id, "video_id": v["video_id"]},
                 {
                     "$set": {
-                        "retention.actual_avg_percentage_viewed": stats.get(
-                            "avg_percentage_viewed"
-                        ),
+                        "retention.actual_avg_percentage_viewed": stats.get("avg_percentage_viewed"),
                         "retention.actual_engagement_rate": stats.get("engagement_rate"),
                         "retention.actual_views": stats.get("views"),
                         "retention.actual_like_rate": stats.get("like_rate"),
                         "retention.actual_comment_rate": stats.get("comment_rate"),
                         "retention.actual_views_per_subscriber": stats.get("views_per_subscriber"),
-                        "retention.actual_performance_rating": (ai_insight or {}).get(
-                            "performance_rating"
-                        ),
+                        "retention.actual_performance_rating": (ai_insight or {}).get("performance_rating"),
                         "retention.actual_stats_snapshot": stats,
-                        "retention.actual_retention_curve": {
-                            str(k): v_curve for k, v_curve in (curve or {}).items()
-                        },
+                        "retention.actual_retention_curve": {str(k): v_curve for k, v_curve in (curve or {}).items()},
                         "retention.actuals_populated_at": now_ist(),
                         "retention.updated_at": now_ist(),
                     }
@@ -299,9 +285,7 @@ async def run_analysis(
     # ------------------------------------------------------------------
     # Step 2: Channel summary
     # ------------------------------------------------------------------
-    all_per_video = await db.videos.find(
-        {"channel_id": channel_id, "performance": {"$ne": None}}
-    ).to_list(length=None)
+    all_per_video = await db.videos.find({"channel_id": channel_id, "performance": {"$ne": None}}).to_list(length=None)
 
     if not all_per_video:
         return {}
@@ -404,10 +388,14 @@ async def run_analysis(
     saved = await db.analysis.find_one({"channel_id": channel_id})
     if saved:
         saved.pop("_id", None)
-        return saved
+        from typing import cast
+
+        return cast(dict[str, Any], saved)
 
     analysis_doc.pop("_id", None)
-    return analysis_doc
+    from typing import cast
+
+    return cast(dict[str, Any], analysis_doc)
 
 
 async def _update_content_param_scores(
@@ -421,9 +409,9 @@ async def _update_content_param_scores(
     params are skipped).  If an analysed video uses a value that isn't
     already tracked, the value is auto-added with its computed score.
     """
-    param_docs = await db.content_params.find(
-        {"channel_id": channel_id, "values.0": {"$exists": True}}
-    ).to_list(length=None)
+    param_docs = await db.content_params.find({"channel_id": channel_id, "values.0": {"$exists": True}}).to_list(
+        length=None
+    )
 
     if not param_docs:
         return

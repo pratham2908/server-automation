@@ -1,7 +1,5 @@
 """Retention analysis router — video retention prediction endpoints."""
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -26,7 +24,7 @@ router = APIRouter(
 @router.get("/history")
 async def list_retention_analyses(
     channel_id: str,
-    status_filter: Optional[str] = Query(
+    status_filter: str | None = Query(
         None, alias="status", description="Filter by status: pending, analyzing, completed, failed"
     ),
     limit: int = Query(50, ge=1, le=200),
@@ -133,9 +131,7 @@ async def trigger_retention_analysis(
             detail="Services not initialised",
         )
 
-    asyncio.create_task(
-        run_retention_analysis(channel_id, video_id, db, r2_service, gemini_service)
-    )
+    asyncio.create_task(run_retention_analysis(channel_id, video_id, db, r2_service, gemini_service))
 
     return {
         "ok": True,
@@ -156,9 +152,7 @@ async def delete_retention_analysis(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Delete the retention analysis for a specific video."""
-    result = await db.videos.update_one(
-        {"channel_id": channel_id, "video_id": video_id}, {"$unset": {"retention": ""}}
-    )
+    result = await db.videos.update_one({"channel_id": channel_id, "video_id": video_id}, {"$unset": {"retention": ""}})
     if result.modified_count == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -215,9 +209,7 @@ async def delete_pacing_template(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Delete a specific pacing template."""
-    result = await db.pacing_templates.delete_one(
-        {"channel_id": channel_id, "template_id": template_id}
-    )
+    result = await db.pacing_templates.delete_one({"channel_id": channel_id, "template_id": template_id})
     if result.deleted_count == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

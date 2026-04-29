@@ -32,9 +32,7 @@ class DiscoveryService:
         """Fetch competitor videos, cluster them into topics, and aggregate stats."""
 
         # 1. Fetch competitors
-        competitors = await self._db.competitors.find({"channel_id": channel_id}).to_list(
-            length=None
-        )
+        competitors = await self._db.competitors.find({"channel_id": channel_id}).to_list(length=None)
         if not competitors:
             logger.info("No competitors found for channel '%s'", channel_id)
             return TopicDiscoveryResult(channel_id=channel_id, topics=[])
@@ -53,9 +51,7 @@ class DiscoveryService:
 
         # 3. Cluster via Gemini
         # We only pass title and views to Gemini for clustering
-        cluster_input = [
-            {"video_id": v.video_id, "title": v.title, "views": v.views} for v in all_videos
-        ]
+        cluster_input = [{"video_id": v.video_id, "title": v.title, "views": v.views} for v in all_videos]
 
         # Determine platform based on the parent channel (or just use 'youtube' as default for clustering)
         parent_channel = await self._db.channels.find_one({"channel_id": channel_id})
@@ -77,9 +73,7 @@ class DiscoveryService:
                 logger.info("Skipping done topic: %s", topic_name)
                 continue
 
-            topic_videos = [
-                all_videos[idx] for idx in c.get("video_indices", []) if idx < len(all_videos)
-            ]
+            topic_videos = [all_videos[idx] for idx in c.get("video_indices", []) if idx < len(all_videos)]
             if not topic_videos:
                 continue
 
@@ -105,17 +99,12 @@ class DiscoveryService:
                 )
             )
 
-            # Persist to DB (optional, but good for caching)
-            # We'll handle persistence in the router or here
-
         # Sort by total views descending
         topics.sort(key=lambda x: x.total_views, reverse=True)
 
         return TopicDiscoveryResult(channel_id=channel_id, topics=topics)
 
-    async def _fetch_competitor_videos(
-        self, parent_channel_id: str, competitor: dict
-    ) -> list[CompetitorVideoRef]:
+    async def _fetch_competitor_videos(self, parent_channel_id: str, competitor: dict) -> list[CompetitorVideoRef]:
         """Fetch and wrap videos from a single competitor."""
         platform = competitor.get("platform", "youtube")
         comp_name = competitor.get("name", "Unknown")
@@ -129,15 +118,15 @@ class DiscoveryService:
                     return []
 
                 # We use the parent channel's service to fetch public data about the competitor
-                service = await self._youtube_manager.get_service(parent_channel_id)
-                if not service:
+                yt_service = await self._youtube_manager.get_service(parent_channel_id)
+                if not yt_service:
                     return []
 
-                raw_vids = service.get_channel_latest_videos(yt_id, max_results=50)
+                raw_vids = yt_service.get_channel_latest_videos(yt_id, max_results=50)
 
                 # Fetch more stats (views/likes) for these videos to find the "proven" ones
                 video_ids = [v["video_id"] for v in raw_vids]
-                stats_map = service.get_video_stats(video_ids)
+                stats_map = yt_service.get_video_stats(video_ids)
 
                 for rv in raw_vids:
                     vid_stats = stats_map.get(rv["video_id"], {})
@@ -160,8 +149,8 @@ class DiscoveryService:
                 if not ig_username:
                     return []
 
-                service = await self._instagram_manager.get_service(parent_channel_id)
-                if not service:
+                ig_service = await self._instagram_manager.get_service(parent_channel_id)
+                if not ig_service:
                     return []
 
                 parent_channel = await self._db.channels.find_one({"channel_id": parent_channel_id})
@@ -169,9 +158,7 @@ class DiscoveryService:
                 if not own_ig_id:
                     return []
 
-                raw_reels = service.discover_competitor_media(
-                    own_ig_id, ig_username, max_results=50
-                )
+                raw_reels = ig_service.discover_competitor_media(own_ig_id, ig_username, max_results=50)
                 for rr in raw_reels:
                     videos.append(
                         CompetitorVideoRef(
@@ -188,8 +175,6 @@ class DiscoveryService:
                     )
 
         except Exception as exc:
-            logger.error(
-                "Failed to fetch videos for competitor '%s' (%s): %s", comp_name, platform, exc
-            )
+            logger.error("Failed to fetch videos for competitor '%s' (%s): %s", comp_name, platform, exc)
 
         return videos

@@ -22,6 +22,7 @@ from app.services.schedule_operation import (
     enqueue_video_for_youtube,
     schedule_single_video_instagram,
 )
+from app.services.video_service import VideoService
 from app.timezone import now_ist, to_ist_iso
 
 logger = get_logger(__name__)
@@ -39,8 +40,7 @@ async def _refresh_last_video_stats(
 
     Returns the updated view count.
     """
-    from app.services.video_service import VideoService
-    import app.main as main_mod
+    import app.main as main_mod  # noqa: PLC0415
 
     assert main_mod.r2_service is not None
     service = VideoService(
@@ -51,11 +51,8 @@ async def _refresh_last_video_stats(
         instagram_manager=main_mod.instagram_service_manager,
     )
 
-
     video_id = video_doc["video_id"]
-    logger.info(
-        "Velocity Booster: refreshing stats for last video '%s' (channel: %s)", video_id, channel_id
-    )
+    logger.info("Velocity Booster: refreshing stats for last video '%s' (channel: %s)", video_id, channel_id)
 
     try:
         # We use the existing sync_videos logic which handles both platforms
@@ -65,8 +62,9 @@ async def _refresh_last_video_stats(
 
         # Re-fetch the updated video doc
         updated_doc = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        views = (updated_doc.get("metadata", {}) or {}).get("views", 0)
+        views = (updated_doc.get("metadata", {}) or {}).get("views", 0) if updated_doc else 0
         return views or 0
+
     except Exception as e:
         logger.error("Velocity Booster: failed to refresh stats for video %s: %s", video_id, e)
         # Fallback to current DB value
@@ -95,9 +93,7 @@ async def process_velocity_booster_for_channel(
     )
 
     if not last_published:
-        logger.info(
-            "Velocity Booster: no published videos found for channel '%s' — skipping", channel_id
-        )
+        logger.info("Velocity Booster: no published videos found for channel '%s' — skipping", channel_id)
         return
 
     published_at = last_published.get("published_at")
@@ -106,6 +102,7 @@ async def process_velocity_booster_for_channel(
 
     now = now_ist()
     time_since_upload = now - published_at
+    diff_hours = time_since_upload.total_seconds() / 3600
 
     if time_since_upload < timedelta(hours=min_hours):
         logger.info(
@@ -132,16 +129,14 @@ async def process_velocity_booster_for_channel(
         "Velocity Booster TRIGGERED for '%s': last video has only %d views after %s. Boosting pace!",
         channel_id,
         views,
-        time_since_upload,
+        f"{int(diff_hours)}h",
     )
 
     # 3. Pull next video from posting queue
     next_up = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", 1)])
 
     if not next_up:
-        logger.error(
-            "Velocity Booster: TRIGGERED but posting_queue is empty for channel '%s'!", channel_id
-        )
+        logger.error("Velocity Booster: TRIGGERED but posting_queue is empty for channel '%s'!", channel_id)
         return
 
     video_id = next_up["video_id"]
@@ -178,9 +173,7 @@ async def process_velocity_booster_for_channel(
         await update_channel_task_status(db, channel_id, "velocity_booster")
 
     except Exception:
-        logger.exception(
-            "Velocity Booster: failed to schedule boost video for channel %s", channel_id
-        )
+        logger.exception("Velocity Booster: failed to schedule boost video for channel %s", channel_id)
 
 
 async def run_velocity_booster(
@@ -195,9 +188,7 @@ async def run_velocity_booster(
     while True:
         try:
             # We process all channels that have the automation enabled
-            channels = await db.channels.find(
-                {"automation_config.velocity_booster.enabled": True}
-            ).to_list(length=None)
+            channels = await db.channels.find({"automation_config.velocity_booster.enabled": True}).to_list(length=None)
 
             if channels:
                 logger.info("Velocity Booster: checking %d enabled channel(s)", len(channels))

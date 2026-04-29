@@ -191,9 +191,7 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
 
         channel_doc = await db.channels.find_one({"channel_id": channel_id})
         if not channel_doc:
-            logger.warning(
-                "Auto-publisher: channel '%s' not found — removing queue entry", channel_id
-            )
+            logger.warning("Auto-publisher: channel '%s' not found — removing queue entry", channel_id)
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
             continue
 

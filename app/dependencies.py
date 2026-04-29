@@ -39,9 +39,7 @@ async def verify_api_key(request: Request, x_api_key: str = Header(None)) -> str
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
-async def get_current_profile(
-    token: str = Depends(oauth2_scheme), db=Depends(get_db)
-) -> ProfileInDB:
+async def get_current_profile(token: str = Depends(oauth2_scheme), db=Depends(get_db)) -> ProfileInDB:
     settings = get_settings()
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -52,7 +50,10 @@ async def get_current_profile(
 
     try:
         payload = jwt.decode(token, settings.API_KEY, algorithms=[ALGORITHM])
-        profile_id: str = payload.get("sub")
+        from typing import cast
+
+        profile_id = cast(str, payload.get("sub"))
+
         if profile_id is None:
             raise credentials_exception
     except InvalidTokenError:

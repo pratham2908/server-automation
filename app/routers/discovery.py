@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 import app.main as main_app
@@ -51,9 +49,7 @@ async def trigger_discovery_scan(
     result = await service.discover_proven_ideas(channel_id)
 
     # Persist the latest result
-    await db.discovery_results.replace_one(
-        {"channel_id": channel_id}, result.model_dump(), upsert=True
-    )
+    await db.discovery_results.replace_one({"channel_id": channel_id}, result.model_dump(), upsert=True)
 
     return result
 

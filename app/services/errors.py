@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import traceback
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -22,8 +22,8 @@ class ErrorService:
         self,
         feature: str,
         message: str,
-        exception: Optional[Exception] = None,
-        context: Optional[Dict[str, Any]] = None,
+        exception: Exception | None = None,
+        context: dict[str, Any] | None = None,
     ):
         """
         Log an error to the database.
@@ -37,9 +37,7 @@ class ErrorService:
         try:
             stack_trace = None
             if exception:
-                stack_trace = "".join(
-                    traceback.format_exception(type(exception), exception, exception.__traceback__)
-                )
+                stack_trace = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
 
             now = now_ist()
             # Group errors by feature, message, and unresolved status
@@ -68,7 +66,7 @@ class ErrorService:
 
 
 # Singleton-like access if needed, though usually injected via FastAPI dependencies
-_error_service: Optional[ErrorService] = None
+_error_service: ErrorService | None = None
 
 
 def get_error_service(db: AsyncIOMotorDatabase) -> ErrorService:

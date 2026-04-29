@@ -1,7 +1,7 @@
 """Videos router – refactored to use VideoService."""
 
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -56,27 +56,27 @@ class CategoryChangeRequest(BaseModel):
 class RepostRequest(BaseModel):
     title: str = Field(..., description="New title for the reposted video")
     description: str = Field("", description="New description")
-    tags: List[str] = Field(default_factory=list, description="New tags")
-    scheduled_at: Optional[datetime] = Field(None)
-    target_channel_id: Optional[str] = Field(None)
+    tags: list[str] = Field(default_factory=list, description="New tags")
+    scheduled_at: datetime | None = Field(None)
+    target_channel_id: str | None = Field(None)
     instant: bool = Field(False)
 
 
 class ScheduleRequest(BaseModel):
-    scheduled_at: Optional[datetime] = None
+    scheduled_at: datetime | None = None
 
 
 class SyncRequest(BaseModel):
-    new_category_description: Optional[str] = None
+    new_category_description: str | None = None
 
 
 class MetadataUpdateRequest(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    tags: Optional[List[str]] = None
-    tag_mode: Optional[str] = "replace"
-    category: Optional[str] = None
-    thumbnail_url: Optional[str] = None
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    tag_mode: str | None = "replace"
+    category: str | None = None
+    thumbnail_url: str | None = None
 
 
 # --- Endpoints ---
@@ -85,9 +85,9 @@ class MetadataUpdateRequest(BaseModel):
 @router.get("/")
 async def list_videos(
     channel_id: str,
-    status_filter: Optional[str] = None,
-    verification_status: Optional[str] = None,
-    suggest_n: Optional[int] = None,
+    status_filter: str | None = None,
+    verification_status: str | None = None,
+    suggest_n: int | None = None,
     service: VideoService = Depends(get_video_service),
 ):
     """Return videos for *channel_id*."""
@@ -122,9 +122,7 @@ async def change_video_category(
 ):
     """Move a video from one category to another."""
     try:
-        return await service.change_video_category(
-            channel_id, video_id, body.old_category_id, body.new_category_id
-        )
+        return await service.change_video_category(channel_id, video_id, body.old_category_id, body.new_category_id)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -159,9 +157,7 @@ async def extract_content_params(
 async def verify_video(
     channel_id: str,
     video_id: str,
-    body: Optional[
-        Any
-    ] = None,  # Simplified for brevity, service handles the actual verification status update
+    body: Any | None = None,  # Simplified for brevity, service handles the actual verification status update
     service: VideoService = Depends(get_video_service),
 ):
     """Mark a video as verified."""
@@ -188,9 +184,7 @@ async def upload_video(
 
     # I'll quickly fix the service to include upload_video.
     # Actually, I'll just put it in the service now.
-    return await service.create_video(
-        channel_id, file.file, "Uploaded Video", category="Uncategorized"
-    )
+    return await service.create_video(channel_id, file.file, "Uploaded Video", category="Uncategorized")
 
 
 @router.post("/create", status_code=status.HTTP_201_CREATED)
@@ -200,9 +194,9 @@ async def create_video(
     title: str = Form(...),
     description: str = Form(""),
     tags: str = Form(""),
-    category: Optional[str] = Form(None),
-    content_params: Optional[str] = Form(None),
-    scheduled_at: Optional[str] = Form(None),
+    category: str | None = Form(None),
+    content_params: str | None = Form(None),
+    scheduled_at: str | None = Form(None),
     service: VideoService = Depends(get_video_service),
 ):
     """Create an ad-hoc video."""
@@ -218,14 +212,12 @@ async def create_video(
 async def schedule_video(
     channel_id: str,
     video_id: str,
-    body: Optional[ScheduleRequest] = None,
+    body: ScheduleRequest | None = None,
     service: VideoService = Depends(get_video_service),
 ):
     """Schedule video(s) on the platform."""
     try:
-        return await service.schedule_video(
-            channel_id, video_id, body.scheduled_at if body else None
-        )
+        return await service.schedule_video(channel_id, video_id, body.scheduled_at if body else None)
     except Exception as e:
         error_service = get_error_service(service.db)
         await error_service.log_error(
@@ -280,14 +272,12 @@ async def update_video_metadata(
 @router.post("/sync")
 async def sync_videos(
     channel_id: str,
-    body: Optional[SyncRequest] = None,
+    body: SyncRequest | None = None,
     service: VideoService = Depends(get_video_service),
 ):
     """Sync videos from the appropriate platform."""
     try:
-        return await service.sync_videos(
-            channel_id, body.new_category_description if body else None
-        )
+        return await service.sync_videos(channel_id, body.new_category_description if body else None)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 

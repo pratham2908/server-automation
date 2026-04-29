@@ -1,7 +1,5 @@
 """Application settings loaded from environment variables via pydantic-settings."""
 
-from typing import Optional
-
 from pydantic_settings import BaseSettings
 
 
@@ -30,12 +28,12 @@ class Settings(BaseSettings):
     GOOGLE_CLOUD_LOCATION: str = "global"
 
     # YouTube (optional — prefer DB config collection; kept for backward compat)
-    YOUTUBE_CLIENT_ID: Optional[str] = None
-    YOUTUBE_CLIENT_SECRET: Optional[str] = None
+    YOUTUBE_CLIENT_ID: str | None = None
+    YOUTUBE_CLIENT_SECRET: str | None = None
 
     # Instagram / Facebook (optional — prefer DB config collection)
-    INSTAGRAM_APP_ID: Optional[str] = None
-    INSTAGRAM_APP_SECRET: Optional[str] = None
+    INSTAGRAM_APP_ID: str | None = None
+    INSTAGRAM_APP_SECRET: str | None = None
 
     # Scheduling
     TIMEZONE: str = "Asia/Kolkata"

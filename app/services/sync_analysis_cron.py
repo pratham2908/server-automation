@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Background cron loop for automated video sync + analysis.
 
 Runs every N hours (default 12, configurable via ``sync_analysis_config``
@@ -13,6 +11,8 @@ in the ``config`` collection).  For each channel it:
 Follows the same ``asyncio.create_task`` pattern as the other crons.
 """
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 
@@ -23,6 +23,8 @@ from app.database import get_channel_platform, update_channel_task_status
 from app.logger import get_logger
 from app.services.analysis_engine import run_analysis
 from app.services.gemini import GeminiService
+from app.services.metrics import metrics_service
+from app.services.video_service import VideoService
 
 logger = get_logger(__name__)
 
@@ -64,8 +66,8 @@ async def run_sync_analysis_for_channel(
 
     Returns a summary dict with sync and analysis results.
     """
-    from app.services.video_service import VideoService
-    import app.main as main_mod
+    import app.main as main_mod  # noqa: PLC0415
+
 
     assert main_mod.r2_service is not None
     service = VideoService(
@@ -75,7 +77,6 @@ async def run_sync_analysis_for_channel(
         youtube_manager=youtube_service_manager,
         instagram_manager=instagram_service_manager,
     )
-
 
     platform = get_channel_platform(channel)
     result: dict[str, Any] = {
@@ -187,7 +188,6 @@ async def run_sync_analysis_cron(
             logger.info("Sync-analysis cron: disabled via config — skipping this cycle")
             continue
 
-        from app.services.metrics import metrics_service
 
         try:
             metrics_service.track_task_start("sync_analysis")

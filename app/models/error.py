@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -14,8 +14,8 @@ class ErrorEntry(BaseModel):
     id: str = Field(..., alias="_id")
     feature: str
     message: str
-    stack_trace: Optional[str] = None
-    context: Dict[str, Any] = Field(default_factory=dict)
+    stack_trace: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=now_ist)
     last_occurred_at: datetime = Field(default_factory=now_ist)
     count: int = 1
@@ -27,8 +27,8 @@ class ErrorCreate(BaseModel):
 
     feature: str
     message: str
-    stack_trace: Optional[str] = None
-    context: Dict[str, Any] = Field(default_factory=dict)
+    stack_trace: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ErrorUpdate(BaseModel):

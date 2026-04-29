@@ -4,7 +4,7 @@ import asyncio
 import tempfile
 import uuid
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -45,8 +45,8 @@ async def create_thumbnail_analysis(
     channel_id: str,
     file: UploadFile = File(...),
     title: str = Form("Untitled"),
-    label: Optional[str] = Form(None),
-    previous_analysis_id: Optional[str] = Form(None),
+    label: str | None = Form(None),
+    previous_analysis_id: str | None = Form(None),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Upload a thumbnail image for ephemeral quality/CTR analysis.
@@ -112,12 +112,12 @@ async def create_thumbnail_analysis(
 
     asyncio.create_task(
         run_thumbnail_analysis(
-            analysis_id,
-            tmp_path,
-            title,
-            platform,
-            db,
-            main_mod.gemini_service,
+            analysis_id=analysis_id,
+            image_path=tmp_path,
+            title=title,
+            platform=platform,
+            db=db,
+            gemini_service=main_mod.gemini_service,
         )
     )
 
@@ -138,8 +138,8 @@ async def create_thumbnail_analysis(
 async def create_video_thumbnail_analysis(
     channel_id: str,
     video_id: str,
-    label: Optional[str] = Query(None),
-    previous_analysis_id: Optional[str] = Query(None),
+    label: str | None = Query(None),
+    previous_analysis_id: str | None = Query(None),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Fetch and analyze the thumbnail of an existing video.
@@ -232,12 +232,12 @@ async def create_video_thumbnail_analysis(
 
     asyncio.create_task(
         run_thumbnail_analysis(
-            analysis_id,
-            tmp_path,
-            title,
-            platform,
-            db,
-            main_mod.gemini_service,
+            analysis_id=analysis_id,
+            image_path=tmp_path,
+            title=title,
+            platform=platform,
+            db=db,
+            gemini_service=main_mod.gemini_service,
         )
     )
 
@@ -267,9 +267,7 @@ async def get_thumbnail_analysis(
     analysis still exists, a ``version_comparison`` object is computed
     showing score deltas.
     """
-    doc = await db.thumbnail_analysis.find_one(
-        {"channel_id": channel_id, "analysis_id": analysis_id}
-    )
+    doc = await db.thumbnail_analysis.find_one({"channel_id": channel_id, "analysis_id": analysis_id})
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -328,9 +326,7 @@ async def delete_thumbnail_analysis(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Manually delete a thumbnail analysis before its TTL expires."""
-    result = await db.thumbnail_analysis.delete_one(
-        {"channel_id": channel_id, "analysis_id": analysis_id}
-    )
+    result = await db.thumbnail_analysis.delete_one({"channel_id": channel_id, "analysis_id": analysis_id})
     if result.deleted_count == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

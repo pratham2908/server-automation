@@ -34,9 +34,7 @@ async def _gather_retention_signal(
         "pacing_score": (a.get("pacing_analysis") or {}).get("pacing_score"),
         "avg_cut_interval": (a.get("pacing_analysis") or {}).get("avg_cut_interval_seconds"),
         "drop_off_count": len(a.get("predicted_drop_off_points", [])),
-        "top_drop_off": (
-            a["predicted_drop_off_points"][0] if a.get("predicted_drop_off_points") else None
-        ),
+        "top_drop_off": (a["predicted_drop_off_points"][0] if a.get("predicted_drop_off_points") else None),
         "strengths": a.get("strengths", []),
         "weaknesses": a.get("weaknesses", []),
     }
@@ -97,9 +95,7 @@ def _build_content_alignment_signal(
     video_category = video.get("category", "")
     video_params = video.get("content_params") or {}
 
-    cat_scores = {
-        c["category"]: c.get("score", 0) for c in channel_patterns.get("category_analysis", [])
-    }
+    cat_scores = {c["category"]: c.get("score", 0) for c in channel_patterns.get("category_analysis", [])}
 
     param_analysis = channel_patterns.get("content_param_analysis", [])
     param_best = {p["param_name"]: p.get("best_values", []) for p in param_analysis}
@@ -166,9 +162,7 @@ async def generate_scorecard(
     if channel_patterns and channel_patterns.get("best_posting_times"):
         posting_time_signal = {
             "best_posting_times": channel_patterns["best_posting_times"],
-            "scheduled_at": str(video.get("scheduled_at", ""))
-            if video.get("scheduled_at")
-            else None,
+            "scheduled_at": str(video.get("scheduled_at", "")) if video.get("scheduled_at") else None,
         }
 
     signals: dict[str, Any] = {
@@ -196,8 +190,6 @@ async def generate_scorecard(
 
     result["video_id"] = video_id
     result["channel_id"] = channel_id
-    result["signals_used"] = [
-        k for k in signals if k not in ("video_title", "video_category", "video_status")
-    ]
+    result["signals_used"] = [k for k in signals if k not in ("video_title", "video_category", "video_status")]
 
     return result

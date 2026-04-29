@@ -345,9 +345,7 @@ API_SCHEMA = {
             "method": "POST",
             "path": "/api/v1/channels/{channel_id}/videos/{video_id}/verify-params",
             "description": "Mark content params as verified. Optionally pass corrected values.",
-            "request": {
-                "content_params": {"simulation_type": "survival", "music": "Dramatic Piano"}
-            },
+            "request": {"content_params": {"simulation_type": "survival", "music": "Dramatic Piano"}},
             "response": {
                 "ok": True,
                 "video_id": "uuid-1234",

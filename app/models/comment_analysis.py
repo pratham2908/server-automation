@@ -5,7 +5,6 @@ and the structured output schema that Gemini produces.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -49,7 +48,7 @@ class DemandSignal(BaseModel):
 class CommentAnalysisResult(BaseModel):
     """Structured output from Gemini comment analysis."""
 
-    sentiment_summary: SentimentSummary = Field(default_factory=lambda: SentimentSummary())
+    sentiment_summary: SentimentSummary = Field(default_factory=SentimentSummary)
     what_audience_loves: list[AudienceSignal] = Field(default_factory=list)
     complaints: list[AudienceSignal] = Field(default_factory=list)
     demands: list[DemandSignal] = Field(default_factory=list)
@@ -68,7 +67,7 @@ class CommentAnalysis(BaseModel):
     platform_video_id: str = Field(..., description="YouTube video ID or IG media ID")
     platform: str = Field("youtube", description="'youtube' or 'instagram'")
     source: str = Field("competitor", description="'own' or 'competitor'")
-    competitor_channel_id: Optional[str] = Field(
+    competitor_channel_id: str | None = Field(
         None,
         description="Competitor's channel ID; null for own channel videos",
     )
@@ -80,7 +79,7 @@ class CommentAnalysis(BaseModel):
         0,
         description="Comment count from platform stats; used as cheap pre-check for new comments",
     )
-    comments_analyzed_upto: Optional[datetime] = Field(
+    comments_analyzed_upto: datetime | None = Field(
         None,
         description="Timestamp of newest comment analyzed; cutoff for next incremental fetch",
     )

@@ -1,7 +1,7 @@
 """Analysis Pydantic models."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -48,12 +48,12 @@ class VideoAnalysis(BaseModel):
 
     channel_id: str
     video_id: str
-    youtube_video_id: Optional[str] = None
-    instagram_media_id: Optional[str] = None
+    youtube_video_id: str | None = None
+    instagram_media_id: str | None = None
     title: str = ""
     category: str = ""
-    content_params: Optional[dict[str, str]] = None
-    published_at: Optional[datetime] = None
+    content_params: dict[str, str] | None = None
+    published_at: datetime | None = None
     stats_snapshot: dict[str, Any] = Field(default_factory=dict)
     ai_insight: dict[str, Any] = Field(default_factory=dict)
     analyzed_at: datetime = Field(default_factory=now_ist)
@@ -63,7 +63,7 @@ class Analysis(BaseModel):
     """Top-level channel summary document (one per channel)."""
 
     channel_id: str
-    subscriber_count: Optional[int] = None
+    subscriber_count: int | None = None
     best_posting_times: list[BestTimeSlot] = Field(default_factory=list)
     category_analysis: list[CategoryAnalysis] = Field(default_factory=list)
     content_param_analysis: list[ContentParamAnalysis] = Field(default_factory=list)

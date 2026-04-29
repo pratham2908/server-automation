@@ -3,8 +3,6 @@
 On registration, channel metadata is automatically fetched from YouTube.
 """
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
@@ -62,30 +60,20 @@ class ChannelCreate(BaseModel):
     """
 
     platform: str = Field("youtube", description="'youtube' or 'instagram'")
-    youtube_channel_id: Optional[str] = Field(
-        None, description="YouTube UC... channel ID (required for youtube)"
-    )
-    instagram_user_id: Optional[str] = Field(
-        None, description="Instagram user ID (required for instagram)"
-    )
-    access_token: Optional[str] = Field(
-        None, description="Long-lived Instagram access token (required for instagram)"
-    )
-    expires_at: Optional[str] = Field(
-        None, description="ISO 8601 token expiry datetime (optional, for instagram)"
-    )
-    channel_id: Optional[str] = Field(
-        None, description="Custom internal slug. Auto-generated if omitted."
-    )
+    youtube_channel_id: str | None = Field(None, description="YouTube UC... channel ID (required for youtube)")
+    instagram_user_id: str | None = Field(None, description="Instagram user ID (required for instagram)")
+    access_token: str | None = Field(None, description="Long-lived Instagram access token (required for instagram)")
+    expires_at: str | None = Field(None, description="ISO 8601 token expiry datetime (optional, for instagram)")
+    channel_id: str | None = Field(None, description="Custom internal slug. Auto-generated if omitted.")
 
 
 class ChannelUpdate(BaseModel):
     """Partial update payload."""
 
-    name: Optional[str] = None
-    default_description: Optional[str] = None
-    default_tags: Optional[list[str]] = None
-    automation_config: Optional[dict] = None
+    name: str | None = None
+    default_description: str | None = None
+    default_tags: list[str] | None = None
+    automation_config: dict | None = None
 
 
 # ------------------------------------------------------------------
@@ -305,9 +293,7 @@ async def _create_instagram_channel(
     doc["_id"] = str(doc["_id"])
     doc.pop("instagram_tokens", None)
 
-    logger.success(
-        "Registered Instagram channel '%s' (user_id=%s)", channel_id, body.instagram_user_id
-    )
+    logger.success("Registered Instagram channel '%s' (user_id=%s)", channel_id, body.instagram_user_id)
     return doc
 
 
@@ -443,9 +429,7 @@ class ContentParamCreate(BaseModel):
 
     name: str = Field(..., description="Parameter key, e.g. 'simulation_type'")
     description: str = Field("", description="What this parameter represents")
-    values: list[str] = Field(
-        default_factory=list, description="Allowed values. Empty = free-form."
-    )
+    values: list[str] = Field(default_factory=list, description="Allowed values. Empty = free-form.")
     belongs_to: list[str] = Field(
         default_factory=lambda: ["all"],
         description="Categories this applies to. ['all'] = every category.",
@@ -459,10 +443,10 @@ class ContentParamCreate(BaseModel):
 class ContentParamUpdate(BaseModel):
     """Payload for updating an existing content param."""
 
-    description: Optional[str] = None
-    values: Optional[list[str]] = None
-    belongs_to: Optional[list[str]] = None
-    unique: Optional[bool] = None
+    description: str | None = None
+    values: list[str] | None = None
+    belongs_to: list[str] | None = None
+    unique: bool | None = None
 
 
 @router.get("/{channel_id}/content-params")
@@ -473,9 +457,7 @@ async def list_content_params(
     """List all content param definitions for a channel."""
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
 
     docs = await db.content_params.find({"channel_id": channel_id}).to_list(length=None)
     for d in docs:
@@ -492,9 +474,7 @@ async def create_content_param(
     """Add a new content param definition for a channel."""
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
 
     existing = await db.content_params.find_one({"channel_id": channel_id, "name": body.name})
     if existing:
@@ -575,13 +555,9 @@ async def sync_content_params_on_videos(
     """
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
 
-    valid_names = {
-        d["name"] async for d in db.content_params.find({"channel_id": channel_id}, {"name": 1})
-    }
+    valid_names = {d["name"] async for d in db.content_params.find({"channel_id": channel_id}, {"name": 1})}
 
     videos = await db.videos.find(
         {"channel_id": channel_id, "content_params": {"$ne": None}},
@@ -647,15 +623,11 @@ async def delete_content_param(
 class CompetitorCreate(BaseModel):
     """Payload for adding a competitor channel."""
 
-    youtube_channel_id: Optional[str] = Field(None, description="Competitor's YouTube channel ID")
-    handle: Optional[str] = Field(None, description="YouTube handle, e.g. @MrBeast")
-    instagram_username: Optional[str] = Field(
-        None, description="Instagram username, e.g. 'mrbeast'"
-    )
-    name: Optional[str] = Field(None, description="Display name (auto-fetched if omitted)")
-    thumbnail: Optional[str] = Field(
-        None, description="Thumbnail/avatar URL (auto-fetched if omitted)"
-    )
+    youtube_channel_id: str | None = Field(None, description="Competitor's YouTube channel ID")
+    handle: str | None = Field(None, description="YouTube handle, e.g. @MrBeast")
+    instagram_username: str | None = Field(None, description="Instagram username, e.g. 'mrbeast'")
+    name: str | None = Field(None, description="Display name (auto-fetched if omitted)")
+    thumbnail: str | None = Field(None, description="Thumbnail/avatar URL (auto-fetched if omitted)")
 
 
 @router.get("/{channel_id}/competitors")
@@ -666,13 +638,12 @@ async def list_competitors(
     """List all competitors for a channel."""
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
 
     docs = await db.competitors.find({"channel_id": channel_id}).to_list(length=None)
     for d in docs:
-        if d: d.pop("_id", None)
+        if d:
+            d.pop("_id", None)
     return {"channel_id": channel_id, "competitors": docs}
 
 
@@ -685,22 +656,16 @@ async def add_competitor(
     """Add a competitor to a channel (YouTube or Instagram)."""
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
 
     get_channel_platform(channel)
     comp_platform = "instagram" if body.instagram_username else "youtube"
 
     # -- Validate input --
     if comp_platform == "youtube" and not body.youtube_channel_id:
-        raise HTTPException(
-            status_code=400, detail="youtube_channel_id is required for YouTube competitors"
-        )
+        raise HTTPException(status_code=400, detail="youtube_channel_id is required for YouTube competitors")
     if comp_platform == "instagram" and not body.instagram_username:
-        raise HTTPException(
-            status_code=400, detail="instagram_username is required for Instagram competitors"
-        )
+        raise HTTPException(status_code=400, detail="instagram_username is required for Instagram competitors")
 
     # -- Check for existing --
     search_query = {"channel_id": channel_id}
@@ -767,7 +732,8 @@ async def add_competitor(
         "updated_at": now_ist(),
     }
     await db.competitors.insert_one(doc)
-    if doc: doc.pop("_id", None)
+    if doc:
+        doc.pop("_id", None)
     return doc
 
 
@@ -853,9 +819,7 @@ class YouTubeTokenStore(BaseModel):
     refresh_token: str = Field(..., description="OAuth2 refresh token")
     token_uri: str = Field("https://oauth2.googleapis.com/token")
     scopes: list[str] = Field(default_factory=list)
-    expiry: Optional[str] = Field(
-        None, description="ISO 8601 expiry datetime of the REFRESH token (set by frontend)"
-    )
+    expiry: str | None = Field(None, description="ISO 8601 expiry datetime of the REFRESH token (set by frontend)")
 
 
 @router.post("/{channel_id}/youtube-token")
@@ -952,9 +916,7 @@ async def get_youtube_token(
         client_id=client_id,
         client_secret=client_secret,
         scopes=tokens.get("scopes"),
-        expiry=access_expiry_dt.astimezone(timezone.utc).replace(tzinfo=None)
-        if access_expiry_dt
-        else None,
+        expiry=access_expiry_dt.astimezone(timezone.utc).replace(tzinfo=None) if access_expiry_dt else None,
     )
 
     refreshed = False
@@ -963,9 +925,7 @@ async def get_youtube_token(
     needs_refresh = False
     if access_expiry_dt is None:
         # No stored access token expiry → call Google to validate/refresh
-        logger.info(
-            f"[TOKEN] No access_token_expiry stored for channel '{channel_id}'. Will refresh via Google."
-        )
+        logger.info(f"[TOKEN] No access_token_expiry stored for channel '{channel_id}'. Will refresh via Google.")
         needs_refresh = True
     elif not creds.valid:
         # Stored expiry says it's expired
@@ -1003,18 +963,14 @@ async def get_youtube_token(
 
     # Final check: if still invalid, raise error
     if not creds.valid:
-        logger.error(
-            f"[TOKEN] YouTube token for channel '{channel_id}' is INVALID and could not be refreshed."
-        )
+        logger.error(f"[TOKEN] YouTube token for channel '{channel_id}' is INVALID and could not be refreshed.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="YouTube token is invalid and cannot be refreshed. Re-authenticate via the frontend.",
         )
 
     if refreshed:
-        logger.info(
-            f"[TOKEN] YouTube access token for channel '{channel_id}' was REFRESHED using refresh token."
-        )
+        logger.info(f"[TOKEN] YouTube access token for channel '{channel_id}' was REFRESHED using refresh token.")
     else:
         logger.info(
             f"[TOKEN] YouTube access token for channel '{channel_id}' was already VALID (expiry: {access_expiry_raw})."
@@ -1080,9 +1036,7 @@ async def get_youtube_token_status(
         client_id=client_id,
         client_secret=client_secret,
         scopes=tokens.get("scopes"),
-        expiry=access_expiry_dt.astimezone(timezone.utc).replace(tzinfo=None)
-        if access_expiry_dt
-        else None,
+        expiry=access_expiry_dt.astimezone(timezone.utc).replace(tzinfo=None) if access_expiry_dt else None,
     )
 
     refreshed = False
@@ -1090,9 +1044,7 @@ async def get_youtube_token_status(
     # Proactive check/refresh
     needs_refresh = False
     if access_expiry_dt is None:
-        logger.info(
-            f"[STATUS] No access_token_expiry for '{channel_id}'. Initializing via refresh."
-        )
+        logger.info(f"[STATUS] No access_token_expiry for '{channel_id}'. Initializing via refresh.")
         needs_refresh = True
     elif not creds.valid:
         logger.info(f"[STATUS] Access token for '{channel_id}' is EXPIRED. Refreshing.")
@@ -1124,8 +1076,7 @@ async def get_youtube_token_status(
             channel = await db.channels.find_one({"channel_id": channel_id})
             tokens = channel.get("youtube_tokens") if channel else None
             if not tokens:
-                 return {"channel_id": channel_id, "connected": False, "status": "disconnected"}
-
+                return {"channel_id": channel_id, "connected": False, "status": "disconnected"}
 
             manager = _get_youtube_manager()
             manager.invalidate(channel_id)
@@ -1225,7 +1176,7 @@ class InstagramTokenStore(BaseModel):
     """Payload for storing an Instagram long-lived token from the frontend."""
 
     access_token: str = Field(..., description="Long-lived Facebook user access token")
-    expires_at: Optional[str] = Field(None, description="ISO 8601 expiry datetime")
+    expires_at: str | None = Field(None, description="ISO 8601 expiry datetime")
 
 
 @router.post("/{channel_id}/instagram-token")

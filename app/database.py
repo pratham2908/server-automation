@@ -201,10 +201,8 @@ def get_channel_platform(channel: dict | None) -> str:
     if not channel:
         return "youtube"
     platform = channel.get("platform", "youtube")
-    if (
-        platform == "youtube"
-        and channel.get("instagram_user_id")
-        and not channel.get("youtube_channel_id")
-    ):
+    if platform == "youtube" and channel.get("instagram_user_id") and not channel.get("youtube_channel_id"):
         return "instagram"
-    return platform
+    from typing import cast
+
+    return cast(str, platform)

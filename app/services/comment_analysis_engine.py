@@ -92,14 +92,13 @@ async def run_comment_analysis(
     total_previous_comments = 0
     cutoff_timestamp: str | None = None
 
-    if is_incremental:
+    if existing is not None:
         previous_analysis = existing.get("analysis")
+
         total_previous_comments = existing.get("total_comments_analyzed", 0)
         cutoff_raw = existing.get("comments_analyzed_upto")
         if cutoff_raw:
-            cutoff_timestamp = (
-                cutoff_raw.isoformat() if isinstance(cutoff_raw, datetime) else str(cutoff_raw)
-            )
+            cutoff_timestamp = cutoff_raw.isoformat() if isinstance(cutoff_raw, datetime) else str(cutoff_raw)
 
     # ---- Fetch comments ----
     raw_comments: list[dict[str, Any]] = []
@@ -380,10 +379,9 @@ async def run_cron_cycle(
             if vp["current_comment_count"] <= existing.get("last_known_comment_count", 0):
                 stats["skipped"] += 1
                 continue
-        else:
-            if fresh_count >= _MAX_VIDEOS_PER_RUN:
-                stats["skipped"] += 1
-                continue
+        elif fresh_count >= _MAX_VIDEOS_PER_RUN:
+            stats["skipped"] += 1
+            continue
 
         yt_svc: YouTubeService | None = None
         ig_svc: InstagramService | None = None
@@ -531,9 +529,7 @@ async def aggregate_comment_analyses(
                     "representative_quotes": [],
                 }
             complaints[key]["count"] += signal.get("count", 1)
-            complaints[key]["representative_quotes"].extend(
-                signal.get("representative_quotes", [])[:2]
-            )
+            complaints[key]["representative_quotes"].extend(signal.get("representative_quotes", [])[:2])
 
         for signal in analysis.get("demands", []):
             key = signal.get("topic", "").lower().strip()
@@ -547,9 +543,7 @@ async def aggregate_comment_analyses(
                     "representative_quotes": [],
                 }
             demands[key]["count"] += signal.get("count", 1)
-            demands[key]["representative_quotes"].extend(
-                signal.get("representative_quotes", [])[:2]
-            )
+            demands[key]["representative_quotes"].extend(signal.get("representative_quotes", [])[:2])
 
         content_gaps.update(analysis.get("content_gaps", []))
         trending_topics.update(analysis.get("trending_topics", []))
@@ -557,6 +551,7 @@ async def aggregate_comment_analyses(
 
     def _signal_strength(count: int) -> int:
         from typing import cast
+
         return cast(int, min(10, max(1, round(count / max(1, total_comments) * 100))))
 
     def _build_sorted(items: dict, key_field: str) -> list[dict]:

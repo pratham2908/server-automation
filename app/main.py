@@ -10,8 +10,8 @@ from app.logger import setup_root_logging
 setup_root_logging()
 
 logging.basicConfig(level=logging.INFO)
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 
@@ -85,9 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # ---- Gemini ----
     from app.services.gemini import GeminiService
 
-    gemini_service = GeminiService(
-        project=settings.GOOGLE_CLOUD_PROJECT, location=settings.GOOGLE_CLOUD_LOCATION
-    )
+    gemini_service = GeminiService(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.GOOGLE_CLOUD_LOCATION)
     logger.info("Gemini service initialised")
 
     # ---- Background auto-publisher (Instagram scheduled reels) ----
@@ -114,9 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from app.services.velocity_booster import run_velocity_booster
 
     _velocity_booster_task = asyncio.create_task(
-        run_velocity_booster(
-            db, youtube_service_manager, instagram_service_manager, gemini_service
-        )
+        run_velocity_booster(db, youtube_service_manager, instagram_service_manager, gemini_service)
     )
 
     logger.info("Background Velocity Booster started")
@@ -125,9 +121,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from app.services.comment_analysis_cron import run_comment_analysis_cron
 
     _comment_analysis_task = asyncio.create_task(
-        run_comment_analysis_cron(
-            db, youtube_service_manager, instagram_service_manager, gemini_service
-        )
+        run_comment_analysis_cron(db, youtube_service_manager, instagram_service_manager, gemini_service)
     )
     logger.info("Background comment analysis cron started")
 
@@ -150,9 +144,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from app.services.comment_reply_cron import run_comment_reply_cron
 
     _comment_reply_task = asyncio.create_task(
-        run_comment_reply_cron(
-            db, youtube_service_manager, instagram_service_manager, gemini_service
-        )
+        run_comment_reply_cron(db, youtube_service_manager, instagram_service_manager, gemini_service)
     )
     logger.info("Background comment reply cron started")
 
@@ -160,9 +152,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from app.services.sync_analysis_cron import run_sync_analysis_cron
 
     _sync_analysis_task = asyncio.create_task(
-        run_sync_analysis_cron(
-            db, youtube_service_manager, instagram_service_manager, gemini_service
-        )
+        run_sync_analysis_cron(db, youtube_service_manager, instagram_service_manager, gemini_service)
     )
     logger.info("Background sync-analysis cron started")
 
@@ -183,7 +173,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         # Take final snapshot
         try:
             await metrics_service.persist_snapshot(db)
-        except:
+        except Exception:
             pass
 
     for task in (

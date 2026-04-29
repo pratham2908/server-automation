@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -38,8 +38,8 @@ class GrowthTrackingService:
         platform: str,
         subscribers: int,
         views: int,
-        metadata: Optional[Dict] = None,
-    ) -> Dict:
+        metadata: dict | None = None,
+    ) -> dict:
         """Record a daily snapshot for a channel."""
         now = now_ist()
         snapshot_date = now.strftime("%Y-%m-%d")
@@ -61,9 +61,7 @@ class GrowthTrackingService:
             upsert=True,
         )
 
-        logger.info(
-            f"Recorded growth snapshot for {channel_id} (subs: {subscribers}, views: {views})"
-        )
+        logger.info(f"Recorded growth snapshot for {channel_id} (subs: {subscribers}, views: {views})")
 
         # Check milestones
         await self._check_milestones(channel_id, platform, subscribers)
@@ -88,23 +86,17 @@ class GrowthTrackingService:
                 {"channel_id": channel_id}, {"$push": {"milestones": {"$each": new_hits}}}
             )
             for m in new_hits:
-                logger.success(
-                    f"🏆 Milestone Hit! Channel {channel_id} reached {m} subscribers on {platform}"
-                )
+                logger.success(f"🏆 Milestone Hit! Channel {channel_id} reached {m} subscribers on {platform}")
 
-    async def get_history(self, channel_id: str, limit: int = 30) -> List[Dict]:
+    async def get_history(self, channel_id: str, limit: int = 30) -> list[dict]:
         """Fetch historical snapshots for a channel."""
-        cursor = (
-            self.db.growth_snapshots.find({"channel_id": channel_id})
-            .sort("snapshot_date", -1)
-            .limit(limit)
-        )
+        cursor = self.db.growth_snapshots.find({"channel_id": channel_id}).sort("snapshot_date", -1).limit(limit)
 
         history = await cursor.to_list(length=limit)
         # Return in chronological order
         return history[::-1]
 
-    async def calculate_velocity(self, channel_id: str) -> Dict[str, Any]:
+    async def calculate_velocity(self, channel_id: str) -> dict[str, Any]:
         """Calculate growth velocity (7d and 30d averages)."""
         # Get snapshots for last 31 days to have deltas
         snapshots = await self.get_history(channel_id, limit=31)
@@ -136,7 +128,9 @@ class GrowthTrackingService:
 
         return {"period_7d": get_delta(7), "period_30d": get_delta(30)}
 
-    async def get_milestones(self, channel_id: str) -> List[int]:
+    async def get_milestones(self, channel_id: str) -> list[int]:
         """Get list of milestones hit by the channel."""
         channel = await self.db.channels.find_one({"channel_id": channel_id}, {"milestones": 1})
-        return (channel or {}).get("milestones", [])
+        from typing import cast
+
+        return cast(list[int], (channel or {}).get("milestones", []))

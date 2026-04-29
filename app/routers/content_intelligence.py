@@ -1,7 +1,5 @@
 """Content Intelligence router -- scan, insights, and CRUD for video intelligence."""
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -26,7 +24,7 @@ router = APIRouter(
 @router.post("/scan")
 async def trigger_scan(
     channel_id: str,
-    source: Optional[str] = Query(None, description="'competitor', 'own', or omit for both"),
+    source: str | None = Query(None, description="'competitor', 'own', or omit for both"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Scan competitor and/or own videos for content intelligence.
@@ -147,7 +145,7 @@ async def get_latest_insights(
 @router.get("/videos")
 async def list_video_intelligence(
     channel_id: str,
-    source: Optional[str] = Query(None, description="Filter by 'competitor' or 'own'"),
+    source: str | None = Query(None, description="Filter by 'competitor' or 'own'"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -156,9 +154,7 @@ async def list_video_intelligence(
     if source:
         query["source"] = source
 
-    docs = (
-        await db.video_intelligence.find(query).sort("views", -1).limit(limit).to_list(length=limit)
-    )
+    docs = await db.video_intelligence.find(query).sort("views", -1).limit(limit).to_list(length=limit)
 
     for d in docs:
         d.pop("_id", None)
@@ -195,9 +191,7 @@ async def get_video_intelligence(
 @router.delete("/scan")
 async def clear_intelligence(
     channel_id: str,
-    source: Optional[str] = Query(
-        None, description="Clear only 'competitor' or 'own', or omit for all"
-    ),
+    source: str | None = Query(None, description="Clear only 'competitor' or 'own', or omit for all"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Clear all video intelligence for a channel (or by source).

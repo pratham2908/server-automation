@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """Background cron loop for daily channel growth snapshots.
 
 Runs every 24 hours (configurable via ``growth_tracking_config``
 in the ``config`` collection).  Iterates over all channels, 
 fetches current stats, and records a snapshot.
 """
+
+from __future__ import annotations
 
 import asyncio
 from typing import Any
@@ -15,6 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.database import update_channel_task_status
 from app.logger import get_logger
 from app.services.growth_tracking import GrowthTrackingService
+from app.services.metrics import metrics_service
 
 logger = get_logger(__name__)
 
@@ -46,7 +47,6 @@ async def run_growth_tracking_cron(
 
     while True:
         try:
-            from app.services.metrics import metrics_service
 
             metrics_service.track_task_start("growth_tracking")
 
@@ -66,9 +66,7 @@ async def run_growth_tracking_cron(
                     if platform == "youtube":
                         yt_service = await youtube_service_manager.get_service(channel_id)
                         if yt_service:
-                            info = yt_service.get_channel_info(
-                                channel.get("youtube_channel_id", "")
-                            )
+                            info = yt_service.get_channel_info(channel.get("youtube_channel_id", ""))
                             subs = info.get("subscriber_count", 0)
                             views = info.get("view_count", 0)
                             metadata = {"video_count": info.get("video_count", 0)}
@@ -84,9 +82,7 @@ async def run_growth_tracking_cron(
                             metadata = {"media_count": info.get("media_count", 0)}
 
                     # Record the snapshot
-                    await growth_service.record_snapshot(
-                        channel_id, platform, subs, views, metadata
-                    )
+                    await growth_service.record_snapshot(channel_id, platform, subs, views, metadata)
 
                     # Update channel status
                     await update_channel_task_status(db, channel_id, "growth_tracking")

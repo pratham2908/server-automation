@@ -20,6 +20,7 @@ logger = get_logger(__name__)
 
 
 async def run_thumbnail_analysis(
+    *,
     analysis_id: str,
     image_path: str,
     title: str,
@@ -91,7 +92,7 @@ def compute_thumbnail_comparison(
     def _delta(key: str) -> float | None:
         c, p = cur.get(key), prev.get(key)
         if c is not None and p is not None:
-            return round(c - p, 2)
+            return round(float(c) - float(p), 2)
         return None
 
     overall_delta = _delta("overall_score")

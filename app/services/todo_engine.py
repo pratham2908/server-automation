@@ -1,16 +1,17 @@
-from __future__ import annotations
-
 """To-do engine – archives underperforming categories and generates new
 video ideas for the to-do list.
 
 Called at the end of every analysis update to keep the to-do pipeline fresh.
 """
 
+from __future__ import annotations
+
 import uuid
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.database import get_content_schema_for_prompt
 from app.logger import get_logger
 from app.services.gemini import GeminiService
 from app.timezone import now_ist
@@ -44,17 +45,11 @@ async def _compute_category_metadata(
         return {"total_videos": 0, "video_ids": []}
 
     def _avg(key: str) -> float | None:
-        vals = [
-            v["metadata"][key]
-            for v in videos
-            if v.get("metadata") and v["metadata"].get(key) is not None
-        ]
+        vals = [v["metadata"][key] for v in videos if v.get("metadata") and v["metadata"].get(key) is not None]
         return round(sum(vals) / len(vals), 2) if vals else None
 
     total_views_vals = [
-        v["metadata"]["views"]
-        for v in videos
-        if v.get("metadata") and v["metadata"].get("views") is not None
+        v["metadata"]["views"] for v in videos if v.get("metadata") and v["metadata"].get("views") is not None
     ]
     total_emw_vals = [
         v["metadata"]["estimated_minutes_watched"]
@@ -77,9 +72,7 @@ async def _compute_category_metadata(
         "avg_percentage_viewed": _avg("avg_percentage_viewed"),
         "avg_view_duration_seconds": _avg("avg_view_duration_seconds"),
         "total_views": sum(total_views_vals) if total_views_vals else None,
-        "total_estimated_minutes_watched": (
-            round(sum(total_emw_vals), 1) if total_emw_vals else None
-        ),
+        "total_estimated_minutes_watched": (round(sum(total_emw_vals), 1) if total_emw_vals else None),
         "avg_subscribers": _avg("subscribers_gained"),
         "avg_shares": _avg("shares"),
         "avg_saves": _avg("saves"),
@@ -203,9 +196,9 @@ async def generate_todo_videos(
     # ------------------------------------------------------------------ #
     # 1. Clean up archived categories' todo videos
     # ------------------------------------------------------------------ #
-    archived_categories = await db.categories.find(
-        {"channel_id": channel_id, "status": "archived"}
-    ).to_list(length=None)
+    archived_categories = await db.categories.find({"channel_id": channel_id, "status": "archived"}).to_list(
+        length=None
+    )
     archived_names = [c["name"] for c in archived_categories]
 
     if archived_names:
@@ -225,18 +218,12 @@ async def generate_todo_videos(
     # ------------------------------------------------------------------ #
     # 2. Slot distribution
     # ------------------------------------------------------------------ #
-    active_categories = await db.categories.find(
-        {"channel_id": channel_id, "status": "active"}
-    ).to_list(length=None)
-
-    from app.database import get_content_schema_for_prompt
+    active_categories = await db.categories.find({"channel_id": channel_id, "status": "active"}).to_list(length=None)
 
     channel_doc = await db.channels.find_one({"channel_id": channel_id})
     platform = (channel_doc or {}).get("platform", "youtube")
 
-    latest_analysis = (
-        await db.analysis.find_one({"channel_id": channel_id}, sort=[("version", -1)]) or {}
-    )
+    latest_analysis = await db.analysis.find_one({"channel_id": channel_id}, sort=[("version", -1)]) or {}
 
     analysis_by_cat: dict[str, dict[str, Any]] = {
         ca["category"]: ca for ca in latest_analysis.get("category_analysis", [])
@@ -296,9 +283,7 @@ async def generate_todo_videos(
             {"title": 1, "content_params": 1},
         ).to_list(length=None)
         existing_titles = [doc.get("title", "") for doc in existing_docs if doc.get("title")]
-        existing_content_params = [
-            doc["content_params"] for doc in existing_docs if doc.get("content_params")
-        ]
+        existing_content_params = [doc["content_params"] for doc in existing_docs if doc.get("content_params")]
 
         try:
             generated_list = await gemini_service.generate_video_content(
@@ -321,7 +306,8 @@ async def generate_todo_videos(
             global_idx += 1
 
             logger.success(
-                f'💡 Generated [{global_idx}/{total_slots}] - "{content.get("title", "Untitled")}" (Category: {cat_name})'
+                f"💡 Generated [{global_idx}/{total_slots}] - "
+                f'"{content.get("title", "Untitled")}" (Category: {cat_name})'
             )
 
             gen_params = content.get("content_params") or {}

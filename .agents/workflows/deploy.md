@@ -4,6 +4,20 @@ description: Deploy local changes to production server
 
 // turbo-all
 
+0. Run quality checks (Mypy & Ruff) to ensure build stability
+```bash
+# Run type checking
+.venv/bin/python -m mypy .
+
+# Run linting and auto-fix issues
+.venv/bin/python -m ruff check . --fix
+
+# Run tests
+PYTHONPATH=. .venv/bin/pytest
+```
+
+
+
 1. Stage and commit local changes with a descriptive message
 ```bash
 git add .

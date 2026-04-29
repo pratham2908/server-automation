@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -10,7 +10,7 @@ from app.services.growth_tracking import GrowthTrackingService
 router = APIRouter(prefix="/api/v1/growth", tags=["growth"])
 
 
-@router.get("/{channel_id}/history", response_model=List[Dict[str, Any]])
+@router.get("/{channel_id}/history", response_model=list[dict[str, Any]])
 async def get_growth_history(
     channel_id: str,
     limit: int = Query(30, ge=1, le=365),
@@ -32,7 +32,7 @@ async def get_growth_history(
     return history
 
 
-@router.get("/{channel_id}/velocity", response_model=Dict[str, Any])
+@router.get("/{channel_id}/velocity", response_model=dict[str, Any])
 async def get_growth_velocity(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -44,7 +44,7 @@ async def get_growth_velocity(
     return velocity
 
 
-@router.get("/{channel_id}/milestones", response_model=List[int])
+@router.get("/{channel_id}/milestones", response_model=list[int])
 async def get_channel_milestones(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -56,7 +56,7 @@ async def get_channel_milestones(
     return sorted(milestones)
 
 
-@router.post("/{channel_id}/snapshot", response_model=Dict[str, Any])
+@router.post("/{channel_id}/snapshot", response_model=dict[str, Any])
 async def trigger_growth_snapshot(
     channel_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -64,9 +64,9 @@ async def trigger_growth_snapshot(
 ):
     """Force a growth snapshot for a single channel immediately."""
     from app.main import instagram_service_manager, youtube_service_manager
+
     assert youtube_service_manager is not None
     assert instagram_service_manager is not None
-
 
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:

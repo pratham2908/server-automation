@@ -56,16 +56,12 @@ async def run_preview_analysis(
 
             # Use timestamp of last cut for duration estimate in preview
             duration = (
-                result.get("pacing_analysis", {})
-                .get("visual_change_timestamps", [{}])[-1]
-                .get("timestamp_seconds")
+                result.get("pacing_analysis", {}).get("visual_change_timestamps", [{}])[-1].get("timestamp_seconds")
                 if result.get("pacing_analysis", {}).get("visual_change_timestamps")
                 else None
             )
 
-            matches = pacing_service.match_pacing(
-                pacing_analysis, templates, video_duration=duration
-            )
+            matches = pacing_service.match_pacing(pacing_analysis, templates, video_duration=duration)
             result["pacing_matches"] = [m.dict() for m in matches]
         except Exception as e:
             logger.warning("Failed to compute preview pacing matches: %s", e)
@@ -131,14 +127,10 @@ def compute_version_comparison(
     prev_pacing = (prev_analysis.get("pacing_analysis") or {}).get("pacing_score")
 
     retention_delta = (
-        round(cur_retention - prev_retention, 2)
-        if cur_retention is not None and prev_retention is not None
-        else None
+        round(cur_retention - prev_retention, 2) if cur_retention is not None and prev_retention is not None else None
     )
     hook_delta = (cur_hook - prev_hook) if cur_hook is not None and prev_hook is not None else None
-    pacing_delta = (
-        (cur_pacing - prev_pacing) if cur_pacing is not None and prev_pacing is not None else None
-    )
+    pacing_delta = (cur_pacing - prev_pacing) if cur_pacing is not None and prev_pacing is not None else None
 
     return {
         "previous_preview_id": previous_doc.get("preview_id"),

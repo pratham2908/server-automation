@@ -128,16 +128,12 @@ async def run_retention_analysis(
         try:
             pacing_analysis = PacingAnalysis(**result.get("pacing_analysis", {}))
             duration = (
-                result.get("pacing_analysis", {})
-                .get("visual_change_timestamps", [{}])[-1]
-                .get("timestamp_seconds")
+                result.get("pacing_analysis", {}).get("visual_change_timestamps", [{}])[-1].get("timestamp_seconds")
                 if result.get("pacing_analysis", {}).get("visual_change_timestamps")
                 else None
             )
 
-            matches = pacing_service.match_pacing(
-                pacing_analysis, templates, video_duration=duration
-            )
+            matches = pacing_service.match_pacing(pacing_analysis, templates, video_duration=duration)
             result["pacing_matches"] = [m.dict() for m in matches]
         except Exception as e:
             logger.warning("Failed to compute pacing matches: %s", e)
@@ -202,9 +198,7 @@ async def run_retention_analysis(
                         r2_service.upload_video(f, r2_thumb_key)
 
                     # Generate a presigned URL for the frontend to render
-                    thumb_url = r2_service.generate_presigned_url(
-                        r2_thumb_key, expires_in=604800
-                    )  # 7 days
+                    thumb_url = r2_service.generate_presigned_url(r2_thumb_key, expires_in=604800)  # 7 days
                     updates["ai_packaging"]["thumbnail_url"] = thumb_url
                     logger.success("Thumbnail uploaded and URL generated: %s", thumb_url)
                 except Exception as e:
@@ -213,9 +207,7 @@ async def run_retention_analysis(
                     if os.path.exists(local_thumb_path):
                         os.unlink(local_thumb_path)
 
-            await db.videos.update_one(
-                {"channel_id": channel_id, "video_id": video_id}, {"$set": updates}
-            )
+            await db.videos.update_one({"channel_id": channel_id, "video_id": video_id}, {"$set": updates})
 
         logger.success(
             "Retention analysis complete for '%s' — predicted retention: %s%%",

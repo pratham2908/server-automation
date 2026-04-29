@@ -6,7 +6,6 @@ previously scheduled videos.
 """
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 import pytz
 
@@ -23,7 +22,7 @@ _DAY_MAP = {
 
 def compute_schedule_slots(
     best_posting_times: list[dict],
-    occupied_datetimes: list[Optional[datetime]],
+    occupied_datetimes: list[datetime | None],
     num_videos: int,
     timezone_str: str,
 ) -> list[datetime]:
@@ -74,10 +73,10 @@ def compute_schedule_slots(
         if dt is None:
             continue
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=pytz.utc).astimezone(tz)
+            tz_dt = dt.replace(tzinfo=pytz.utc).astimezone(tz)
         else:
-            dt = dt.astimezone(tz)
-        occupied_keys.add((dt.year, dt.month, dt.day, dt.hour, dt.minute))
+            tz_dt = dt.astimezone(tz)
+        occupied_keys.add((tz_dt.year, tz_dt.month, tz_dt.day, tz_dt.hour, tz_dt.minute))
 
     today = now.date()
     current_weekday = today.weekday()
@@ -89,9 +88,7 @@ def compute_schedule_slots(
     for week_offset in range(max_weeks):
         for day_num, hour, minute in weekly_slots:
             slot_date = week_start + timedelta(weeks=week_offset, days=day_num)
-            slot_dt = tz.localize(
-                datetime(slot_date.year, slot_date.month, slot_date.day, hour, minute)
-            )
+            slot_dt = tz.localize(datetime(slot_date.year, slot_date.month, slot_date.day, hour, minute))
 
             if slot_dt <= now:
                 continue

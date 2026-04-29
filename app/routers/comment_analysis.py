@@ -1,6 +1,6 @@
 """Comment analysis router -- read endpoints, manual trigger, and config."""
 
-from typing import Any, Optional
+from typing import Any
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -34,12 +34,8 @@ config_router = APIRouter(
 
 
 class CommentAnalysisConfigUpdate(BaseModel):
-    analysis_hour: int = Field(
-        ..., ge=0, le=23, description="Hour of day (0-23) in IST when the cron runs"
-    )
-    enabled: Optional[bool] = Field(
-        None, description="Whether the automated daily analysis is enabled"
-    )
+    analysis_hour: int = Field(..., ge=0, le=23, description="Hour of day (0-23) in IST when the cron runs")
+    enabled: bool | None = Field(None, description="Whether the automated daily analysis is enabled")
 
 
 @config_router.get("/")
@@ -155,12 +151,10 @@ async def trigger_comment_analysis(
 @router.get("/history")
 async def get_comment_analysis_history(
     channel_id: str,
-    source: Optional[str] = Query(None, description="Filter by 'own' or 'competitor'"),
-    competitor_channel_id: Optional[str] = Query(
-        None, description="Filter by specific competitor ID"
-    ),
-    platform: Optional[str] = Query(None, description="Filter by 'youtube' or 'instagram'"),
-    limit: Optional[int] = Query(None, description="Max results"),
+    source: str | None = Query(None, description="Filter by 'own' or 'competitor'"),
+    competitor_channel_id: str | None = Query(None, description="Filter by specific competitor ID"),
+    platform: str | None = Query(None, description="Filter by 'youtube' or 'instagram'"),
+    limit: int | None = Query(None, description="Max results"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Return comment analyses for *channel_id* with optional filters."""
@@ -190,10 +184,8 @@ async def get_comment_analysis_history(
 @router.get("/aggregate")
 async def aggregate_comment_insights(
     channel_id: str,
-    source: Optional[str] = Query(None, description="Filter by 'own' or 'competitor'"),
-    competitor_channel_id: Optional[str] = Query(
-        None, description="Filter by specific competitor ID"
-    ),
+    source: str | None = Query(None, description="Filter by 'own' or 'competitor'"),
+    competitor_channel_id: str | None = Query(None, description="Filter by specific competitor ID"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Aggregate all comment analyses into a channel-level intelligence report."""

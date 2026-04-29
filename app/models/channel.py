@@ -1,7 +1,6 @@
 """Channel and ContentParamDefinition Pydantic models."""
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,9 +11,7 @@ class ContentParamValue(BaseModel):
     """A tracked value for a content param with its performance data."""
 
     value: str = Field(..., description="The actual value string, e.g. 'battle'")
-    score: float = Field(
-        0, description="Performance score (avg performance_rating of videos using this value)"
-    )
+    score: float = Field(0, description="Performance score (avg performance_rating of videos using this value)")
     video_count: int = Field(0, description="Number of published videos with this value")
 
 
@@ -51,14 +48,12 @@ class Competitor(BaseModel):
     platform: str = Field("youtube", description="'youtube' or 'instagram'")
 
     # YouTube (optional)
-    youtube_channel_id: Optional[str] = Field(None, description="Competitor's YouTube UC... ID")
-    handle: Optional[str] = Field(None, description="YouTube handle, e.g. @MrBeast")
+    youtube_channel_id: str | None = Field(None, description="Competitor's YouTube UC... ID")
+    handle: str | None = Field(None, description="YouTube handle, e.g. @MrBeast")
 
     # Instagram (optional)
-    instagram_username: Optional[str] = Field(
-        None, description="Instagram username, e.g. 'mrbeast'"
-    )
-    instagram_user_id: Optional[str] = Field(None, description="Instagram ID (if known)")
+    instagram_username: str | None = Field(None, description="Instagram username, e.g. 'mrbeast'")
+    instagram_user_id: str | None = Field(None, description="Instagram ID (if known)")
 
     name: str = Field(..., description="Display name")
     thumbnail: str = Field("", description="Thumbnail/avatar URL")
@@ -78,7 +73,7 @@ class YouTubeTokens(BaseModel):
     refresh_token: str = Field(..., description="OAuth2 refresh token")
     token_uri: str = Field("https://oauth2.googleapis.com/token")
     scopes: list[str] = Field(default_factory=list)
-    expiry: Optional[str] = Field(None, description="ISO 8601 expiry datetime")
+    expiry: str | None = Field(None, description="ISO 8601 expiry datetime")
 
 
 class InstagramTokens(BaseModel):
@@ -86,30 +81,24 @@ class InstagramTokens(BaseModel):
 
     access_token: str = Field(..., description="Long-lived Facebook user access token")
     token_type: str = Field("bearer")
-    expires_at: Optional[str] = Field(None, description="ISO 8601 expiry datetime")
+    expires_at: str | None = Field(None, description="ISO 8601 expiry datetime")
 
 
 class VelocityBoosterConfig(BaseModel):
     """Configuration for the Velocity Booster automation."""
 
-    enabled: bool = Field(
-        False, description="Whether to automatically boost uploading pace if engagement is low"
-    )
+    enabled: bool = Field(False, description="Whether to automatically boost uploading pace if engagement is low")
     min_hours_since_last_upload: int = Field(
         12, description="Minimum hours to wait after the last upload before boosting"
     )
-    min_views_threshold: int = Field(
-        1000, description="If last video views are below this, boost is triggered"
-    )
-    schedule_delay_minutes: int = Field(
-        15, description="How many minutes from now to schedule the boosted video"
-    )
+    min_views_threshold: int = Field(1000, description="If last video views are below this, boost is triggered")
+    schedule_delay_minutes: int = Field(15, description="How many minutes from now to schedule the boosted video")
 
 
 class AutomationConfig(BaseModel):
     """Aggregate for all channel-level automation settings."""
 
-    velocity_booster: VelocityBoosterConfig = Field(default_factory=lambda: VelocityBoosterConfig())
+    velocity_booster: VelocityBoosterConfig = Field(default_factory=VelocityBoosterConfig)
 
 
 class Channel(BaseModel):
@@ -119,20 +108,12 @@ class Channel(BaseModel):
     profile_id: str = Field("default", description="ID of the profile that owns this channel")
     name: str = Field(..., description="Human-readable channel name")
     platform: str = Field("youtube", description="'youtube' or 'instagram'")
-    youtube_channel_id: Optional[str] = Field(
-        None, description="YouTube UC... channel ID (youtube only)"
-    )
-    youtube_tokens: Optional[YouTubeTokens] = Field(
-        None, description="YouTube OAuth tokens (excluded from API responses)"
-    )
-    instagram_user_id: Optional[str] = Field(
-        None, description="Instagram Graph API user ID (instagram only)"
-    )
-    instagram_tokens: Optional[InstagramTokens] = Field(
-        None, description="Instagram tokens (excluded from API responses)"
-    )
+    youtube_channel_id: str | None = Field(None, description="YouTube UC... channel ID (youtube only)")
+    youtube_tokens: YouTubeTokens | None = Field(None, description="YouTube OAuth tokens (excluded from API responses)")
+    instagram_user_id: str | None = Field(None, description="Instagram Graph API user ID (instagram only)")
+    instagram_tokens: InstagramTokens | None = Field(None, description="Instagram tokens (excluded from API responses)")
 
-    automation_config: AutomationConfig = Field(default_factory=lambda: AutomationConfig())
+    automation_config: AutomationConfig = Field(default_factory=AutomationConfig)
     last_tasks: dict[str, datetime] = Field(
         default_factory=dict, description="Last run timestamps for various background tasks"
     )

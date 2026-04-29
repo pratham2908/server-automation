@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, field_serializer
 
@@ -15,9 +15,7 @@ class VideoStatus(str, Enum):
     TODO = "todo"
     READY = "ready"
     QUEUED = "queued"  # In internal queue — background worker will upload to platform
-    SCHEDULED = (
-        "scheduled"  # Confirmed on platform (YouTube private+publishAt, or Instagram published)
-    )
+    SCHEDULED = "scheduled"  # Confirmed on platform (YouTube private+publishAt, or Instagram published)
     PUBLISHED = "published"
 
 
@@ -39,21 +37,21 @@ class VideoMetadata(BaseModel):
     """
 
     # Shared
-    views: Optional[int] = None
-    likes: Optional[int] = None
-    comments: Optional[int] = None
-    duration_seconds: Optional[int] = None
-    engagement_rate: Optional[float] = None
-    like_rate: Optional[float] = None
-    comment_rate: Optional[float] = None
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    duration_seconds: int | None = None
+    engagement_rate: float | None = None
+    like_rate: float | None = None
+    comment_rate: float | None = None
     # YouTube-specific
-    avg_percentage_viewed: Optional[float] = None
-    avg_view_duration_seconds: Optional[int] = None
-    estimated_minutes_watched: Optional[float] = None
+    avg_percentage_viewed: float | None = None
+    avg_view_duration_seconds: int | None = None
+    estimated_minutes_watched: float | None = None
     # Instagram-specific
-    shares: Optional[int] = None
-    saves: Optional[int] = None
-    reach: Optional[int] = None
+    shares: int | None = None
+    saves: int | None = None
+    reach: int | None = None
 
 
 class Video(BaseModel):
@@ -67,38 +65,38 @@ class Video(BaseModel):
     category: str = ""
     status: VideoStatus = VideoStatus.TODO
     suggested: bool = False
-    youtube_video_id: Optional[str] = None
-    instagram_media_id: Optional[str] = None
-    r2_object_key: Optional[str] = None
-    thumbnail_url: Optional[str] = Field(None, description="Direct URL to the video thumbnail")
+    youtube_video_id: str | None = None
+    instagram_media_id: str | None = None
+    r2_object_key: str | None = None
+    thumbnail_url: str | None = Field(None, description="Direct URL to the video thumbnail")
     packaging_status: AIPackagingStatus = AIPackagingStatus.PENDING
-    ai_packaging: Optional[dict] = Field(
+    ai_packaging: dict | None = Field(
         None,
         description="Gemini-generated content packaging (suggested_titles, suggested_description, suggested_tags, best_thumbnail_timestamp, thumbnail_url, reasoning)",
     )
     metadata: VideoMetadata = Field(default_factory=VideoMetadata)
-    content_params: Optional[dict[str, str]] = Field(
+    content_params: dict[str, str] | None = Field(
         None,
         description="Channel-specific content dimensions (e.g. simulation_type, challenge_mechanic, music)",
     )
-    verification_status: Optional[str] = Field(
+    verification_status: str | None = Field(
         None,
         description="'unverified' when AI-assigned (category + content_params), 'verified' when user-confirmed or system-defined",
     )
-    scheduled_at: Optional[datetime] = Field(
+    scheduled_at: datetime | None = Field(
         None,
         description="When the video is scheduled to go live. Set when scheduled.",
     )
-    published_at: Optional[datetime] = Field(
+    published_at: datetime | None = Field(
         None,
         description="When the video was published on the platform. Null until published.",
     )
 
     # Unified Analytics Data
-    retention: Optional[dict[str, Any]] = Field(
+    retention: dict[str, Any] | None = Field(
         None, description="Pre-publish multimodal analysis and predicted retention curve."
     )
-    performance: Optional[dict[str, Any]] = Field(
+    performance: dict[str, Any] | None = Field(
         None, description="Post-publish metric analysis and actual performance rating."
     )
 
@@ -106,7 +104,7 @@ class Video(BaseModel):
     updated_at: datetime = Field(default_factory=now_ist)
 
     @field_serializer("scheduled_at", "published_at", "created_at", "updated_at")
-    def _serialize_dt_ist(self, dt: Optional[datetime]) -> Optional[str]:
+    def _serialize_dt_ist(self, dt: datetime | None) -> str | None:
         """Serialize datetimes in GMT+5:30 (IST) for API responses."""
         return to_ist_iso(dt)
 
@@ -153,13 +151,13 @@ class ScheduleQueue(BaseModel):
     channel_id: str
     video_id: str = Field(..., description="References videos.video_id")
     position: int = Field(..., ge=1, description="1-based queue ordering")
-    scheduled_at: Optional[datetime] = Field(
+    scheduled_at: datetime | None = Field(
         None,
         description="The exact datetime (timezone-aware) when this video should be published",
     )
     added_at: datetime = Field(default_factory=now_ist)
 
     @field_serializer("scheduled_at", "added_at")
-    def _serialize_dt_ist(self, dt: Optional[datetime]) -> Optional[str]:
+    def _serialize_dt_ist(self, dt: datetime | None) -> str | None:
         """Serialize datetimes in GMT+5:30 (IST) for API responses."""
         return to_ist_iso(dt)

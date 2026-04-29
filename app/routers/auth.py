@@ -20,9 +20,7 @@ router = APIRouter(
 async def register(profile: ProfileCreate, db: AsyncIOMotorDatabase = Depends(get_db)):
     existing_profile = await db.profiles.find_one({"email": profile.email})
     if existing_profile:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
 
     profile_id = str(uuid.uuid4())
     hashed_password = get_password_hash(profile.password)
@@ -43,9 +41,7 @@ async def register(profile: ProfileCreate, db: AsyncIOMotorDatabase = Depends(ge
 
 
 @router.post("/login", response_model=Token)
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncIOMotorDatabase = Depends(get_db)
-):
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncIOMotorDatabase = Depends(get_db)):
     profile = await db.profiles.find_one({"email": form_data.username})
     if not profile or not verify_password(form_data.password, profile["password_hash"]):
         raise HTTPException(

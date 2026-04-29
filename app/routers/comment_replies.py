@@ -1,6 +1,6 @@
 """Comment replies router -- manual trigger, reply history, and config."""
 
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -67,10 +67,8 @@ async def trigger_comment_replies(
 @router.get("/history")
 async def get_reply_history(
     channel_id: str,
-    video_id: Optional[str] = Query(None, description="Filter by video_id"),
-    status: Optional[str] = Query(
-        None, description="Filter by status (replied, skipped_negative, etc)"
-    ),
+    video_id: str | None = Query(None, description="Filter by video_id"),
+    status: str | None = Query(None, description="Filter by status (replied, skipped_negative, etc)"),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -81,15 +79,11 @@ async def get_reply_history(
     if status:
         query["status"] = status
 
-    docs = (
-        await db.comment_replies.find(query)
-        .sort("replied_at", -1)
-        .limit(limit)
-        .to_list(length=limit)
-    )
+    docs = await db.comment_replies.find(query).sort("replied_at", -1).limit(limit).to_list(length=limit)
 
     for d in docs:
-        if d: d.pop("_id", None)
+        if d:
+            d.pop("_id", None)
 
     return docs
 
@@ -100,12 +94,12 @@ async def get_reply_history(
 
 
 class CommentReplyConfigUpdate(BaseModel):
-    enabled: Optional[bool] = Field(None, description="Enable or disable auto-replies")
-    reply_templates: Optional[list[str]] = Field(None, description="Reply message templates")
-    max_replies_per_run: Optional[int] = Field(None, ge=1, le=200)
-    max_videos_per_run: Optional[int] = Field(None, ge=1, le=50)
-    video_recency_days: Optional[int] = Field(None, ge=1, le=365)
-    interval_hours: Optional[int] = Field(None, ge=1, le=168, description="Cron interval in hours")
+    enabled: bool | None = Field(None, description="Enable or disable auto-replies")
+    reply_templates: list[str] | None = Field(None, description="Reply message templates")
+    max_replies_per_run: int | None = Field(None, ge=1, le=200)
+    max_videos_per_run: int | None = Field(None, ge=1, le=50)
+    video_recency_days: int | None = Field(None, ge=1, le=365)
+    interval_hours: int | None = Field(None, ge=1, le=168, description="Cron interval in hours")
 
 
 @config_router.get("/")

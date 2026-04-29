@@ -1,7 +1,6 @@
 """Categories router – CRUD operations for content categories."""
 
 import uuid
-from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -33,7 +32,7 @@ from app.models.category import Category
 @router.get("/", response_model=list[Category])
 async def list_categories(
     channel_id: str,
-    status_filter: Optional[str] = None,
+    status_filter: str | None = None,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Return all categories for *channel_id* sorted by score descending."""
@@ -56,7 +55,7 @@ async def list_categories(
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def add_categories(
     channel_id: str,
-    body: Union[CategoryCreate, List[CategoryCreate]],
+    body: CategoryCreate | list[CategoryCreate],
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Add one or more new categories.
@@ -85,9 +84,7 @@ async def add_categories(
 
     await db.categories.insert_many(docs)
     names = [item.name for item in items]
-    logger.success(
-        "✅ Created %d category(ies) for channel '%s': %s", len(names), channel_id, ", ".join(names)
-    )
+    logger.success("✅ Created %d category(ies) for channel '%s': %s", len(names), channel_id, ", ".join(names))
     return {
         "ok": True,
         "inserted_count": len(docs),
@@ -157,17 +154,11 @@ async def update_category(
             )
 
     if new_name and new_name != old_name:
-        logger.success(
-            "✅ Renamed category '%s' → '%s' for channel '%s'", old_name, new_name, channel_id
-        )
+        logger.success("✅ Renamed category '%s' → '%s' for channel '%s'", old_name, new_name, channel_id)
     elif update_data.get("status") == "archived":
-        logger.success(
-            "📦 Archived category '%s' for channel '%s'", new_name or old_name, channel_id
-        )
+        logger.success("📦 Archived category '%s' for channel '%s'", new_name or old_name, channel_id)
     else:
-        logger.success(
-            "✅ Updated category '%s' for channel '%s'", new_name or old_name, channel_id
-        )
+        logger.success("✅ Updated category '%s' for channel '%s'", new_name or old_name, channel_id)
 
     return {"ok": True, "category_id": category_id}
 

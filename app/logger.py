@@ -22,7 +22,8 @@ SUCCESS_LEVEL = 25
 logging.addLevelName(SUCCESS_LEVEL, "SUCCESS")
 
 # Global log buffer for the live logs endpoint
-LOG_BUFFER = deque(maxlen=200)
+LOG_BUFFER: deque[str] = deque(maxlen=200)
+
 LOG_LOCK = Lock()
 
 
@@ -51,7 +52,7 @@ class ColorFormatter(logging.Formatter):
         # Default colors based on level
         color = COLORS["RESET"]
 
-        if record.levelno == logging.ERROR or record.levelno == logging.CRITICAL:
+        if record.levelno in (logging.ERROR, logging.CRITICAL):
             color = COLORS["RED"]
         elif record.levelno == logging.WARNING:
             color = COLORS["YELLOW"]
