@@ -25,8 +25,9 @@ class Settings(BaseSettings):
     R2_BUCKET_NAME: str
     R2_ENDPOINT_URL: str
 
-    # Gemini
-    GEMINI_API_KEY: str
+    # Gemini (Vertex AI / Agent Platform)
+    GOOGLE_CLOUD_PROJECT: str
+    GOOGLE_CLOUD_LOCATION: str = "global"
 
     # YouTube (optional — prefer DB config collection; kept for backward compat)
     YOUTUBE_CLIENT_ID: Optional[str] = None

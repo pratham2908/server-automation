@@ -28,8 +28,17 @@ class GeminiService:
         "gemini-2.5-flash",
     ]
 
-    def __init__(self, api_key: str) -> None:
-        self._client = genai.Client(api_key=api_key)
+    def __init__(
+        self, 
+        project: str, 
+        location: str = "us-central1"
+    ) -> None:
+        logger.info("Initializing Gemini with Vertex AI routing (Project: %s, Location: %s)", project, location)
+        self._client = genai.Client(
+            vertexai=True,
+            project=project,
+            location=location
+        )
 
     # ------------------------------------------------------------------
     # Internal — model fallback

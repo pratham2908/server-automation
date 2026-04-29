@@ -7,3 +7,4 @@ youtube_tokens/
 __pycache__/
 *.py[cod]
 *$py.class
+secrets/*

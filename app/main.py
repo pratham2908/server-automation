@@ -83,7 +83,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # ---- Gemini ----
     from app.services.gemini import GeminiService
 
-    gemini_service = GeminiService(api_key=settings.GEMINI_API_KEY)
+    gemini_service = GeminiService(
+        project=settings.GOOGLE_CLOUD_PROJECT,
+        location=settings.GOOGLE_CLOUD_LOCATION
+    )
     logger.info("Gemini service initialised")
 
     # ---- Background auto-publisher (Instagram scheduled reels) ----
