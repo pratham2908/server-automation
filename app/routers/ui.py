@@ -87,6 +87,12 @@ async def get_log_viewer():
                 100% { opacity: 1; }
             }
 
+            .main-layout {
+                flex: 1;
+                display: flex;
+                overflow: hidden;
+            }
+
             #log-container {
                 flex: 1;
                 overflow-y: auto;
@@ -95,6 +101,137 @@ async def get_log_viewer():
                 font-size: 0.85rem;
                 line-height: 1.5;
                 scroll-behavior: smooth;
+            }
+
+            /* Error Queue Sidebar */
+            aside#error-queue {
+                width: 380px;
+                background: rgba(15, 23, 42, 0.95);
+                border-left: 1px solid rgba(255, 255, 255, 0.1);
+                display: flex;
+                flex-direction: column;
+                transition: transform 0.3s ease;
+                z-index: 20;
+            }
+
+            .queue-header {
+                padding: 1.25rem;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                background: rgba(30, 41, 59, 0.4);
+            }
+
+            .queue-header h2 {
+                font-size: 0.9rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: var(--error);
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+
+            #error-list {
+                flex: 1;
+                overflow-y: auto;
+                padding: 1rem;
+            }
+
+            .error-card {
+                background: rgba(30, 41, 59, 0.6);
+                border: 1px solid rgba(248, 113, 113, 0.2);
+                border-radius: 0.75rem;
+                padding: 1rem;
+                margin-bottom: 1rem;
+                position: relative;
+                transition: all 0.2s;
+            }
+
+            .error-card:hover {
+                border-color: var(--error);
+                background: rgba(30, 41, 59, 0.8);
+            }
+
+            .error-card .feature {
+                font-size: 0.65rem;
+                font-weight: 800;
+                color: var(--error);
+                text-transform: uppercase;
+                background: rgba(248, 113, 113, 0.1);
+                padding: 0.15rem 0.4rem;
+                border-radius: 4px;
+                display: inline-block;
+                margin-bottom: 0.5rem;
+            }
+
+            .error-card .time {
+                float: right;
+                font-size: 0.65rem;
+                color: var(--text-muted);
+            }
+
+            .error-card .msg {
+                font-size: 0.8rem;
+                color: var(--text-main);
+                font-weight: 500;
+                line-height: 1.4;
+                margin-bottom: 0.75rem;
+            }
+
+            .error-card .actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 0.5rem;
+            }
+
+            .action-btn {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                color: var(--text-muted);
+                padding: 0.25rem 0.5rem;
+                border-radius: 4px;
+                font-size: 0.7rem;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                gap: 0.35rem;
+                transition: all 0.2s;
+            }
+
+            .action-btn:hover {
+                background: rgba(248, 113, 113, 0.15);
+                color: var(--error);
+                border-color: var(--error);
+            }
+
+            .error-card details {
+                margin-top: 0.5rem;
+                font-size: 0.7rem;
+            }
+
+            .error-card pre {
+                background: rgba(0,0,0,0.3);
+                padding: 0.75rem;
+                border-radius: 0.5rem;
+                margin-top: 0.5rem;
+                color: #94a3b8;
+                font-family: 'Fira Code', monospace;
+                overflow-x: auto;
+            }
+
+            .empty-state {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 200px;
+                color: var(--text-muted);
+                font-size: 0.8rem;
+                text-align: center;
+                padding: 2rem;
             }
 
             .log-line {
@@ -200,9 +337,10 @@ async def get_log_viewer():
             .controls {
                 position: fixed;
                 bottom: 2rem;
-                right: 2rem;
+                left: 2rem;
                 display: flex;
                 gap: 0.75rem;
+                z-index: 30;
             }
 
             .btn {
@@ -315,7 +453,21 @@ async def get_log_viewer():
             <span id="match-count" class="match-count" style="display:none"></span>
         </div>
 
-        <main id="log-container"></main>
+        <div class="main-layout">
+            <main id="log-container"></main>
+            
+            <aside id="error-queue">
+                <div class="queue-header">
+                    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg> Error Queue</h2>
+                    <button class="action-btn" onclick="fetchErrors()" title="Refresh Queue">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                    </button>
+                </div>
+                <div id="error-list">
+                    <div class="empty-state">Loading errors...</div>
+                </div>
+            </aside>
+        </div>
 
         <div class="controls">
             <button id="copy-btn" class="btn">
@@ -329,6 +481,9 @@ async def get_log_viewer():
             <button id="autoscroll-btn" class="btn active">
                 Autoscroll: On
             </button>
+            <button id="toggle-queue-btn" class="btn" onclick="toggleQueue()">
+                Queue: Visible
+            </button>
         </div>
 
         <script>
@@ -341,11 +496,72 @@ async def get_log_viewer():
             const searchInput = document.getElementById('search-input');
             const matchCountEl = document.getElementById('match-count');
             const filterBtns = document.querySelectorAll('.filter-btn');
+            const errorList = document.getElementById('error-list');
+            const aside = document.getElementById('error-queue');
             
             let autoscroll = true;
             let eventSource = null;
             let activeLevel = 'all';
             let searchTerm = '';
+
+            async function fetchErrors() {
+                try {
+                    const res = await fetch('/api/errors/?resolved=false');
+                    const data = await res.json();
+                    renderErrors(data);
+                } catch (e) {
+                    console.error('Failed to fetch errors:', e);
+                    errorList.innerHTML = '<div class="empty-state">Failed to load errors</div>';
+                }
+            }
+
+            async function removeError(id) {
+                if (!confirm('Permanently remove this error from DB?')) return;
+                try {
+                    await fetch(`/api/errors/${id}`, { method: 'DELETE' });
+                    fetchErrors();
+                } catch (e) {
+                    alert('Failed to remove error');
+                }
+            }
+
+            function renderErrors(errors) {
+                if (!errors || errors.length === 0) {
+                    errorList.innerHTML = `
+                        <div class="empty-state">
+                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.5;margin-bottom:1rem"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                            <div style="font-weight:700;color:var(--success);margin-bottom:0.25rem">All Clear!</div>
+                            No active errors in queue
+                        </div>`;
+                    return;
+                }
+
+                errorList.innerHTML = errors.map(err => `
+                    <div class="error-card">
+                        <span class="time">${new Date(err.timestamp).toLocaleTimeString()}</span>
+                        <span class="feature">${err.feature}</span>
+                        <div class="msg">${err.message}</div>
+                        <div class="actions">
+                            <button class="action-btn" onclick="removeError('${err._id}')">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                Clear
+                            </button>
+                        </div>
+                        ${err.stack_trace ? `
+                            <details>
+                                <summary style="color:var(--text-muted);cursor:pointer;font-weight:600">View Stack Trace</summary>
+                                <pre>${err.stack_trace}</pre>
+                            </details>
+                        ` : ''}
+                    </div>
+                `).join('');
+            }
+
+            function toggleQueue() {
+                const isHidden = aside.style.display === 'none';
+                aside.style.display = isHidden ? 'flex' : 'none';
+                document.getElementById('toggle-queue-btn').textContent = `Queue: ${isHidden ? 'Visible' : 'Hidden'}`;
+            }
 
             function classifyLevel(line) {
                 const lower = line.toLowerCase();
@@ -514,6 +730,9 @@ async def get_log_viewer():
             };
 
             connect();
+            fetchErrors();
+            // Poll for errors every 30 seconds
+            setInterval(fetchErrors, 30000);
         </script>
     </body>
     </html>

@@ -100,6 +100,8 @@ async def connect_db(
         "expires_at", expireAfterSeconds=0,
     )
     await _db.thumbnail_analysis.create_index("analysis_id", unique=True)
+    await _db.errors.create_index([("feature", 1), ("resolved", 1)])
+    await _db.errors.create_index("timestamp")
 
     await _db.video_intelligence.create_index(
         [("channel_id", 1), ("source", 1)],

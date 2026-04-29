@@ -16,6 +16,7 @@ from app.logger import get_logger
 from app.services.schedule_operation import _build_instagram_caption
 from app.database import update_channel_task_status
 from app.timezone import now_ist
+from app.services.errors import get_error_service
 
 logger = get_logger(__name__)
 
@@ -86,7 +87,7 @@ async def _publish_one_reel(
         
         return True
 
-    except Exception:
+    except Exception as e:
         attempts = queue_entry.get("attempt_count", 0) + 1
         logger.exception(
             "Auto-publisher failed for video '%s' on channel '%s' (attempt %d/%d)",
@@ -94,6 +95,18 @@ async def _publish_one_reel(
             channel_id,
             attempts,
             _MAX_PUBLISH_ATTEMPTS,
+        )
+        
+        error_service = get_error_service(db)
+        await error_service.log_error(
+            feature="Instagram Auto-Publisher",
+            message=f"Failed to publish reel '{video_doc.get('title', video_id)}' (Attempt {attempts}/{_MAX_PUBLISH_ATTEMPTS})",
+            exception=e,
+            context={
+                "video_id": video_id,
+                "channel_id": channel_id,
+                "attempt": attempts
+            }
         )
         if attempts >= _MAX_PUBLISH_ATTEMPTS:
             logger.error(
@@ -133,9 +146,15 @@ async def run_auto_publisher(db: Any, r2_service: Any) -> None:
         except asyncio.CancelledError:
             logger.info("Auto-publisher shutting down")
             break
-        except Exception:
+        except Exception as e:
             logger.exception("Auto-publisher encountered an error during poll cycle")
             metrics_service.track_task_end("auto_publisher", "error")
+            error_service = get_error_service(db)
+            await error_service.log_error(
+                feature="Instagram Auto-Publisher Loop",
+                message="Auto-publisher encountered an error during poll cycle",
+                exception=e
+            )
 
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 

@@ -215,6 +215,7 @@ from app.routers import (
     auth,
     categories,
     channels,
+    errors,
     comment_analysis,
     comment_replies,
     content_intelligence,
@@ -232,6 +233,7 @@ from app.routers import (
 
 app.include_router(auth.router)
 app.include_router(channels.router)
+app.include_router(errors.router)
 app.include_router(videos.router)
 app.include_router(categories.router)
 app.include_router(analysis.router)

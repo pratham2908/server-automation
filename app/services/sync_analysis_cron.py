@@ -39,12 +39,11 @@ async def _get_config(db: AsyncIOMotorDatabase) -> dict:
 async def _count_unanalyzed_videos(
     db: AsyncIOMotorDatabase, channel_id: str,
 ) -> int:
-    """Count published + verified videos that have no performance analysis in the videos collection."""
+    """Count published videos that have no performance analysis in the videos collection."""
     count = await db.videos.count_documents(
         {
             "channel_id": channel_id,
             "status": "published",
-            "verification_status": {"$ne": "unverified"},
             "performance": None,
         }
     )

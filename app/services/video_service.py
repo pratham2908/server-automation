@@ -352,6 +352,7 @@ class VideoService:
             new_vids = [v for v in yt_vids if v["youtube_video_id"] not in db_ids]
             for v in [v for v in yt_vids if v["youtube_video_id"] in db_ids]:
                 await self.db.videos.update_one({"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]}, {"$set": {"title": v["title"], "description": v["description"], "metadata.views": v["views"], "updated_at": now_ist()}})
+            
             if not new_vids: return {"ok": True, "synced": 0}
             schema = await get_content_schema_for_prompt(self.db, channel_id, True)
             cats = [{"name": c["name"], "description": c.get("description", "")} async for c in self.db.categories.find({"channel_id": channel_id})]
@@ -369,7 +370,59 @@ class VideoService:
                     await self.db.videos.insert_one({"channel_id": channel_id, "video_id": str(uuid.uuid4()), "youtube_video_id": v["youtube_video_id"], "title": v["title"], "description": v["description"], "category": cat, "status": "published", "published_at": v["published_at"], "content_params": ana.get("content_params"), "verification_status": "unverified", "created_at": now_ist()})
                     inserted += 1
             return {"ok": True, "synced": inserted}
-        return {"ok": True, "message": "Platform not fully in service"}
+
+        if platform == "instagram":
+            ig = await self._get_instagram_service(channel_id)
+            if not ig: raise ValueError("No Instagram token")
+            ig_reels = ig.get_reels(channel["instagram_user_id"])
+            db_ids = {doc["instagram_media_id"] async for doc in self.db.videos.find({"channel_id": channel_id, "instagram_media_id": {"$ne": None}}, {"instagram_media_id": 1})}
+            new_vids = []
+            for r in ig_reels:
+                if r["id"] not in db_ids:
+                    new_vids.append({
+                        "instagram_media_id": r["id"],
+                        "title": r.get("caption", "Untitled Reel"),
+                        "description": r.get("caption", ""),
+                        "published_at": r.get("timestamp"),
+                        "views": r.get("view_count", 0)
+                    })
+                else:
+                    await self.db.videos.update_one(
+                        {"channel_id": channel_id, "instagram_media_id": r["id"]},
+                        {"$set": {"metadata.views": r.get("view_count", 0), "updated_at": now_ist()}}
+                    )
+
+            if not new_vids: return {"ok": True, "synced": 0}
+            schema = await get_content_schema_for_prompt(self.db, channel_id, True)
+            cats = [{"name": c["name"], "description": c.get("description", "")} async for c in self.db.categories.find({"channel_id": channel_id})]
+            inserted = 0
+            for i in range(0, len(new_vids), 10):
+                batch = new_vids[i:i+10]
+                results = await self._extract_params_and_categorize_batch(schema, cats, batch, instructions, "instagram")
+                res_map = {r["instagram_media_id"]: r for r in results if "instagram_media_id" in r}
+                for v in batch:
+                    ana = res_map.get(v["instagram_media_id"], {})
+                    cat = ana.get("category", "Uncategorized")
+                    if cat not in [c["name"] for c in cats]:
+                        await self.db.categories.insert_one({"id": str(uuid.uuid4()), "channel_id": channel_id, "name": cat, "status": "active", "created_at": now_ist()})
+                        cats.append({"name": cat})
+                    await self.db.videos.insert_one({
+                        "channel_id": channel_id,
+                        "video_id": str(uuid.uuid4()),
+                        "instagram_media_id": v["instagram_media_id"],
+                        "title": v["title"],
+                        "description": v["description"],
+                        "category": cat,
+                        "status": "published",
+                        "published_at": v["published_at"],
+                        "content_params": ana.get("content_params"),
+                        "verification_status": "unverified",
+                        "created_at": now_ist()
+                    })
+                    inserted += 1
+            return {"ok": True, "synced": inserted}
+
+        return {"ok": True, "message": "Platform not supported"}
 
     async def _extract_params_and_categorize_batch(self, schema, cats, batch, instructions, platform):
         if not self.gemini: return []

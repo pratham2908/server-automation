@@ -19,6 +19,7 @@ import pytz
 
 from app.logger import get_logger
 from app.timezone import IST, UTC, now_ist, to_ist_iso
+from app.services.errors import get_error_service
 
 logger = get_logger(__name__)
 
@@ -97,7 +98,7 @@ async def _upload_one_video(
         )
         return True
 
-    except Exception:
+    except Exception as e:
         attempts = queue_entry.get("attempt_count", 0) + 1
         logger.exception(
             "YouTube uploader: failed for video '%s' on channel '%s' (attempt %d/%d)",
@@ -105,6 +106,18 @@ async def _upload_one_video(
             channel_id,
             attempts,
             _MAX_UPLOAD_ATTEMPTS,
+        )
+
+        error_service = get_error_service(db)
+        await error_service.log_error(
+            feature="YouTube Uploader",
+            message=f"Failed to upload video '{video_doc.get('title', video_id)}' (Attempt {attempts}/{_MAX_UPLOAD_ATTEMPTS})",
+            exception=e,
+            context={
+                "video_id": video_id,
+                "channel_id": channel_id,
+                "attempt": attempts
+            }
         )
 
         if attempts >= _MAX_UPLOAD_ATTEMPTS:
@@ -237,7 +250,13 @@ async def run_youtube_uploader(db: Any, r2_service: Any) -> None:
         except asyncio.CancelledError:
             logger.info("YouTube uploader shutting down")
             break
-        except Exception:
+        except Exception as e:
             logger.exception("YouTube uploader encountered an error during poll cycle")
+            error_service = get_error_service(db)
+            await error_service.log_error(
+                feature="YouTube Uploader Loop",
+                message="YouTube uploader encountered an error during poll cycle",
+                exception=e
+            )
 
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)

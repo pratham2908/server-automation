@@ -89,7 +89,6 @@ async def run_analysis(
         {
             "channel_id": channel_id,
             "status": "published",
-            "verification_status": {"$ne": "unverified"},
         }
     ).to_list(length=None)
 
