@@ -176,7 +176,14 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
         logger.info("YouTube uploader: no due YouTube entries.")
         return
 
-    logger.info("YouTube uploader: found %d queued YouTube entry(s)", len(queued_entries))
+    # Log summary per channel as requested
+    from collections import defaultdict
+    channel_counts = defaultdict(int)
+    for entry in queued_entries:
+        channel_counts[entry.get("channel_id", "unknown")] += 1
+    
+    for cid, count in channel_counts.items():
+        logger.info("YouTube uploader: found %d videos to upload to channel %s", count, cid)
 
     for entry in queued_entries:
         channel_id = entry.get("channel_id", "")

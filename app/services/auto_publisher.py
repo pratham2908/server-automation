@@ -185,6 +185,15 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
         )
         return
 
+    # Log summary per channel as requested
+    from collections import defaultdict
+    channel_counts = defaultdict(int)
+    for entry in due_entries:
+        channel_counts[entry.get("channel_id", "unknown")] += 1
+    
+    for cid, count in channel_counts.items():
+        logger.info("Auto-publisher: found %d videos to publish to channel %s", count, cid)
+
     for entry in due_entries:
         channel_id = entry.get("channel_id", "")
         video_id = entry.get("video_id", "")
