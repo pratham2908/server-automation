@@ -45,9 +45,9 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             duration = (time.time() - start_time) * 1000
             status_code = response.status_code
-            logger.info(f"[REQUEST] {method} {path} | {status_code} | {duration:.2f}ms")
             # Record high-level metrics for performance monitoring (unless it's a meta-endpoint)
             if not is_meta_endpoint:
+                logger.info(f"[REQUEST] {method} {path} | {status_code} | {duration:.2f}ms")
                 metrics_service.record_request(method, path, status_code, duration)
             return response
 
@@ -116,11 +116,10 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             "headers": headers,
         }
 
-        # Log specialized "box" format for UI
-        logger.info(f"REQUEST_BOX: {json.dumps(log_data)}")
-
-        # Record the standard metrics
+        # Log specialized "box" format for UI (unless it's a meta-endpoint)
         if not is_meta_endpoint:
+            logger.info(f"REQUEST_BOX: {json.dumps(log_data)}")
+            # Record the standard metrics
             metrics_service.record_request(method, path, status_code, duration)
 
         return response

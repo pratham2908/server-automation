@@ -13,9 +13,13 @@ class MetricsService:
 
         # Background tasks metrics
         self.tasks: dict[str, dict] = {
-            "sync_analysis": {"last_run": None, "last_status": "none", "count": 0},
-            "velocity_booster": {"last_run": None, "last_status": "none", "count": 0},
-            "comment_analysis": {"last_run": None, "last_status": "none", "count": 0},
+            "sync_analysis": {"last_run": None, "last_status": "none", "count": 0, "is_running": False},
+            "velocity_booster": {"last_run": None, "last_status": "none", "count": 0, "is_running": False},
+            "comment_analysis": {"last_run": None, "last_status": "none", "count": 0, "is_running": False},
+            "comment_reply": {"last_run": None, "last_status": "none", "count": 0, "is_running": False},
+            "auto_publisher": {"last_run": None, "last_status": "none", "count": 0, "is_running": False},
+            "youtube_uploader": {"last_run": None, "last_status": "none", "count": 0, "is_running": False},
+            "growth_tracking": {"last_run": None, "last_status": "none", "count": 0, "is_running": False},
         }
 
         # AI metrics
@@ -92,6 +96,18 @@ class MetricsService:
 
     def record_task_run(self, task_name: str, status: str = "success"):
         if task_name in self.tasks:
+            self.tasks[task_name]["last_run"] = datetime.now(timezone.utc).isoformat()
+            self.tasks[task_name]["last_status"] = status
+            self.tasks[task_name]["count"] += 1
+
+    def track_task_start(self, task_name: str):
+        if task_name not in self.tasks:
+            self.tasks[task_name] = {"last_run": None, "last_status": "none", "count": 0, "is_running": False}
+        self.tasks[task_name]["is_running"] = True
+
+    def track_task_end(self, task_name: str, status: str = "success"):
+        if task_name in self.tasks:
+            self.tasks[task_name]["is_running"] = False
             self.tasks[task_name]["last_run"] = datetime.now(timezone.utc).isoformat()
             self.tasks[task_name]["last_status"] = status
             self.tasks[task_name]["count"] += 1

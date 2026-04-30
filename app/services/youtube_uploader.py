@@ -178,7 +178,7 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
     # Log summary per channel as requested
     from collections import defaultdict
-    channel_counts = defaultdict(int)
+    channel_counts: dict[str, int] = defaultdict(int)
     for entry in queued_entries:
         channel_counts[entry.get("channel_id", "unknown")] += 1
     
