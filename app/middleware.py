@@ -23,6 +23,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         query = str(request.query_params)
 
         # Metadata for exclusion (don't track system/internal monitoring in business metrics)
+        # Include both legacy /api/errors and /api/v1/errors (analyzer uses v1).
         is_meta_endpoint = any(
             ex in path
             for ex in [
@@ -36,6 +37,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 "/docs",
                 "/redoc",
                 "/api/errors",
+                "/api/v1/errors",
             ]
         )
 
@@ -97,8 +99,8 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 "headers": headers,
                 "query": query,
             }
-            logger.error(f"REQUEST_BOX: {json.dumps(error_data)}")
             if not is_meta_endpoint:
+                logger.error(f"REQUEST_BOX: {json.dumps(error_data)}")
                 metrics_service.record_request(method, path, 500, duration)
             raise e
 

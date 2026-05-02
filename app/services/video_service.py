@@ -17,7 +17,11 @@ from app.database import (
     get_content_schema_for_prompt,
 )
 from app.logger import get_logger
-from app.services.downloader import download_youtube_video_to_r2
+from app.services.downloader import (
+    copy_r2_video_to_r2,
+    download_instagram_media_to_r2,
+    download_youtube_video_to_r2,
+)
 from app.services.error_reporting import create_monitored_task, report_error
 from app.services.r2 import R2Service
 from app.services.retention_analysis import run_retention_analysis
@@ -336,10 +340,63 @@ class VideoService:
 
     async def repost_video(self, channel_id: str, video_id: str, data: dict[str, Any]) -> dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video or not video.get("youtube_video_id"):
-            raise ValueError("Original YouTube video not found")
+        if not video:
+            raise ValueError("Video not found")
+        channel = await self.db.channels.find_one({"channel_id": channel_id})
+        platform = get_channel_platform(channel or {})
         new_id = str(uuid.uuid4())
         tid = data.get("target_channel_id") or channel_id
+
+        if platform == "instagram":
+            src_ig = video.get("instagram_media_id")
+            src_r2 = video.get("r2_object_key")
+            if not src_ig and not src_r2:
+                raise ValueError(
+                    "Cannot repost this reel: it has no Instagram media id and no stored video file. "
+                    "Sync the channel or ensure the video was uploaded through this app."
+                )
+            doc = {
+                "channel_id": tid,
+                "video_id": new_id,
+                "title": data["title"],
+                "description": data.get("description", ""),
+                "tags": data.get("tags", []),
+                "category": video.get("category"),
+                "status": "todo",
+                "youtube_video_id": None,
+                "instagram_media_id": src_ig,
+                "scheduled_at": data.get("scheduled_at"),
+                "created_at": now_ist(),
+                "updated_at": now_ist(),
+            }
+            await self.db.videos.insert_one(doc)
+            if data.get("instant"):
+                assert self.r2 is not None
+                if src_r2:
+                    key = await copy_r2_video_to_r2(src_r2, tid, self.r2)
+                else:
+                    ig = await self._get_instagram_service(channel_id)
+                    if not ig:
+                        raise ValueError("No Instagram token")
+                    assert src_ig is not None
+                    media_url = ig.get_reel_media_url(src_ig)
+                    key = await download_instagram_media_to_r2(tid, media_url, self.r2)
+                await self.db.videos.update_one(
+                    {"video_id": new_id},
+                    {"$set": {"r2_object_key": key, "status": "queued", "updated_at": now_ist()}},
+                )
+            else:
+                self.trigger_repost_download(
+                    channel_id,
+                    new_id,
+                    target_channel_id=tid,
+                    instagram_media_id=None if src_r2 else src_ig,
+                    source_r2_key=src_r2 if src_r2 else None,
+                )
+            return {"ok": True, "new_video_id": new_id}
+
+        if not video.get("youtube_video_id"):
+            raise ValueError("Original YouTube video not found")
         doc = {
             "channel_id": tid,
             "video_id": new_id,
@@ -362,7 +419,12 @@ class VideoService:
                 {"$set": {"r2_object_key": key, "status": "queued", "updated_at": now_ist()}},
             )
         else:
-            self.trigger_repost_download(channel_id, video["youtube_video_id"], new_id, target_channel_id=tid)
+            self.trigger_repost_download(
+                channel_id,
+                new_id,
+                target_channel_id=tid,
+                youtube_video_id=video["youtube_video_id"],
+            )
         return {"ok": True, "new_video_id": new_id}
 
     def trigger_retention_analysis(self, channel_id: str, video_id: str, local_video_path: str | None = None) -> None:
@@ -384,9 +446,12 @@ class VideoService:
     def trigger_repost_download(
         self,
         channel_id: str,
-        youtube_video_id: str,
         new_video_id: str,
         target_channel_id: str | None = None,
+        *,
+        youtube_video_id: str | None = None,
+        instagram_media_id: str | None = None,
+        source_r2_key: str | None = None,
     ) -> None:
 
         if self.r2:
@@ -395,7 +460,20 @@ class VideoService:
                 try:
                     tid = target_channel_id or channel_id
                     assert self.r2 is not None
-                    key = await download_youtube_video_to_r2(youtube_video_id, tid, self.r2)
+                    if youtube_video_id:
+                        key = await download_youtube_video_to_r2(youtube_video_id, tid, self.r2)
+                    elif source_r2_key:
+                        key = await copy_r2_video_to_r2(source_r2_key, tid, self.r2)
+                    elif instagram_media_id:
+                        ig = await self._get_instagram_service(channel_id)
+                        if not ig:
+                            raise RuntimeError("No Instagram token")
+                        media_url = ig.get_reel_media_url(instagram_media_id)
+                        key = await download_instagram_media_to_r2(tid, media_url, self.r2)
+                    else:
+                        raise RuntimeError(
+                            "Repost download requires youtube_video_id, instagram_media_id, or source_r2_key"
+                        )
                     video = await self.db.videos.find_one({"channel_id": tid, "video_id": new_video_id})
                     if not video:
                         return
@@ -425,16 +503,22 @@ class VideoService:
                             }
                         )
                 except Exception as e:
+                    ctx: dict[str, Any] = {
+                        "channel_id": channel_id,
+                        "new_video_id": new_video_id,
+                        "target_channel_id": target_channel_id or channel_id,
+                    }
+                    if youtube_video_id:
+                        ctx["youtube_video_id"] = youtube_video_id
+                    if instagram_media_id:
+                        ctx["instagram_media_id"] = instagram_media_id
+                    if source_r2_key:
+                        ctx["source_r2_key"] = source_r2_key
                     await report_error(
-                        feature="Repost download (GitHub → R2)",
+                        feature="Repost download → R2",
                         message=f"Repost download failed: {e!s}",
                         exception=e,
-                        context={
-                            "channel_id": channel_id,
-                            "youtube_video_id": youtube_video_id,
-                            "new_video_id": new_video_id,
-                            "target_channel_id": target_channel_id or channel_id,
-                        },
+                        context=ctx,
                     )
 
             create_monitored_task(_job(), feature="Repost download job", context={"new_video_id": new_video_id})

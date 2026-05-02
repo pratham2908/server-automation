@@ -1,5 +1,7 @@
 import asyncio
+import json
 import os
+from datetime import datetime, timezone
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -7,6 +9,37 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from app.logger import get_logs
 
 router = APIRouter(tags=["ui"])
+
+
+def _journal_timestamp_usec(usec_raw: str | None) -> str:
+    """Format systemd __REALTIME_TIMESTAMP (µs string) for the log UI."""
+    if not usec_raw:
+        return ""
+    try:
+        usec = int(usec_raw)
+        dt = datetime.fromtimestamp(usec / 1_000_000.0, tz=timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+    except (ValueError, TypeError, OSError):
+        return ""
+
+
+def _sse_log_record(
+    message: str,
+    *,
+    source: str = "buffer",
+    timestamp: str | None = None,
+    priority: str | None = None,
+    unit: str | None = None,
+) -> str:
+    """One SSE frame: JSON object so multi-line messages stay a single event."""
+    payload: dict = {"v": 1, "source": source, "message": message}
+    if timestamp:
+        payload["timestamp"] = timestamp
+    if priority is not None:
+        payload["priority"] = priority
+    if unit:
+        payload["unit"] = unit
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
 
 @router.get("/logs", response_class=HTMLResponse)
@@ -373,7 +406,41 @@ async def get_log_viewer():
             .btn:hover { background: #334155; border-color: var(--primary); }
             .btn.active { background: var(--primary); color: var(--bg-dark); font-weight: 600; }
 
-            .log-line.hidden, .request-box.hidden { display: none; }
+            .log-line.hidden, .request-box.hidden, .log-entry-block.hidden { display: none; }
+
+            /* One journal / log record = one block (multi-line tracebacks stay together) */
+            .log-entry-block {
+                margin-bottom: 0.75rem;
+                border-left: 2px solid transparent;
+                padding-left: 0.75rem;
+                border-radius: 0 0.35rem 0.35rem 0;
+                background: rgba(15, 23, 42, 0.35);
+            }
+            .log-entry-block.line-error { border-left-color: var(--error); }
+            .log-entry-block.line-warning { border-left-color: var(--warning); }
+            .log-entry-block.line-success { border-left-color: var(--success); }
+            .log-entry-block.line-info { border-left-color: rgba(148, 163, 184, 0.4); }
+            .log-entry-meta {
+                font-size: 0.65rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                color: rgba(148, 163, 184, 0.85);
+                margin-bottom: 0.35rem;
+                font-family: var(--font-mono);
+            }
+            .log-entry-body {
+                margin: 0;
+                white-space: pre-wrap;
+                word-break: break-word;
+                font-family: 'Fira Code', monospace;
+                font-size: 0.78rem;
+                line-height: 1.45;
+                color: var(--text-muted);
+            }
+            .log-entry-block.line-error .log-entry-body { color: var(--error); }
+            .log-entry-block.line-warning .log-entry-body { color: var(--warning); }
+            .log-entry-block.line-success .log-entry-body { color: var(--success); }
 
             /* Request Box Styles */
             .request-box {
@@ -682,6 +749,29 @@ async def get_log_viewer():
                 document.getElementById('toggle-queue-btn').textContent = `Queue: ${isHidden ? 'Visible' : 'Hidden'}`;
             }
 
+            function stripAnsi(s) {
+                return s.replace(/\x1b\[[0-9;]*m/g, '');
+            }
+
+            function escapeAttr(s) {
+                return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+            }
+
+            function escapeHtml(s) {
+                const d = document.createElement('div');
+                d.textContent = s;
+                return d.innerHTML;
+            }
+
+            function priorityToLevel(prio) {
+                if (prio === undefined || prio === null || prio === '') return null;
+                const n = parseInt(String(prio), 10);
+                if (Number.isNaN(n)) return null;
+                if (n <= 3) return 'error';
+                if (n === 4) return 'warning';
+                return 'info';
+            }
+
             function classifyLevel(line) {
                 const lower = line.toLowerCase();
                 if (lower.includes('[error]') || lower.includes('[critical]') || lower.includes('error') || lower.includes('failed') || lower.includes('exception'))
@@ -705,7 +795,7 @@ async def get_log_viewer():
             }
 
             function applyFilters() {
-                const allLines = logContainer.querySelectorAll('.log-line, .request-box');
+                const allLines = logContainer.querySelectorAll('.log-line, .request-box, .log-entry-block');
                 let visible = 0;
                 allLines.forEach(el => {
                     const show = shouldShow(el);
@@ -752,7 +842,41 @@ async def get_log_viewer():
 
             function formatLogLine(line) {
                 if (!line.trim()) return '';
-                
+
+                try {
+                    const parsed = JSON.parse(line);
+                    if (parsed && parsed.v === 1 && typeof parsed.message === 'string') {
+                        const rawMsg = parsed.message;
+                        const visible = stripAnsi(rawMsg);
+                        let level = classifyLevel(rawMsg);
+                        const pl = priorityToLevel(parsed.priority);
+                        if (pl === 'error' || (pl === 'warning' && level === 'info')) {
+                            level = pl;
+                        }
+                        let className = '';
+                        if (level === 'error') className = 'line-error';
+                        else if (level === 'warning') className = 'line-warning';
+                        else if (level === 'success') className = 'line-success';
+                        else className = 'line-info';
+
+                        const metaParts = [];
+                        if (parsed.timestamp) metaParts.push(parsed.timestamp);
+                        if (parsed.unit) metaParts.push(parsed.unit);
+                        if (parsed.source === 'journal') metaParts.push('journald');
+
+                        const meta = metaParts.length
+                            ? `<div class="log-entry-meta">${metaParts.map(escapeHtml).join(' · ')}</div>`
+                            : '';
+
+                        const hidden = (activeLevel !== 'all' && level !== activeLevel) ||
+                            (searchTerm && !rawMsg.toLowerCase().includes(searchTerm.toLowerCase()));
+
+                        return `<div class="log-entry-block ${className}${hidden ? ' hidden' : ''}" data-level="${level}" data-raw="${escapeAttr(rawMsg)}">${meta}<pre class="log-entry-body">${escapeHtml(visible)}</pre></div>`;
+                    }
+                } catch (parseErr) {
+                    /* fall through — legacy plain-text lines */
+                }
+
                 if (line.includes('REQUEST_BOX:')) {
                     try {
                         const jsonStr = line.split('REQUEST_BOX:')[1].trim();
@@ -832,7 +956,7 @@ async def get_log_viewer():
             };
 
             copyBtn.onclick = () => {
-                const text = Array.from(logContainer.querySelectorAll('.log-line:not(.hidden)'))
+                const text = Array.from(logContainer.querySelectorAll('.log-line:not(.hidden), .request-box:not(.hidden), .log-entry-block:not(.hidden)'))
                     .map(el => el.innerText)
                     .join('\\n');
                 navigator.clipboard.writeText(text).then(() => {
@@ -866,13 +990,13 @@ async def stream_logs():
     async def log_generator():
         # Fallback to internal logs if not posix
         if os.name != "posix":
-            yield "data: [Internal Log Fallback (Non-Linux OS)]\n\n"
+            yield _sse_log_record("[Internal Log Fallback (Non-Linux OS)]", source="notice")
             for log in get_logs():
-                yield f"data: {log}\n\n"
+                yield _sse_log_record(log, source="buffer")
             return
 
         try:
-            # Absolute path to journalctl
+            # JSON output: one logical journal entry per line (MESSAGE may be multi-line)
             process = await asyncio.create_subprocess_exec(
                 "/usr/bin/journalctl",
                 "-u",
@@ -880,6 +1004,8 @@ async def stream_logs():
                 "-f",
                 "-n",
                 "50",
+                "-o",
+                "json",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -896,21 +1022,46 @@ async def stream_logs():
                         if process.stderr:
                             error = await process.stderr.read()
                             err_msg = error.decode().strip()
-                        yield f"data: [Stream Disconnected (Code {process.returncode}): {err_msg}]\n\n"
+                        yield _sse_log_record(
+                            f"[Stream Disconnected (Code {process.returncode}): {err_msg}]",
+                            source="notice",
+                        )
                         break
 
-                    # Keep-alive in case of silence
                     await asyncio.sleep(0.5)
                     continue
 
                 clean_line = line.decode().strip()
-                if clean_line:
-                    yield f"data: {clean_line}\n\n"
+                if not clean_line:
+                    continue
+                try:
+                    entry = json.loads(clean_line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg = entry.get("MESSAGE")
+                if msg is None:
+                    continue
+                if not isinstance(msg, str):
+                    msg = str(msg)
+
+                ts = _journal_timestamp_usec(entry.get("__REALTIME_TIMESTAMP"))
+                prio = entry.get("PRIORITY")
+                prio_str = str(prio) if prio is not None else None
+                unit = entry.get("_SYSTEMD_UNIT") or entry.get("SYSLOG_IDENTIFIER") or ""
+
+                yield _sse_log_record(
+                    msg,
+                    source="journal",
+                    timestamp=ts or None,
+                    priority=prio_str,
+                    unit=unit or None,
+                )
 
         except Exception as e:
-            yield f"data: [Error: {str(e)}]\n\n"
+            yield _sse_log_record(f"[Error: {str(e)}]", source="notice")
             for log in get_logs():
-                yield f"data: {log}\n\n"
+                yield _sse_log_record(log, source="buffer")
 
     return StreamingResponse(
         log_generator(),

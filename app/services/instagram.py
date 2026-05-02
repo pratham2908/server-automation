@@ -178,6 +178,19 @@ class InstagramService:
         logger.info("Fetched %d reels for IG user %s", len(reels), ig_user_id)
         return reels
 
+    def get_reel_media_url(self, media_id: str) -> str:
+        """Return a time-limited CDN URL for the reel/video binary (Graph API).
+
+        Used when copying a published reel into R2 for repost or re-upload.
+        """
+        data = self._get(media_id, {"fields": "media_url,media_type"})
+        if data.get("media_type") not in ("VIDEO", "REEL"):
+            raise ValueError("Media is not a video or reel")
+        url = data.get("media_url")
+        if not url:
+            raise ValueError("Instagram did not return media_url for this media")
+        return str(url)
+
     # ------------------------------------------------------------------
     # Comment fetching
     # ------------------------------------------------------------------

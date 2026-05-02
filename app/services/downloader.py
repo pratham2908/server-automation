@@ -1,9 +1,13 @@
-"""YouTube downloader service for pulling synced video files."""
+"""YouTube / Instagram download helpers for pulling video files into R2."""
 
 import asyncio
 import os
+import shutil
+import tempfile
 import uuid
 from typing import TYPE_CHECKING
+
+import requests
 
 if TYPE_CHECKING:
     from app.services.r2 import R2Service
@@ -62,3 +66,43 @@ async def download_youtube_video_to_r2(youtube_video_id: str, channel_id: str, r
     await asyncio.to_thread(_download_and_upload_sync, youtube_video_id, r2_key, r2_service)
 
     return r2_key
+
+
+def _download_instagram_url_to_r2_sync(media_url: str, r2_key: str, r2_service: "R2Service") -> str:
+    """Stream-download *media_url* (Graph API CDN) into R2 at *r2_key*."""
+    with requests.get(media_url, stream=True, timeout=600) as resp:
+        resp.raise_for_status()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            shutil.copyfileobj(resp.raw, tmp, length=1024 * 1024)
+            tmp.flush()
+            tmp_path = tmp.name
+    try:
+        with open(tmp_path, "rb") as f:
+            r2_service.upload_video(f, r2_key)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    return r2_key
+
+
+async def download_instagram_media_to_r2(channel_id: str, media_url: str, r2_service: "R2Service") -> str:
+    """Download a reel from a Graph ``media_url`` into R2. Returns the object key."""
+    new_video_id = str(uuid.uuid4())
+    r2_key = f"{channel_id}/{new_video_id}.mp4"
+    await asyncio.to_thread(_download_instagram_url_to_r2_sync, media_url, r2_key, r2_service)
+    return r2_key
+
+
+def _copy_r2_key_sync(source_key: str, dest_key: str, r2_service: "R2Service") -> str:
+    r2_service.copy_video(source_key, dest_key)
+    return dest_key
+
+
+async def copy_r2_video_to_r2(source_key: str, target_channel_id: str, r2_service: "R2Service") -> str:
+    """Server-side copy within R2 to a new key under *target_channel_id*."""
+    new_id = str(uuid.uuid4())
+    dest_key = f"{target_channel_id}/{new_id}.mp4"
+    await asyncio.to_thread(_copy_r2_key_sync, source_key, dest_key, r2_service)
+    return dest_key
