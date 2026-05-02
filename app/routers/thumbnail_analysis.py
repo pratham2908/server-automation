@@ -1,6 +1,5 @@
 """Thumbnail analysis router -- ephemeral image quality and CTR scoring."""
 
-import asyncio
 import tempfile
 import uuid
 from datetime import timedelta
@@ -102,6 +101,7 @@ async def create_thumbnail_analysis(
     await db.thumbnail_analysis.insert_one(doc)
 
     import app.main as main_mod
+    from app.services.error_reporting import create_monitored_task
     from app.services.thumbnail_analysis import run_thumbnail_analysis
 
     if not main_mod.gemini_service:
@@ -110,7 +110,7 @@ async def create_thumbnail_analysis(
             detail="Gemini service not initialised",
         )
 
-    asyncio.create_task(
+    create_monitored_task(
         run_thumbnail_analysis(
             analysis_id=analysis_id,
             image_path=tmp_path,
@@ -118,7 +118,9 @@ async def create_thumbnail_analysis(
             platform=platform,
             db=db,
             gemini_service=main_mod.gemini_service,
-        )
+        ),
+        feature="Thumbnail analysis (upload)",
+        context={"analysis_id": analysis_id, "channel_id": channel_id},
     )
 
     return {
@@ -222,6 +224,7 @@ async def create_video_thumbnail_analysis(
     await db.thumbnail_analysis.insert_one(doc)
 
     import app.main as main_mod
+    from app.services.error_reporting import create_monitored_task
     from app.services.thumbnail_analysis import run_thumbnail_analysis
 
     if not main_mod.gemini_service:
@@ -230,7 +233,7 @@ async def create_video_thumbnail_analysis(
             detail="Gemini service not initialised",
         )
 
-    asyncio.create_task(
+    create_monitored_task(
         run_thumbnail_analysis(
             analysis_id=analysis_id,
             image_path=tmp_path,
@@ -238,7 +241,9 @@ async def create_video_thumbnail_analysis(
             platform=platform,
             db=db,
             gemini_service=main_mod.gemini_service,
-        )
+        ),
+        feature="Thumbnail analysis (video-linked)",
+        context={"analysis_id": analysis_id, "channel_id": channel_id, "video_id": video_id},
     )
 
     return {

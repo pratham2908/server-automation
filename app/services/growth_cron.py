@@ -14,6 +14,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import update_channel_task_status
 from app.logger import get_logger
+from app.services.error_reporting import report_error
 from app.services.growth_tracking import GrowthTrackingService
 from app.services.metrics import metrics_service
 
@@ -89,11 +90,22 @@ async def run_growth_tracking_cron(
 
                 except Exception as exc:
                     logger.error(f"Growth snapshot failed for channel '{channel_id}': {exc}")
+                    await report_error(
+                        feature="Growth tracking cron: per-channel",
+                        message=f"Growth snapshot failed for '{channel_id}': {exc!s}",
+                        exception=exc,
+                        context={"channel_id": channel_id},
+                    )
 
             metrics_service.track_task_end("growth_tracking", "success")
         except Exception as exc:
             logger.error(f"Growth tracking cron top-level error: {exc}")
             metrics_service.track_task_end("growth_tracking", "error")
+            await report_error(
+                feature="Growth tracking cron: top-level",
+                message=f"Growth tracking cron cycle failed: {exc!s}",
+                exception=exc,
+            )
 
         interval = await _get_interval_seconds(db)
         logger.info(f"Growth tracking cron: sleeping {interval / 3600:.1f} hours until next run")

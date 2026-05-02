@@ -18,6 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.database import update_channel_task_status
 from app.logger import get_logger
 from app.services.comment_analysis_engine import run_cron_cycle
+from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
 from app.timezone import now_ist
 
@@ -115,7 +116,18 @@ async def run_comment_analysis_cron(
                         channel_id,
                         exc,
                     )
+                    await report_error(
+                        feature="Comment analysis cron: per-channel",
+                        message=f"Comment analysis failed for '{channel_id}': {exc!s}",
+                        exception=exc,
+                        context={"channel_id": channel_id},
+                    )
             metrics_service.track_task_end("comment_analysis", "success")
         except Exception as exc:
             logger.error("Comment analysis cron top-level error: %s", exc)
             metrics_service.track_task_end("comment_analysis", "error")
+            await report_error(
+                feature="Comment analysis cron: top-level",
+                message=f"Comment analysis cron cycle failed: {exc!s}",
+                exception=exc,
+            )

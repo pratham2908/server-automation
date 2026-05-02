@@ -18,6 +18,7 @@ from app.database import (
 )
 from app.logger import get_logger
 from app.services.downloader import download_youtube_video_to_r2
+from app.services.error_reporting import create_monitored_task, report_error
 from app.services.r2 import R2Service
 from app.services.retention_analysis import run_retention_analysis
 from app.services.schedule_operation import (
@@ -367,7 +368,7 @@ class VideoService:
     def trigger_retention_analysis(self, channel_id: str, video_id: str, local_video_path: str | None = None) -> None:
 
         if self.r2 and self.gemini:
-            asyncio.create_task(
+            create_monitored_task(
                 run_retention_analysis(
                     channel_id,
                     video_id,
@@ -375,7 +376,9 @@ class VideoService:
                     self.r2,
                     self.gemini,
                     local_video_path=local_video_path,
-                )
+                ),
+                feature="Retention analysis (scheduled from VideoService)",
+                context={"channel_id": channel_id, "video_id": video_id},
             )
 
     def trigger_repost_download(
@@ -421,10 +424,20 @@ class VideoService:
                                 "added_at": now,
                             }
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    await report_error(
+                        feature="Repost download (GitHub → R2)",
+                        message=f"Repost download failed: {e!s}",
+                        exception=e,
+                        context={
+                            "channel_id": channel_id,
+                            "youtube_video_id": youtube_video_id,
+                            "new_video_id": new_video_id,
+                            "target_channel_id": target_channel_id or channel_id,
+                        },
+                    )
 
-            asyncio.create_task(_job())
+            create_monitored_task(_job(), feature="Repost download job", context={"new_video_id": new_video_id})
 
     async def extract_content_params(self, channel_id: str, video_id: str) -> dict[str, Any]:
         if not self.gemini:

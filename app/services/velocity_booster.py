@@ -18,6 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import update_channel_task_status
 from app.logger import get_logger
+from app.services.error_reporting import report_error
 from app.services.schedule_operation import (
     enqueue_video_for_youtube,
     schedule_single_video_instagram,
@@ -67,6 +68,12 @@ async def _refresh_last_video_stats(
 
     except Exception as e:
         logger.error("Velocity Booster: failed to refresh stats for video %s: %s", video_id, e)
+        await report_error(
+            feature="Velocity Booster: refresh stats",
+            message=f"Failed to refresh stats for video '{video_id}': {e!s}",
+            exception=e,
+            context={"channel_id": channel_id, "video_id": video_id},
+        )
         # Fallback to current DB value
         return (video_doc.get("metadata", {}) or {}).get("views", 0) or 0
 
@@ -172,8 +179,14 @@ async def process_velocity_booster_for_channel(
 
         await update_channel_task_status(db, channel_id, "velocity_booster")
 
-    except Exception:
+    except Exception as e:
         logger.exception("Velocity Booster: failed to schedule boost video for channel %s", channel_id)
+        await report_error(
+            feature="Velocity Booster: schedule boost",
+            message=f"Failed to schedule boost for channel '{channel_id}': {e!s}",
+            exception=e,
+            context={"channel_id": channel_id},
+        )
 
 
 async def run_velocity_booster(
@@ -200,7 +213,12 @@ async def run_velocity_booster(
         except asyncio.CancelledError:
             logger.info("Velocity Booster service shutting down")
             break
-        except Exception:
+        except Exception as e:
             logger.exception("Velocity Booster service encountered an error during poll cycle")
+            await report_error(
+                feature="Velocity Booster: poll cycle",
+                message=f"Velocity Booster poll cycle error: {e!s}",
+                exception=e,
+            )
 
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)

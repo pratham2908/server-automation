@@ -22,6 +22,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.database import get_channel_platform, update_channel_task_status
 from app.logger import get_logger
 from app.services.analysis_engine import run_analysis
+from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
 from app.services.metrics import metrics_service
 from app.services.video_service import VideoService
@@ -109,6 +110,12 @@ async def run_sync_analysis_for_channel(
     except Exception as exc:
         result["sync"] = f"error ({exc})"
         logger.error("Auto-sync failed for '%s': %s", channel_id, exc)
+        await report_error(
+            feature="Sync-analysis cron: channel sync",
+            message=f"Auto-sync failed for '{channel_id}': {exc!s}",
+            exception=exc,
+            context={"channel_id": channel_id},
+        )
         return result
 
     # --- Check unanalyzed count ---
@@ -152,6 +159,12 @@ async def run_sync_analysis_for_channel(
     except Exception as exc:
         result["analysis"] = f"error ({exc})"
         logger.error("Auto-analysis failed for '%s': %s", channel_id, exc)
+        await report_error(
+            feature="Sync-analysis cron: channel analysis",
+            message=f"Auto-analysis failed for '{channel_id}': {exc!s}",
+            exception=exc,
+            context={"channel_id": channel_id},
+        )
 
     await update_channel_task_status(db, channel_id, "sync_analysis")
     return result
@@ -222,9 +235,20 @@ async def run_sync_analysis_cron(
                         channel_id,
                         exc,
                     )
+                    await report_error(
+                        feature="Sync-analysis cron: per-channel",
+                        message=f"Sync-analysis failed for '{channel_id}': {exc!s}",
+                        exception=exc,
+                        context={"channel_id": channel_id},
+                    )
 
             metrics_service.track_task_end("sync_analysis", "success")
             logger.info("Sync-analysis cron cycle complete: %s", results)
         except Exception as exc:
             logger.error("Sync-analysis cron top-level error: %s", exc)
             metrics_service.track_task_end("sync_analysis", "error")
+            await report_error(
+                feature="Sync-analysis cron: top-level",
+                message=f"Sync-analysis cron cycle failed: {exc!s}",
+                exception=exc,
+            )

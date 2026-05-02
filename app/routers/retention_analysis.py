@@ -120,9 +120,8 @@ async def trigger_retention_analysis(
             detail="Video has no R2 file — cannot run retention analysis",
         )
 
-    import asyncio
-
     from app.main import gemini_service, r2_service  # type: ignore[import]
+    from app.services.error_reporting import create_monitored_task
     from app.services.retention_analysis import run_retention_analysis
 
     if not r2_service or not gemini_service:
@@ -131,7 +130,11 @@ async def trigger_retention_analysis(
             detail="Services not initialised",
         )
 
-    asyncio.create_task(run_retention_analysis(channel_id, video_id, db, r2_service, gemini_service))
+    create_monitored_task(
+        run_retention_analysis(channel_id, video_id, db, r2_service, gemini_service),
+        feature="Retention analysis (API trigger)",
+        context={"channel_id": channel_id, "video_id": video_id},
+    )
 
     return {
         "ok": True,

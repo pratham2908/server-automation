@@ -14,6 +14,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
 from app.services.pacing_templates import PacingTemplateService
 from app.services.r2 import R2Service
@@ -217,6 +218,12 @@ async def run_retention_analysis(
 
     except Exception as exc:
         logger.error("Retention analysis failed for '%s': %s", video_title[:50], exc)
+        await report_error(
+            feature="Retention analysis (Gemini)",
+            message=f"Retention analysis failed for video '{video_id}': {exc!s}",
+            exception=exc,
+            context={"channel_id": channel_id, "video_id": video_id},
+        )
         now = now_ist()
         await db.videos.update_one(
             {"channel_id": channel_id, "video_id": video_id},

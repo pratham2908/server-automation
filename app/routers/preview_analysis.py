@@ -1,6 +1,5 @@
 """Preview analysis router -- ephemeral video retention predictions."""
 
-import asyncio
 import tempfile
 import uuid
 from datetime import timedelta
@@ -90,6 +89,7 @@ async def create_preview_analysis(
     await db.preview_analysis.insert_one(doc)
 
     import app.main as main_mod
+    from app.services.error_reporting import create_monitored_task
     from app.services.preview_analysis import run_preview_analysis
 
     if not main_mod.gemini_service:
@@ -98,7 +98,7 @@ async def create_preview_analysis(
             detail="Gemini service not initialised",
         )
 
-    asyncio.create_task(
+    create_monitored_task(
         run_preview_analysis(
             preview_id,
             channel_id,
@@ -107,7 +107,9 @@ async def create_preview_analysis(
             platform,
             db,
             main_mod.gemini_service,
-        )
+        ),
+        feature="Preview analysis (upload)",
+        context={"preview_id": preview_id, "channel_id": channel_id},
     )
 
     return {

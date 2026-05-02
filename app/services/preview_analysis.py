@@ -13,6 +13,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
 from app.services.pacing_templates import PacingTemplateService
 from app.timezone import now_ist
@@ -86,6 +87,12 @@ async def run_preview_analysis(
 
     except Exception as exc:
         logger.error("Preview analysis failed for '%s': %s", title[:50], exc)
+        await report_error(
+            feature="Preview analysis (Gemini)",
+            message=f"Preview '{preview_id}' failed: {exc!s}",
+            exception=exc,
+            context={"preview_id": preview_id, "channel_id": channel_id},
+        )
         await db.preview_analysis.update_one(
             {"preview_id": preview_id},
             {

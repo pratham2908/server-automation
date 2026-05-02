@@ -13,6 +13,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
 from app.timezone import now_ist
 
@@ -58,6 +59,12 @@ async def run_thumbnail_analysis(
 
     except Exception as exc:
         logger.error("Thumbnail analysis failed for '%s': %s", title[:50], exc)
+        await report_error(
+            feature="Thumbnail analysis (Gemini)",
+            message=f"Thumbnail '{analysis_id}' failed: {exc!s}",
+            exception=exc,
+            context={"analysis_id": analysis_id},
+        )
         await db.thumbnail_analysis.update_one(
             {"analysis_id": analysis_id},
             {
