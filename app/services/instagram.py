@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+import json
 import requests
 
 from app.logger import get_logger
@@ -370,28 +371,51 @@ class InstagramService:
         import os
 
         file_size = os.path.getsize(file_path)
+        # Use both standard and X-Entity headers for maximum compatibility with rupload
         headers = {
-            "Authorization": f"OAuth {self._token}",
-            "offset": "0",
-            "file_size": str(file_size),
+            "Authorization": f"Bearer {self._token}",
+            "Offset": "0",
+            "X-Entity-Length": str(file_size),
+            "X-Entity-Name": f"reels_upload_{int(time.time())}_{os.path.basename(file_path)}",
+            "X-Entity-Type": "video/mp4",
             "Content-Type": "application/octet-stream",
         }
+        
+        # Some versions of the IG API prefer these simpler headers
+        headers.update({
+            "offset": "0",
+            "file_size": str(file_size),
+        })
 
         # Read file into memory to avoid 'Transfer-Encoding: chunked' issues with Instagram
         with open(file_path, "rb") as f:
             binary_data = f.read()
 
-        resp = requests.post(
-            upload_uri,
-            headers=headers,
-            data=binary_data,
-            timeout=600,
-        )
+        logger.info("Uploading %d bytes to Instagram rupload...", file_size)
+        try:
+            resp = requests.post(
+                upload_uri,
+                headers=headers,
+                data=binary_data,
+                timeout=600,
+            )
+            
+            if not resp.ok:
+                logger.error("Instagram rupload failed (%d): %s", resp.status_code, resp.text)
+                try:
+                    error_json = resp.json()
+                    logger.error("Instagram rupload error JSON: %s", json.dumps(error_json))
+                except Exception:
+                    pass
+            
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logger.error("HTTP error during Instagram upload: %s", e)
+            raise e
+        except Exception as e:
+            logger.error("Unexpected error during Instagram upload: %s", e)
+            raise e
 
-        if not resp.ok:
-            logger.error("Instagram upload failed (%d): %s", resp.status_code, resp.text)
-
-        resp.raise_for_status()
         logger.info("Uploaded video (%d bytes) to %s", file_size, upload_uri[:80])
 
     def check_container_status(self, container_id: str) -> str:
