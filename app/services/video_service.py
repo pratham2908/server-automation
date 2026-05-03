@@ -851,6 +851,9 @@ class VideoService:
                 upd["status"] = "published"
                 upd["published_at"] = v["published_at"] or now_ist()
 
+            if not self._has_thumbnail_url(existing) and v.get("thumbnail_url"):
+                upd["thumbnail_url"] = v["thumbnail_url"]
+
             await self.db.videos.update_one(
                 {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]},
                 {"$set": upd},
@@ -892,6 +895,7 @@ class VideoService:
                         "category": cat,
                         "status": "published",
                         "published_at": v["published_at"],
+                        "thumbnail_url": v.get("thumbnail_url"),
                         "content_params": ana.get("content_params"),
                         "verification_status": "unverified",
                         "created_at": now_ist(),
@@ -922,17 +926,24 @@ class VideoService:
                         "description": r.get("caption", ""),
                         "published_at": (isoparse(r.get("timestamp")) if r.get("timestamp") else None),
                         "views": r.get("view_count", 0),
+                        "thumbnail_url": self._instagram_reel_thumbnail_url(r),
                     }
                 )
             else:
+                existing = await self.db.videos.find_one(
+                    {"channel_id": channel_id, "instagram_media_id": r["id"]},
+                    {"thumbnail_url": 1},
+                )
+                thumb = self._instagram_reel_thumbnail_url(r)
+                set_doc: dict[str, Any] = {
+                    "metadata.views": r.get("view_count", 0),
+                    "updated_at": now_ist(),
+                }
+                if thumb and not self._has_thumbnail_url(existing):
+                    set_doc["thumbnail_url"] = thumb
                 await self.db.videos.update_one(
                     {"channel_id": channel_id, "instagram_media_id": r["id"]},
-                    {
-                        "$set": {
-                            "metadata.views": r.get("view_count", 0),
-                            "updated_at": now_ist(),
-                        }
-                    },
+                    {"$set": set_doc},
                 )
 
         if not new_vids:
@@ -971,6 +982,7 @@ class VideoService:
                         "category": cat,
                         "status": "published",
                         "published_at": v["published_at"],
+                        "thumbnail_url": v.get("thumbnail_url"),
                         "content_params": ana.get("content_params"),
                         "verification_status": "unverified",
                         "created_at": now_ist(),
@@ -978,8 +990,6 @@ class VideoService:
                 )
                 inserted += 1
         return {"ok": True, "synced": inserted}
-
-        return {"ok": True, "message": "Platform not supported"}
 
     async def _extract_params_and_categorize_batch(self, schema, cats, batch, instructions, platform):
         if not self.gemini:
@@ -1041,10 +1051,37 @@ class VideoService:
                         "likes": likes,
                         "comments": comments,
                         "duration_seconds": self._parse_duration(content.get("duration")),
+                        "thumbnail_url": self._youtube_thumbnail_from_snippet(snippet),
                         **self._compute_rates(views, likes, comments),
                     }
                 )
         return videos
+
+    @staticmethod
+    def _youtube_thumbnail_from_snippet(snippet: dict[str, Any]) -> str | None:
+        """Pick the best available URL from YouTube ``snippet.thumbnails``."""
+        thumbs = snippet.get("thumbnails") or {}
+        for key in ("maxres", "standard", "high", "medium", "default"):
+            url = (thumbs.get(key) or {}).get("url")
+            if url:
+                return str(url)
+        return None
+
+    @staticmethod
+    def _has_thumbnail_url(doc: dict[str, Any] | None) -> bool:
+        if not doc:
+            return False
+        u = doc.get("thumbnail_url")
+        return isinstance(u, str) and bool(u.strip())
+
+    @staticmethod
+    def _instagram_reel_thumbnail_url(reel: dict[str, Any]) -> str | None:
+        """Cover image from Graph API (``thumbnail_url`` preferred for video/reel)."""
+        for key in ("thumbnail_url", "media_url"):
+            val = reel.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        return None
 
     def _parse_duration(self, duration: str) -> int:
 

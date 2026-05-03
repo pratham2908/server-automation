@@ -4,7 +4,8 @@ All operations stream data so that multi-GB files never sit fully in memory.
 """
 
 import tempfile
-from typing import BinaryIO
+from datetime import datetime, timedelta, timezone
+from typing import Any, BinaryIO
 
 import boto3
 
@@ -82,3 +83,58 @@ class R2Service:
                 ExpiresIn=expires_in,
             ),
         )
+
+    def list_objects_with_prefix(self, prefix: str) -> list[dict[str, Any]]:
+        """List object metadata under *prefix* (paginated)."""
+        paginator = self._client.get_paginator("list_objects_v2")
+        out: list[dict[str, Any]] = []
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                lm = obj.get("LastModified")
+                out.append(
+                    {
+                        "key": obj["Key"],
+                        "size": int(obj["Size"]),
+                        "last_modified": lm,
+                    }
+                )
+        return out
+
+    @staticmethod
+    def _normalize_utc(dt: datetime | None) -> datetime | None:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def count_purgeable(
+        self, prefix: str, days_old: int
+    ) -> tuple[int, int]:
+        """Count objects and total bytes older than *days_old* under *prefix*."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
+        n = 0
+        total_b = 0
+        for o in self.list_objects_with_prefix(prefix):
+            lm = self._normalize_utc(o.get("last_modified"))
+            if lm is not None and lm < cutoff:
+                n += 1
+                total_b += int(o.get("size", 0))
+        return n, total_b
+
+    def purge_prefix_older_than(self, prefix: str, days_old: int) -> tuple[int, int]:
+        """Delete objects under *prefix* older than *days_old* days. Returns (purged, errors)."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
+        purged = 0
+        errors = 0
+        for o in self.list_objects_with_prefix(prefix):
+            lm = self._normalize_utc(o.get("last_modified"))
+            key = o.get("key")
+            if not key or lm is None or lm >= cutoff:
+                continue
+            try:
+                self.delete_video(key)
+                purged += 1
+            except Exception:
+                errors += 1
+        return purged, errors

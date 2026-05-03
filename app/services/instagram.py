@@ -154,7 +154,10 @@ class InstagramService:
         Paginates through ``/{ig_user_id}/media`` and filters by
         ``media_type`` to keep only video/reel content.
         """
-        fields = "id,caption,media_type,media_url,timestamp,permalink,like_count,comments_count"
+        fields = (
+            "id,caption,media_type,media_url,thumbnail_url,timestamp,"
+            "permalink,like_count,comments_count"
+        )
         reels: list[dict[str, Any]] = []
         url: str | None = f"{ig_user_id}/media"
         params: dict = {"fields": fields, "limit": "100"}

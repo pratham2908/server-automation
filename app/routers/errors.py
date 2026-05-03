@@ -10,7 +10,7 @@ from app.database import get_db
 from app.models.error import ErrorCreate, ErrorEntry, ErrorUpdate
 from app.timezone import now_ist
 
-router = APIRouter(prefix="/api/errors", tags=["errors"])
+router = APIRouter(prefix="/api/v1/errors", tags=["errors"])
 
 
 @router.post("/", response_model=ErrorEntry, status_code=status.HTTP_201_CREATED)

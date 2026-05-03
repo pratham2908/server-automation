@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
@@ -97,6 +97,114 @@ async def list_videos(
         verification_status=verification_status,
         suggest_n=suggest_n,
     )
+
+
+@router.get("/storage/stats")
+async def storage_stats(
+    channel_id: str,
+    service: VideoService = Depends(get_video_service),
+):
+    """Aggregate R2 object count and size for *channel_id* prefix."""
+    if not service.r2:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
+    prefix = f"{channel_id}/"
+    objs = service.r2.list_objects_with_prefix(prefix)
+    total_b = sum(int(o.get("size", 0)) for o in objs)
+    return {
+        "ok": True,
+        "total_count": len(objs),
+        "total_estimated_bytes": total_b,
+        "breakdown": [],
+    }
+
+
+@router.get("/storage/files")
+async def storage_files(
+    channel_id: str,
+    service: VideoService = Depends(get_video_service),
+):
+    """List R2 objects for *channel_id* with optional video title from DB."""
+    if not service.r2:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
+    prefix = f"{channel_id}/"
+    raw = service.r2.list_objects_with_prefix(prefix)
+    key_to_title: dict[str, str] = {}
+    cur = service.db.videos.find(
+        {"channel_id": channel_id, "r2_object_key": {"$exists": True, "$ne": None}},
+        {"r2_object_key": 1, "title": 1},
+    )
+    async for doc in cur:
+        k = doc.get("r2_object_key")
+        if k:
+            key_to_title[k] = doc.get("title") or ""
+
+    files: list[dict[str, Any]] = []
+    for o in raw:
+        k = o.get("key", "")
+        lm = o.get("last_modified")
+        files.append(
+            {
+                "key": k,
+                "size": int(o.get("size", 0)),
+                "last_modified": lm.isoformat() if hasattr(lm, "isoformat") and lm else None,
+                "title": key_to_title.get(k),
+            }
+        )
+    return {"ok": True, "files": files}
+
+
+@router.get("/storage/purge-estimate")
+async def storage_purge_estimate(
+    channel_id: str,
+    days_old: int = Query(30, ge=1, le=3650),
+    service: VideoService = Depends(get_video_service),
+):
+    if not service.r2:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
+    prefix = f"{channel_id}/"
+    count, est_bytes = service.r2.count_purgeable(prefix, days_old)
+    return {
+        "ok": True,
+        "count": count,
+        "estimated_bytes": est_bytes,
+        "days_old": days_old,
+    }
+
+
+@router.post("/storage/purge")
+async def storage_purge(
+    channel_id: str,
+    days_old: int = Query(30, ge=1, le=3650),
+    service: VideoService = Depends(get_video_service),
+):
+    if not service.r2:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
+    prefix = f"{channel_id}/"
+    purged, errs = service.r2.purge_prefix_older_than(prefix, days_old)
+    return {"ok": True, "purged_count": purged, "errors": errs, "days_old": days_old}
+
+
+@router.post("/extract-params/all")
+async def extract_content_params_all(
+    channel_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    service: VideoService = Depends(get_video_service),
+):
+    """Run Gemini content-param extraction for up to *limit* videos."""
+    cursor = service.db.videos.find({"channel_id": channel_id}).limit(limit)
+    videos = await cursor.to_list(length=limit)
+    extracted = 0
+    errors = 0
+    for v in videos:
+        vid = v.get("video_id")
+        if not vid:
+            continue
+        try:
+            await service.extract_content_params(channel_id, vid)
+            extracted += 1
+        except Exception:
+            errors += 1
+    return {"ok": True, "extracted": extracted, "total": len(videos), "errors": errors}
 
 
 @router.patch("/{video_id}/status")

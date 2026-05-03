@@ -406,9 +406,97 @@ async def get_log_viewer():
             .btn:hover { background: #334155; border-color: var(--primary); }
             .btn.active { background: var(--primary); color: var(--bg-dark); font-weight: 600; }
 
-            .log-line.hidden, .request-box.hidden, .log-entry-block.hidden { display: none; }
+            .log-line.hidden, .request-box.hidden, .log-entry-block.hidden, .log-entry-collapsible.hidden { display: none; }
 
-            /* One journal / log record = one block (multi-line tracebacks stay together) */
+            /* Collapsible journal entry: summary = status pill + feature; body = full text */
+            .log-entry-collapsible {
+                margin-bottom: 0.45rem;
+                border-radius: 0.4rem;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                background: rgba(15, 23, 42, 0.55);
+                overflow: hidden;
+            }
+            .log-entry-collapsible.line-error { border-left: 3px solid var(--error); }
+            .log-entry-collapsible.line-warning { border-left: 3px solid var(--warning); }
+            .log-entry-collapsible.line-success { border-left: 3px solid var(--success); }
+            .log-entry-collapsible.line-info { border-left: 3px solid rgba(148, 163, 184, 0.45); }
+            .log-entry-collapsible[open] {
+                border-color: rgba(56, 189, 248, 0.22);
+                background: rgba(30, 41, 59, 0.45);
+            }
+            .log-entry-summary {
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+                padding: 0.4rem 0.55rem;
+                cursor: pointer;
+                list-style: none;
+                user-select: none;
+            }
+            .log-entry-summary::-webkit-details-marker { display: none; }
+            .log-status-pill {
+                font-size: 0.58rem;
+                font-weight: 800;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                padding: 0.18rem 0.42rem;
+                border-radius: 4px;
+                flex-shrink: 0;
+                min-width: 2.4rem;
+                text-align: center;
+            }
+            .log-status-pill.pill-error { color: #fecaca; background: rgba(248, 113, 113, 0.2); }
+            .log-status-pill.pill-warning { color: #fde68a; background: rgba(251, 191, 36, 0.15); }
+            .log-status-pill.pill-info { color: #bae6fd; background: rgba(56, 189, 248, 0.12); }
+            .log-status-pill.pill-success { color: #bbf7d0; background: rgba(74, 222, 128, 0.14); }
+            .log-feature-text {
+                flex: 1;
+                min-width: 0;
+                font-family: 'Inter', sans-serif;
+                font-size: 0.76rem;
+                font-weight: 500;
+                color: #e2e8f0;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .log-entry-chevron {
+                color: var(--text-muted);
+                font-size: 0.65rem;
+                flex-shrink: 0;
+                transition: transform 0.15s ease;
+            }
+            .log-entry-collapsible[open] .log-entry-chevron { transform: rotate(90deg); }
+            .log-entry-details-inner {
+                padding: 0 0.65rem 0.6rem;
+                border-top: 1px solid rgba(255, 255, 255, 0.06);
+            }
+            .log-entry-meta {
+                font-size: 0.62rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: rgba(148, 163, 184, 0.9);
+                margin: 0.45rem 0 0.35rem;
+                font-family: 'Fira Code', monospace;
+            }
+            .log-entry-body {
+                margin: 0;
+                white-space: pre-wrap;
+                word-break: break-word;
+                font-family: 'Fira Code', monospace;
+                font-size: 0.74rem;
+                line-height: 1.42;
+                color: var(--text-muted);
+            }
+            .log-entry-collapsible.line-error .log-entry-body { color: #fca5a5; }
+            .log-entry-collapsible.line-warning .log-entry-body { color: #fcd34d; }
+            .log-entry-collapsible.line-success .log-entry-body { color: #86efac; }
+            .log-entry-body-rich .keyword-info { color: var(--primary); font-weight: 500; }
+            .log-entry-body-rich .keyword-error { color: var(--error); font-weight: 600; }
+            .log-entry-body-rich .keyword-warning { color: var(--warning); font-weight: 500; }
+
+            /* Legacy block (plain non-JSON lines still use .log-line) */
             .log-entry-block {
                 margin-bottom: 0.75rem;
                 border-left: 2px solid transparent;
@@ -420,24 +508,7 @@ async def get_log_viewer():
             .log-entry-block.line-warning { border-left-color: var(--warning); }
             .log-entry-block.line-success { border-left-color: var(--success); }
             .log-entry-block.line-info { border-left-color: rgba(148, 163, 184, 0.4); }
-            .log-entry-meta {
-                font-size: 0.65rem;
-                font-weight: 700;
-                text-transform: uppercase;
-                letter-spacing: 0.06em;
-                color: rgba(148, 163, 184, 0.85);
-                margin-bottom: 0.35rem;
-                font-family: var(--font-mono);
-            }
-            .log-entry-body {
-                margin: 0;
-                white-space: pre-wrap;
-                word-break: break-word;
-                font-family: 'Fira Code', monospace;
-                font-size: 0.78rem;
-                line-height: 1.45;
-                color: var(--text-muted);
-            }
+            .log-entry-block .log-entry-body { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: 'Fira Code', monospace; font-size: 0.78rem; line-height: 1.45; color: var(--text-muted); }
             .log-entry-block.line-error .log-entry-body { color: var(--error); }
             .log-entry-block.line-warning .log-entry-body { color: var(--warning); }
             .log-entry-block.line-success .log-entry-body { color: var(--success); }
@@ -662,7 +733,7 @@ async def get_log_viewer():
 
             async function fetchErrors() {
                 try {
-                    const res = await fetch('/api/errors/?resolved=false');
+                    const res = await fetch('/api/v1/errors/?resolved=false');
                     const data = await res.json();
                     renderErrors(data);
                 } catch (e) {
@@ -694,7 +765,7 @@ async def get_log_viewer():
                     btn.disabled = true;
                     btn.innerText = 'Clearing...';
                     
-                    await fetch(`/api/errors/${errorIdToClear}`, { method: 'DELETE' });
+                    await fetch(`/api/v1/errors/${errorIdToClear}`, { method: 'DELETE' });
                     closeModal();
                     fetchErrors();
                 } catch (e) {
@@ -785,6 +856,158 @@ async def get_log_viewer():
                 return 'info';
             }
 
+            function defaultPill(level) {
+                if (level === 'error') return { label: 'Error', pill: 'error' };
+                if (level === 'warning') return { label: 'Warn', pill: 'warning' };
+                if (level === 'success') return { label: 'OK', pill: 'success' };
+                return { label: 'Info', pill: 'info' };
+            }
+
+            function httpPillFromCode(code) {
+                if (!Number.isFinite(code) || code <= 0) return { label: '—', pill: 'info' };
+                if (code >= 500) return { label: String(code), pill: 'error' };
+                if (code >= 400) return { label: String(code), pill: 'warning' };
+                if (code >= 300) return { label: String(code), pill: 'warning' };
+                return { label: String(code), pill: 'success' };
+            }
+
+            /** Uvicorn / access style: ... "GET /path HTTP/1.1" 200 ... */
+            function tryParseQuotedHttpRequest(stripped) {
+                const q1 = stripped.indexOf('"');
+                if (q1 === -1) return null;
+                const q2 = stripped.indexOf('"', q1 + 1);
+                if (q2 === -1) return null;
+                const inner = stripped.slice(q1 + 1, q2);
+                const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+                let method = null;
+                for (const meth of methods) {
+                    if (inner.startsWith(meth + ' ')) {
+                        method = meth;
+                        break;
+                    }
+                }
+                if (!method) return null;
+                const afterM = inner.slice(method.length + 1);
+                const httpIdx = afterM.lastIndexOf(' HTTP/');
+                if (httpIdx === -1) return null;
+                const path = afterM.slice(0, httpIdx).trim();
+                const tail = stripped.slice(q2 + 1);
+                let i = 0;
+                while (i < tail.length && (tail[i] === ' ' || tail[i] === '\t' || tail[i] === '\r' || tail[i] === '\n')) i++;
+                let codeStr = '';
+                while (i < tail.length && codeStr.length < 3 && tail[i] >= '0' && tail[i] <= '9') {
+                    codeStr += tail[i++];
+                }
+                if (codeStr.length !== 3) return null;
+                return { method: method, path: path, code: parseInt(codeStr, 10) };
+            }
+
+            /** One-line title for the log + optional pill override from message shape */
+            function inferLogSummary(rawMsg) {
+                const stripped = stripAnsi(rawMsg);
+
+                const acc = tryParseQuotedHttpRequest(stripped);
+                if (acc) {
+                    let p = acc.path;
+                    if (p.length > 80) p = '…' + p.slice(-76);
+                    return { feature: acc.method + ' ' + p, pillOverride: httpPillFromCode(acc.code) };
+                }
+
+                const reqBr = stripped.match(/\[REQUEST\]\s+(\S+)\s+(\S+)\s*\|\s*(\d+)/);
+                if (reqBr) {
+                    let p = reqBr[2];
+                    if (p.length > 80) p = p.slice(0, 78) + '…';
+                    return { feature: reqBr[1] + ' ' + p, pillOverride: httpPillFromCode(parseInt(reqBr[3], 10)) };
+                }
+
+                if (stripped.includes('Traceback (most recent call last)')) {
+                    return { feature: 'Python traceback', pillOverride: { label: 'Err', pill: 'error' } };
+                }
+                if (stripped.includes('Exception in ASGI')) {
+                    return { feature: 'ASGI application', pillOverride: { label: 'Err', pill: 'error' } };
+                }
+
+                const br = stripped.match(/^\s*\[([a-zA-Z0-9_.]+)\]\s*/);
+                if (br) {
+                    const modParts = br[1].split('.');
+                    const mod = modParts.length > 2 ? modParts.slice(-2).join('.') : br[1];
+                    const rest = stripped.slice(br.index + br[0].length).trim();
+                    const firstLine = rest.split('\n')[0] || '';
+                    const sub = firstLine.length > 88 ? firstLine.slice(0, 85) + '…' : firstLine;
+                    return { feature: sub ? mod + ': ' + sub : mod, pillOverride: null };
+                }
+
+                const first = stripped.split('\n')[0].trim();
+                const feat = first.length > 110 ? first.slice(0, 107) + '…' : (first || 'Log entry');
+                return { feature: feat, pillOverride: null };
+            }
+
+            function parseRequestBoxPayload(rawMsg) {
+                const idx = rawMsg.indexOf('REQUEST_BOX:');
+                if (idx === -1) return null;
+                const jsonStr = rawMsg.slice(idx + 'REQUEST_BOX:'.length).trim();
+                try {
+                    return JSON.parse(jsonStr);
+                } catch (e) {
+                    return null;
+                }
+            }
+
+            function renderRequestBoxHtml(data, hiddenClass, dataRaw) {
+                const statusClass = data.status >= 400 ? 'error' : (data.status >= 300 ? 'warning' : 'success');
+                const level = data.status >= 400 ? 'error' : (data.status >= 300 ? 'warning' : 'success');
+                const pill = httpPillFromCode(typeof data.status === 'number' ? data.status : parseInt(String(data.status), 10) || 0);
+                const pathShort = (data.path || '').length > 72 ? '…' + (data.path || '').slice(-68) : (data.path || '');
+                const feat = escapeHtml((data.method || '') + ' ' + pathShort);
+                const pillHtml = `<span class="log-status-pill pill-${escapeHtml(pill.pill)}">${escapeHtml(pill.label)}</span>`;
+                const h = hiddenClass ? ' hidden' : '';
+                return `
+                        <details class="request-box log-entry-collapsible box-${statusClass}${h}" data-level="${level}" data-raw="${escapeAttr(dataRaw)}" data-full="${escapeAttr(JSON.stringify(data, null, 2))}">
+                            <summary class="log-entry-summary">
+                                ${pillHtml}
+                                <span class="log-feature-text">${feat}</span>
+                                <span class="log-entry-chevron">▸</span>
+                                <span class="duration">${escapeHtml(String(data.duration_ms || ''))}ms</span>
+                                <span class="req-id">#${escapeHtml(String(data.id || ''))}</span>
+                            </summary>
+                            <div class="metadata-content">
+                                <strong>Path:</strong> <span style="color:var(--text-main)">${escapeHtml(data.path || '')}</span><br>
+                                <strong>Query:</strong> <span style="color:var(--text-main)">${escapeHtml(data.query || 'None')}</span><br>
+                                <div style="margin-top:0.5rem"><strong>Headers:</strong></div>
+                                <pre>${escapeHtml(JSON.stringify(data.headers || {}, null, 2))}</pre>
+                                ${data.error ? `<div style="margin-top:0.75rem;color:var(--error)"><strong>Error:</strong> ${escapeHtml(String(data.error))}</div>` : ''}
+                            </div>
+                        </details>`;
+            }
+
+            function renderJournalCollapsible(parsed, rawMsg, visible, level, className, hidden) {
+                const rb = parseRequestBoxPayload(rawMsg);
+                if (rb) {
+                    return renderRequestBoxHtml(rb, hidden, rawMsg);
+                }
+                const { feature, pillOverride } = inferLogSummary(rawMsg);
+                const pill = pillOverride || defaultPill(level);
+                const metaParts = [];
+                if (parsed.timestamp) metaParts.push(parsed.timestamp);
+                if (parsed.unit) metaParts.push(parsed.unit);
+                if (parsed.source === 'journal') metaParts.push('journald');
+                const metaHtml = metaParts.length
+                    ? `<div class="log-entry-meta">${metaParts.map(escapeHtml).join(' · ')}</div>`
+                    : '';
+                const h = hidden ? ' hidden' : '';
+                return `<details class="log-entry-collapsible ${className}${h}" data-level="${level}" data-raw="${escapeAttr(rawMsg)}" data-full="${escapeAttr(visible)}">
+                            <summary class="log-entry-summary">
+                                <span class="log-status-pill pill-${pill.pill}">${escapeHtml(pill.label)}</span>
+                                <span class="log-feature-text">${escapeHtml(feature)}</span>
+                                <span class="log-entry-chevron">▸</span>
+                            </summary>
+                            <div class="log-entry-details-inner">
+                                ${metaHtml}
+                                <pre class="log-entry-body">${escapeHtml(visible)}</pre>
+                            </div>
+                        </details>`;
+            }
+
             function shouldShow(el) {
                 const level = el.getAttribute('data-level') || 'info';
                 const rawText = (el.getAttribute('data-raw') || el.innerText).toLowerCase();
@@ -795,7 +1018,7 @@ async def get_log_viewer():
             }
 
             function applyFilters() {
-                const allLines = logContainer.querySelectorAll('.log-line, .request-box, .log-entry-block');
+                const allLines = logContainer.querySelectorAll('.log-entry-collapsible');
                 let visible = 0;
                 allLines.forEach(el => {
                     const show = shouldShow(el);
@@ -859,19 +1082,10 @@ async def get_log_viewer():
                         else if (level === 'success') className = 'line-success';
                         else className = 'line-info';
 
-                        const metaParts = [];
-                        if (parsed.timestamp) metaParts.push(parsed.timestamp);
-                        if (parsed.unit) metaParts.push(parsed.unit);
-                        if (parsed.source === 'journal') metaParts.push('journald');
-
-                        const meta = metaParts.length
-                            ? `<div class="log-entry-meta">${metaParts.map(escapeHtml).join(' · ')}</div>`
-                            : '';
-
                         const hidden = (activeLevel !== 'all' && level !== activeLevel) ||
                             (searchTerm && !rawMsg.toLowerCase().includes(searchTerm.toLowerCase()));
 
-                        return `<div class="log-entry-block ${className}${hidden ? ' hidden' : ''}" data-level="${level}" data-raw="${escapeAttr(rawMsg)}">${meta}<pre class="log-entry-body">${escapeHtml(visible)}</pre></div>`;
+                        return renderJournalCollapsible(parsed, rawMsg, visible, level, className, hidden);
                     }
                 } catch (parseErr) {
                     /* fall through — legacy plain-text lines */
@@ -881,24 +1095,10 @@ async def get_log_viewer():
                     try {
                         const jsonStr = line.split('REQUEST_BOX:')[1].trim();
                         const data = JSON.parse(jsonStr);
-                        const statusClass = data.status >= 400 ? 'error' : (data.status >= 300 ? 'warning' : 'success');
                         const level = data.status >= 400 ? 'error' : (data.status >= 300 ? 'warning' : 'success');
-                        
-                        return `
-                        <details class="request-box box-${statusClass}" data-level="${level}" data-raw="${data.method} ${data.path} ${data.status} ${data.query || ''}">
-                            <summary>
-                                <span class="method">${data.method}</span>
-                                <span class="path">${data.path}</span>
-                                <span class="status st-${statusClass}">${data.status}</span>
-                                <span class="duration">${data.duration_ms}ms</span>
-                                <span class="req-id">#${data.id}</span>
-                            </summary>
-                            <div class="metadata-content">
-                                <strong>Query:</strong> <span style="color:var(--text-main)">${data.query || 'None'}</span><br>
-                                <div style="margin-top:0.5rem"><strong>Headers:</strong></div>
-                                <pre>${JSON.stringify(data.headers, null, 2)}</pre>
-                            </div>
-                        </details>`;
+                        const hidden = (activeLevel !== 'all' && level !== activeLevel) ||
+                            (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase()));
+                        return renderRequestBoxHtml(data, hidden, line);
                     } catch (e) {
                          console.error('Failed to parse request box:', e);
                     }
@@ -919,7 +1119,19 @@ async def get_log_viewer():
                 const hidden = (activeLevel !== 'all' && level !== activeLevel) ||
                                (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase()));
 
-                return `<div class="log-line ${className}${hidden ? ' hidden' : ''}" data-level="${level}" data-raw="${line.replace(/"/g, '&quot;')}">${formattedLine}</div>`;
+                const summ = inferLogSummary(line);
+                const pill = summ.pillOverride || defaultPill(level);
+                const h = hidden ? ' hidden' : '';
+                return `<details class="log-entry-collapsible ${className}${h}" data-level="${level}" data-raw="${escapeAttr(line)}" data-full="${escapeAttr(line)}">
+                            <summary class="log-entry-summary">
+                                <span class="log-status-pill pill-${pill.pill}">${escapeHtml(pill.label)}</span>
+                                <span class="log-feature-text">${escapeHtml(summ.feature)}</span>
+                                <span class="log-entry-chevron">▸</span>
+                            </summary>
+                            <div class="log-entry-details-inner">
+                                <div class="log-entry-body log-entry-body-rich">${formattedLine}</div>
+                            </div>
+                        </details>`;
             }
 
             function connect() {
@@ -932,6 +1144,9 @@ async def get_log_viewer():
                     const logEntry = formatLogLine(line);
                     if (logEntry) {
                         logContainer.insertAdjacentHTML('beforeend', logEntry);
+                        if (activeLevel !== 'all' || searchTerm) {
+                            applyFilters();
+                        }
                         if (autoscroll) {
                             logContainer.scrollTop = logContainer.scrollHeight;
                         }
@@ -956,9 +1171,9 @@ async def get_log_viewer():
             };
 
             copyBtn.onclick = () => {
-                const text = Array.from(logContainer.querySelectorAll('.log-line:not(.hidden), .request-box:not(.hidden), .log-entry-block:not(.hidden)'))
-                    .map(el => el.innerText)
-                    .join('\\n');
+                const text = Array.from(logContainer.querySelectorAll('.log-entry-collapsible:not(.hidden)'))
+                    .map(el => el.getAttribute('data-full') || el.innerText)
+                    .join(String.fromCharCode(10));
                 navigator.clipboard.writeText(text).then(() => {
                     const originalText = copyBtn.innerHTML;
                     copyBtn.textContent = 'Copied!';

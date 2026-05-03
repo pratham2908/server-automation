@@ -266,6 +266,7 @@ from app.routers import (
     observability,
     preview_analysis,
     retention_analysis,
+    scorecard,
     sync_analysis,
     system,
     thumbnail_analysis,
@@ -277,6 +278,7 @@ app.include_router(auth.router)
 app.include_router(channels.router)
 app.include_router(errors.router)
 app.include_router(videos.router)
+app.include_router(scorecard.router)
 app.include_router(categories.router)
 app.include_router(analysis.router)
 app.include_router(comment_analysis.router)

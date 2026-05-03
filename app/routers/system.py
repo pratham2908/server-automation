@@ -1,22 +1,12 @@
 import asyncio
 import shutil
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 
-from app.config import get_settings
+from app.dependencies import verify_api_key_flexible
 
 router = APIRouter(tags=["system"])
-
-
-async def verify_api_key(api_key: str = Query(...)):
-    settings = get_settings()
-    if api_key != settings.API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-        )
-    return api_key
 
 
 def has_systemctl():
@@ -38,7 +28,7 @@ async def run_shell_command(command: list[str]) -> tuple[int, str, str]:
 
 
 @router.get("/system", response_class=HTMLResponse)
-async def system_dashboard(api_key: str = Depends(verify_api_key)):
+async def system_dashboard(api_key: str = Depends(verify_api_key_flexible)):
     """A premium dashboard to manage the automation server."""
     html_content = (
         """
@@ -329,7 +319,10 @@ async def system_dashboard(api_key: str = Depends(verify_api_key)):
             async function callApi(action) {
                 log(`Executing: ${action.toUpperCase()}...`);
                 try {
-                    const res = await fetch(`/api/system/${action}?api_key=${apiKey}`, { method: 'POST' });
+                    const res = await fetch(`/api/system/${action}`, {
+                        method: 'POST',
+                        headers: { 'X-API-Key': apiKey },
+                    });
                     const data = await res.json();
                     
                     if (data.ok) {
@@ -355,7 +348,9 @@ async def system_dashboard(api_key: str = Depends(verify_api_key)):
                 statusText.textContent = 'Refreshing...';
                 
                 try {
-                    const res = await fetch(`/api/system/status?api_key=${apiKey}`);
+                    const res = await fetch(`/api/system/status`, {
+                        headers: { 'X-API-Key': apiKey },
+                    });
                     if (res.status === 401) {
                         log('Error: Unauthorized. Invalid API Key.', 'error');
                         return;
@@ -397,7 +392,7 @@ async def system_dashboard(api_key: str = Depends(verify_api_key)):
 
 
 @router.get("/api/system/status")
-async def get_status(api_key: str = Depends(verify_api_key)):
+async def get_status(api_key: str = Depends(verify_api_key_flexible)):
     if not has_systemctl():
         return {
             "ok": True,
@@ -415,7 +410,7 @@ async def get_status(api_key: str = Depends(verify_api_key)):
 
 
 @router.post("/api/system/restart")
-async def restart_server(api_key: str = Depends(verify_api_key)):
+async def restart_server(api_key: str = Depends(verify_api_key_flexible)):
     if not has_systemctl():
         return {"ok": False, "error": "Not supported on this OS"}
 
@@ -424,7 +419,7 @@ async def restart_server(api_key: str = Depends(verify_api_key)):
 
 
 @router.post("/api/system/stop")
-async def stop_server(api_key: str = Depends(verify_api_key)):
+async def stop_server(api_key: str = Depends(verify_api_key_flexible)):
     if not has_systemctl():
         return {"ok": False, "error": "Not supported on this OS"}
 
@@ -433,7 +428,7 @@ async def stop_server(api_key: str = Depends(verify_api_key)):
 
 
 @router.post("/api/system/start")
-async def start_server(api_key: str = Depends(verify_api_key)):
+async def start_server(api_key: str = Depends(verify_api_key_flexible)):
     if not has_systemctl():
         return {"ok": False, "error": "Not supported on this OS"}
 

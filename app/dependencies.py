@@ -1,7 +1,7 @@
 """FastAPI dependencies shared across routers."""
 
 import jwt
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Query, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import InvalidTokenError
 
@@ -34,6 +34,30 @@ async def verify_api_key(request: Request, x_api_key: str = Header(None)) -> str
             detail="Invalid API key",
         )
     return x_api_key
+
+
+async def verify_api_key_flexible(
+    request: Request,
+    x_api_key: str | None = Header(None),
+    api_key: str | None = Query(None),
+) -> str:
+    """Accept API key via ``X-API-Key`` or ``?api_key=`` (for HTML pages that cannot set headers)."""
+
+    settings = get_settings()
+    key = (x_api_key or api_key or "").strip() or None
+    if not key or key != settings.API_KEY:
+        client_host = request.client.host if request.client else "unknown"
+        logger.warning(
+            "Unauthorized request from %s: %s %s",
+            client_host,
+            request.method,
+            request.url.path,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+        )
+    return key
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
