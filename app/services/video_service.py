@@ -347,6 +347,12 @@ class VideoService:
         new_id = str(uuid.uuid4())
         tid = data.get("target_channel_id") or channel_id
 
+        # Reposts should not be 'todo' (which represents ideas).
+        # They start as 'ready' (or 'queued' if we know they are going to be scheduled).
+        now = now_ist()
+        sch_at = data.get("scheduled_at")
+        initial_status = "queued" if (sch_at and sch_at > now) else "ready"
+
         if platform == "instagram":
             src_ig = video.get("instagram_media_id")
             src_r2 = video.get("r2_object_key")
@@ -361,13 +367,14 @@ class VideoService:
                 "title": data["title"],
                 "description": data.get("description", ""),
                 "tags": data.get("tags", []),
-                "category": video.get("category"),
-                "status": "ready",
+                "category": video.get("category") or "Uncategorized",
+                "status": initial_status,
                 "youtube_video_id": None,
                 "instagram_media_id": src_ig,
-                "scheduled_at": data.get("scheduled_at"),
-                "created_at": now_ist(),
-                "updated_at": now_ist(),
+                "thumbnail_url": video.get("thumbnail_url"),
+                "scheduled_at": sch_at,
+                "created_at": now,
+                "updated_at": now,
             }
             await self.db.videos.insert_one(doc)
             if data.get("instant"):
@@ -381,10 +388,30 @@ class VideoService:
                     assert src_ig is not None
                     media_url = ig.get_reel_media_url(src_ig)
                     key = await download_instagram_media_to_r2(tid, media_url, self.r2)
+                
                 await self.db.videos.update_one(
                     {"video_id": new_id},
-                    {"$set": {"r2_object_key": key, "status": "queued", "updated_at": now_ist()}},
+                    {"$set": {"r2_object_key": key, "updated_at": now_ist()}},
                 )
+                
+                # Add to appropriate queue since it's instant
+                if initial_status == "queued" and sch_at:
+                    last = await self.db.schedule_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
+                    await self.db.schedule_queue.insert_one({
+                        "channel_id": tid,
+                        "video_id": new_id,
+                        "position": (last["position"] + 1) if last else 1,
+                        "scheduled_at": sch_at,
+                        "added_at": now,
+                    })
+                else:
+                    last = await self.db.posting_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
+                    await self.db.posting_queue.insert_one({
+                        "channel_id": tid,
+                        "video_id": new_id,
+                        "position": (last["position"] + 1) if last else 1,
+                        "added_at": now,
+                    })
             else:
                 self.trigger_repost_download(
                     channel_id,
@@ -397,18 +424,20 @@ class VideoService:
 
         if not video.get("youtube_video_id"):
             raise ValueError("Original YouTube video not found")
+            
         doc = {
             "channel_id": tid,
             "video_id": new_id,
             "title": data["title"],
             "description": data.get("description", ""),
             "tags": data.get("tags", []),
-            "category": video.get("category"),
-            "status": "ready",
+            "category": video.get("category") or "Uncategorized",
+            "status": initial_status,
             "youtube_video_id": video["youtube_video_id"],
-            "scheduled_at": data.get("scheduled_at"),
-            "created_at": now_ist(),
-            "updated_at": now_ist(),
+            "thumbnail_url": video.get("thumbnail_url"),
+            "scheduled_at": sch_at,
+            "created_at": now,
+            "updated_at": now,
         }
         await self.db.videos.insert_one(doc)
         if data.get("instant"):
@@ -416,8 +445,27 @@ class VideoService:
             key = await download_youtube_video_to_r2(video["youtube_video_id"], tid, self.r2)
             await self.db.videos.update_one(
                 {"video_id": new_id},
-                {"$set": {"r2_object_key": key, "status": "queued", "updated_at": now_ist()}},
+                {"$set": {"r2_object_key": key, "updated_at": now_ist()}},
             )
+            
+            # Add to appropriate queue since it's instant
+            if initial_status == "queued" and sch_at:
+                last = await self.db.schedule_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
+                await self.db.schedule_queue.insert_one({
+                    "channel_id": tid,
+                    "video_id": new_id,
+                    "position": (last["position"] + 1) if last else 1,
+                    "scheduled_at": sch_at,
+                    "added_at": now,
+                })
+            else:
+                last = await self.db.posting_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
+                await self.db.posting_queue.insert_one({
+                    "channel_id": tid,
+                    "video_id": new_id,
+                    "position": (last["position"] + 1) if last else 1,
+                    "added_at": now,
+                })
         else:
             self.trigger_repost_download(
                 channel_id,
@@ -426,6 +474,7 @@ class VideoService:
                 youtube_video_id=video["youtube_video_id"],
             )
         return {"ok": True, "new_video_id": new_id}
+
 
     def trigger_retention_analysis(self, channel_id: str, video_id: str, local_video_path: str | None = None) -> None:
 
@@ -478,8 +527,13 @@ class VideoService:
                     if not video:
                         return
                     now = now_ist()
-                    upd = {"r2_object_key": key, "updated_at": now, "status": "queued"}
-                    if video.get("scheduled_at") and video["scheduled_at"] > now:
+                    # Determine final status based on whether it's scheduled
+                    sch_at = video.get("scheduled_at")
+                    final_status = "queued" if (sch_at and sch_at > now) else "ready"
+                    
+                    upd = {"r2_object_key": key, "updated_at": now, "status": final_status}
+                    
+                    if final_status == "queued":
                         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
                         last = await self.db.schedule_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
                         await self.db.schedule_queue.insert_one(
@@ -487,7 +541,7 @@ class VideoService:
                                 "channel_id": tid,
                                 "video_id": new_video_id,
                                 "position": (last["position"] + 1) if last else 1,
-                                "scheduled_at": video["scheduled_at"],
+                                "scheduled_at": sch_at,
                                 "added_at": now,
                             }
                         )
@@ -502,6 +556,7 @@ class VideoService:
                                 "added_at": now,
                             }
                         )
+
                 except Exception as e:
                     ctx: dict[str, Any] = {
                         "channel_id": channel_id,
