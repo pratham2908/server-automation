@@ -27,6 +27,18 @@ LOG_BUFFER: deque[str] = deque(maxlen=200)
 LOG_LOCK = Lock()
 
 
+class EndpointFilter(logging.Filter):
+    """Filter to suppress logs for specific endpoints."""
+
+    def __init__(self, endpoints: list[str]):
+        super().__init__()
+        self.endpoints = endpoints
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Check if any of the endpoints are in the message
+        return not any(endpoint in record.getMessage() for endpoint in self.endpoints)
+
+
 class DequeHandler(logging.Handler):
     """Custom handler that stores logs in a global deque for retrieval."""
 
@@ -98,7 +110,7 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def setup_root_logging():
-    """Attach DequeHandler to the root logger to capture all logs."""
+    """Attach DequeHandler to the root logger and filter noisy endpoints."""
     root_logger = logging.getLogger()
 
     # Check if already added
@@ -107,6 +119,20 @@ def setup_root_logging():
         deque_formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s")
         deque_handler.setFormatter(deque_formatter)
         root_logger.addHandler(deque_handler)
+
+    # Suppress uvicorn access logs for meta endpoints
+    uvicorn_access_logger = logging.getLogger("uvicorn.access")
+    uvicorn_access_logger.addFilter(
+        EndpointFilter(
+            [
+                "/api/errors",
+                "/api/v1/errors",
+                "/health",
+                "/api/schema",
+                "/observability/metrics",
+            ]
+        )
+    )
 
 
 # Patch the Logger class to add a .success() method
