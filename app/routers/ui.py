@@ -1042,7 +1042,15 @@ async def stream_logs():
                 msg = entry.get("MESSAGE")
                 if msg is None:
                     continue
-                if not isinstance(msg, str):
+                
+                # journalctl -o json sometimes returns MESSAGE as a list of byte integers
+                # if it contains non-ASCII characters or binary data.
+                if isinstance(msg, list):
+                    try:
+                        msg = bytes(msg).decode("utf-8", errors="replace")
+                    except (TypeError, ValueError):
+                        msg = str(msg)
+                elif not isinstance(msg, str):
                     msg = str(msg)
 
                 ts = _journal_timestamp_usec(entry.get("__REALTIME_TIMESTAMP"))
