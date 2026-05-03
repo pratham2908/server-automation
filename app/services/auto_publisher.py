@@ -51,11 +51,13 @@ async def _publish_one_reel(
     try:
         caption = _build_instagram_caption(video_doc)
 
-        tmp_path = r2_service.download_video(r2_key)
+        # Instead of downloading locally, generate a presigned URL and let Meta fetch it.
+        # This is much more robust againstrupload/encoding issues.
+        video_url = r2_service.generate_presigned_url(r2_key, expires_in=3600)
 
-        media_id = instagram_service.publish_reel(
+        media_id = instagram_service.publish_reel_from_url(
             ig_user_id=ig_user_id,
-            file_path=tmp_path,
+            video_url=video_url,
             caption=caption,
         )
 

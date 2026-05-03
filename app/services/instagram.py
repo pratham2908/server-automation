@@ -453,10 +453,7 @@ class InstagramService:
         poll_interval: float = 5.0,
         max_polls: int = 60,
     ) -> str:
-        """End-to-end reel publish: create container, upload, wait, publish.
-
-        Returns the published ``media_id``.  Raises on timeout or error.
-        """
+        """End-to-end reel publish using resumable upload (local file)."""
         import time
 
         container = self.create_reel_container(ig_user_id, caption)
@@ -475,6 +472,52 @@ class InstagramService:
         else:
             raise TimeoutError(f"Instagram container {cid} not ready after {max_polls * poll_interval}s")
 
+        return self.publish_container(ig_user_id, cid)
+
+    def publish_reel_from_url(
+        self,
+        ig_user_id: str,
+        video_url: str,
+        caption: str,
+        *,
+        poll_interval: float = 10.0,
+        max_polls: int = 40,
+    ) -> str:
+        """End-to-end reel publish using a public video URL.
+        
+        This is often more robust than resumable upload for files already in the cloud.
+        """
+        import time
+        
+        # 1. Create container with video_url
+        params = {
+            "media_type": "REELS",
+            "video_url": video_url,
+            "caption": caption,
+        }
+        data = self._post(f"{ig_user_id}/media", params)
+        cid = data.get("id", "")
+        if not cid:
+            raise RuntimeError(f"Failed to create media container: {data}")
+            
+        logger.info("Created Instagram Reel container %s from URL", cid)
+
+        # 2. Wait for processing
+        for i in range(max_polls):
+            st = self.check_container_status(cid)
+            if st == "FINISHED":
+                logger.info("Container %s processing FINISHED", cid)
+                break
+            if st == "ERROR":
+                raise RuntimeError(f"Instagram container {cid} processing failed (status: ERROR)")
+            
+            if i % 3 == 0:
+                logger.info("Waiting for container %s processing... (status: %s)", cid, st)
+            time.sleep(poll_interval)
+        else:
+            raise TimeoutError(f"Instagram container {cid} not ready after {max_polls * poll_interval}s")
+
+        # 3. Publish
         return self.publish_container(ig_user_id, cid)
 
     # ------------------------------------------------------------------
