@@ -45,6 +45,10 @@ class VideoMetadata(BaseModel):
     like_rate: float | None = None
     comment_rate: float | None = None
     # YouTube-specific
+    youtube_privacy_status: str | None = Field(
+        None,
+        description="YouTube Data API status.privacyStatus: public, unlisted, or private",
+    )
     avg_percentage_viewed: float | None = None
     avg_view_duration_seconds: int | None = None
     estimated_minutes_watched: float | None = None

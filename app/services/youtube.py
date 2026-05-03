@@ -370,7 +370,7 @@ class YouTubeService:
             batch = youtube_video_ids[i : i + 50]
             response = self._execute(
                 self._youtube.videos().list(
-                    part="snippet,statistics,contentDetails",
+                    part="snippet,statistics,contentDetails,status",
                     id=",".join(batch),
                 )
             )
@@ -378,6 +378,9 @@ class YouTubeService:
                 snippet = item.get("snippet", {})
                 s = item["statistics"]
                 content = item.get("contentDetails", {})
+                st = item.get("status") or {}
+                raw_priv = (st.get("privacyStatus") or "").lower()
+                youtube_privacy = raw_priv if raw_priv in ("public", "unlisted", "private") else None
 
                 views = int(s.get("viewCount", 0))
                 likes = int(s.get("likeCount", 0))
@@ -400,6 +403,7 @@ class YouTubeService:
                     "like_rate": like_rate,
                     "comment_rate": comment_rate,
                     "published_at": snippet.get("publishedAt"),
+                    "youtube_privacy_status": youtube_privacy,
                 }
 
         # Merge analytics data (avg_percentage_viewed, avg_view_duration, etc.)

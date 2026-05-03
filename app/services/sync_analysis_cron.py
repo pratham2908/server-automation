@@ -151,6 +151,7 @@ async def run_sync_analysis_for_channel(
             platform=platform,
         )
         result["analysis"] = "ok"
+        await update_channel_task_status(db, channel_id, "video_sync")
         logger.info(
             "Auto-analysis completed for '%s' (%d unanalyzed videos triggered it)",
             channel_id,

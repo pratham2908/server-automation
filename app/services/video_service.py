@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.database import (
     get_channel_platform,
     get_content_schema_for_prompt,
+    update_channel_task_status,
 )
 from app.logger import get_logger
 from app.services.downloader import (
@@ -819,10 +820,13 @@ class VideoService:
             raise ValueError("Channel not found")
         platform = get_channel_platform(channel)
         if platform == "youtube":
-            return await self._sync_youtube_videos(channel_id, channel, instructions)
-        if platform == "instagram":
-            return await self._sync_instagram_videos(channel_id, channel, instructions)
-        return {"ok": True, "message": "Platform not supported"}
+            result = await self._sync_youtube_videos(channel_id, channel, instructions)
+        elif platform == "instagram":
+            result = await self._sync_instagram_videos(channel_id, channel, instructions)
+        else:
+            return {"ok": True, "message": "Platform not supported"}
+        await update_channel_task_status(self.db, channel_id, "video_sync")
+        return result
 
     async def _sync_youtube_videos(self, channel_id: str, channel: dict, instructions: str | None) -> dict[str, Any]:
         yt = await self._get_youtube_service(channel_id)
@@ -845,6 +849,7 @@ class VideoService:
                 "title": v["title"],
                 "description": v["description"],
                 "metadata.views": v["views"],
+                "metadata.youtube_privacy_status": v.get("youtube_privacy_status"),
                 "updated_at": now_ist(),
             }
             if existing and existing.get("status") in ("scheduled", "queued"):
@@ -896,6 +901,9 @@ class VideoService:
                         "status": "published",
                         "published_at": v["published_at"],
                         "thumbnail_url": v.get("thumbnail_url"),
+                        "metadata": {
+                            "youtube_privacy_status": v.get("youtube_privacy_status"),
+                        },
                         "content_params": ana.get("content_params"),
                         "verification_status": "unverified",
                         "created_at": now_ist(),
@@ -1035,6 +1043,9 @@ class VideoService:
                     item.get("statistics", {}),
                     item.get("contentDetails", {}),
                 )
+                st = item.get("status") or {}
+                raw_priv = (st.get("privacyStatus") or "").lower()
+                youtube_privacy = raw_priv if raw_priv in ("public", "unlisted", "private") else None
                 views, likes, comments = (
                     int(stats.get("viewCount", 0)),
                     int(stats.get("likeCount", 0)),
@@ -1052,6 +1063,7 @@ class VideoService:
                         "comments": comments,
                         "duration_seconds": self._parse_duration(content.get("duration")),
                         "thumbnail_url": self._youtube_thumbnail_from_snippet(snippet),
+                        "youtube_privacy_status": youtube_privacy,
                         **self._compute_rates(views, likes, comments),
                     }
                 )

@@ -178,6 +178,7 @@ async def run_analysis(
                         "impressions",
                         "ctr",
                         "engaged_views",
+                        "youtube_privacy_status",
                     )
                     if meta.get(k) is not None
                 }
@@ -249,9 +250,13 @@ async def run_analysis(
         elif platform == "instagram" and v.get("instagram_media_id"):
             performance_data["instagram_media_id"] = v["instagram_media_id"]
 
+        perf_update: dict[str, Any] = {"performance": performance_data}
+        if platform == "youtube" and stats.get("youtube_privacy_status") is not None:
+            perf_update["metadata.youtube_privacy_status"] = stats["youtube_privacy_status"]
+
         await db.videos.update_one(
             {"channel_id": channel_id, "video_id": v["video_id"]},
-            {"$set": {"performance": performance_data}},
+            {"$set": perf_update},
         )
 
         # Backfill actual metrics into videos.retention (if a prediction exists)

@@ -51,7 +51,11 @@ API_SCHEMA = {
                         "schedule_delay_minutes": 15,
                     }
                 },
-                "last_tasks": {"velocity_booster": "2026-03-06T19:53:30Z"},
+                "last_tasks": {
+                    "video_sync": "2026-03-06T18:00:00Z",
+                    "sync_analysis": "2026-03-06T19:53:30Z",
+                    "velocity_booster": "2026-03-06T19:53:30Z",
+                },
             },
         },
         {

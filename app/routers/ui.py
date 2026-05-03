@@ -821,7 +821,7 @@ async def get_log_viewer():
             }
 
             function stripAnsi(s) {
-                return s.replace(/\x1b\[[0-9;]*m/g, '');
+                return s.replace(/\\x1b\\[[0-9;]*m/g, '');
             }
 
             function escapeAttr(s) {
@@ -893,7 +893,7 @@ async def get_log_viewer():
                 const path = afterM.slice(0, httpIdx).trim();
                 const tail = stripped.slice(q2 + 1);
                 let i = 0;
-                while (i < tail.length && (tail[i] === ' ' || tail[i] === '\t' || tail[i] === '\r' || tail[i] === '\n')) i++;
+                while (i < tail.length && (tail[i] === ' ' || tail[i] === '\\t' || tail[i] === '\\r' || tail[i] === '\\n')) i++;
                 let codeStr = '';
                 while (i < tail.length && codeStr.length < 3 && tail[i] >= '0' && tail[i] <= '9') {
                     codeStr += tail[i++];
@@ -913,7 +913,7 @@ async def get_log_viewer():
                     return { feature: acc.method + ' ' + p, pillOverride: httpPillFromCode(acc.code) };
                 }
 
-                const reqBr = stripped.match(/\[REQUEST\]\s+(\S+)\s+(\S+)\s*\|\s*(\d+)/);
+                const reqBr = stripped.match(/\\[REQUEST\\]\\s+(\\S+)\\s+(\\S+)\\s*\\|\\s*(\\d+)/);
                 if (reqBr) {
                     let p = reqBr[2];
                     if (p.length > 80) p = p.slice(0, 78) + '…';
@@ -927,17 +927,17 @@ async def get_log_viewer():
                     return { feature: 'ASGI application', pillOverride: { label: 'Err', pill: 'error' } };
                 }
 
-                const br = stripped.match(/^\s*\[([a-zA-Z0-9_.]+)\]\s*/);
+                const br = stripped.match(/^\\s*\\[([a-zA-Z0-9_.]+)\\]\\s*/);
                 if (br) {
                     const modParts = br[1].split('.');
                     const mod = modParts.length > 2 ? modParts.slice(-2).join('.') : br[1];
                     const rest = stripped.slice(br.index + br[0].length).trim();
-                    const firstLine = rest.split('\n')[0] || '';
+                    const firstLine = rest.split('\\n')[0] || '';
                     const sub = firstLine.length > 88 ? firstLine.slice(0, 85) + '…' : firstLine;
                     return { feature: sub ? mod + ': ' + sub : mod, pillOverride: null };
                 }
 
-                const first = stripped.split('\n')[0].trim();
+                const first = stripped.split('\\n')[0].trim();
                 const feat = first.length > 110 ? first.slice(0, 107) + '…' : (first || 'Log entry');
                 return { feature: feat, pillOverride: null };
             }
