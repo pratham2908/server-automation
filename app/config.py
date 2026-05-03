@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # Gemini (Vertex AI / Agent Platform)
     GOOGLE_CLOUD_PROJECT: str
     GOOGLE_CLOUD_LOCATION: str = "global"
+    # Optional: GCS bucket for staging videos (e.g. gs:// URI for Vertex multimodal). Same project as Vertex recommended.
+    GCS_VERTEX_STAGING_BUCKET: str | None = None
 
     # YouTube (optional — prefer DB config collection; kept for backward compat)
     YOUTUBE_CLIENT_ID: str | None = None

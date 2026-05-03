@@ -7,11 +7,11 @@ the MongoDB ``channels`` collection and refreshed automatically.
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-import json
 import requests
 
 from app.logger import get_logger

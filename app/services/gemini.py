@@ -646,31 +646,37 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
     # ------------------------------------------------------------------
 
     async def _generate_with_video(self, video_path: str, prompt: str) -> str:
-        """Upload a video file to Gemini, wait for processing, then generate."""
+        """Run multimodal generate with a video file.
+
+        Videos are staged to GCS (``GCS_VERTEX_STAGING_BUCKET``) and passed as a
+        ``gs://`` URI to Vertex — the Developer ``files.upload`` API is not used.
+        """
         import asyncio
         import time
 
+        from app.config import get_settings
+        from app.services.gcs_vertex_staging import (
+            delete_gs_uri,
+            mime_type_for_video_path,
+            upload_local_video_for_vertex,
+        )
         from app.services.metrics import metrics_service
 
-        uploaded_file = await self._client.aio.files.upload(file=video_path)
-        logger.info("Uploaded video to Gemini (name=%s, state=%s)", uploaded_file.name, uploaded_file.state)
+        settings = get_settings()
+        bucket_name = settings.GCS_VERTEX_STAGING_BUCKET
+        if not bucket_name:
+            raise RuntimeError(
+                "GCS_VERTEX_STAGING_BUCKET is not set. Create a GCS bucket, grant this "
+                "service account Storage Object Creator on it and the Vertex AI service "
+                "agent Storage Object Viewer, then set GCS_VERTEX_STAGING_BUCKET in the environment."
+            )
 
+        gs_uri: str | None = None
         try:
-            # Poll until the file is ACTIVE (processing complete)
-            poll_count = 0
-            while uploaded_file.state and uploaded_file.state.name == "PROCESSING":
-                poll_count += 1
-                if poll_count > 60:
-                    raise TimeoutError("Gemini file processing exceeded 5-minute timeout")
-                await asyncio.sleep(5)
-                assert uploaded_file.name is not None
-                uploaded_file = await self._client.aio.files.get(name=uploaded_file.name)
-
-            if uploaded_file.state and uploaded_file.state.name == "FAILED":
-                raise RuntimeError(f"Gemini file processing failed: {uploaded_file.state}")
-
-            state_name = uploaded_file.state.name if uploaded_file.state else "UNKNOWN"
-            logger.info("Gemini file ready (state=%s)", state_name)
+            gs_uri = await asyncio.to_thread(upload_local_video_for_vertex, bucket_name, video_path)
+            logger.info("Staged video for Vertex multimodal at %s", gs_uri)
+            mime = mime_type_for_video_path(video_path)
+            video_part = types.Part.from_uri(file_uri=gs_uri, mime_type=mime)
 
             last_error: Exception | None = None
             for model in self._MODEL_CHAIN:
@@ -679,7 +685,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                     response = await asyncio.wait_for(
                         self._client.aio.models.generate_content(
                             model=model,
-                            contents=[uploaded_file, prompt],
+                            contents=[video_part, prompt],
                             config=types.GenerateContentConfig(
                                 response_mime_type="application/json",
                             ),
@@ -717,13 +723,12 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
             raise RuntimeError("Unknown error in Gemini video analysis")
 
         finally:
-            try:
-                assert uploaded_file.name is not None
-                await self._client.aio.files.delete(name=uploaded_file.name)
-
-                logger.info("Deleted Gemini uploaded file %s", uploaded_file.name)
-            except Exception as exc:
-                logger.warning("Failed to delete Gemini file %s: %s", uploaded_file.name, exc)
+            if gs_uri:
+                try:
+                    await asyncio.to_thread(delete_gs_uri, gs_uri)
+                    logger.info("Deleted GCS staging object %s", gs_uri)
+                except Exception as exc:
+                    logger.warning("Failed to delete GCS staging object %s: %s", gs_uri, exc)
 
     async def analyze_video_retention(
         self,
