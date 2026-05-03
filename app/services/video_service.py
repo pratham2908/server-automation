@@ -52,6 +52,17 @@ class VideoService:
         self.instagram_manager = instagram_manager
 
     # --- Helper methods ---
+    async def verify_video_file(self, channel_id: str, video_id: str) -> bool:
+        """Check if a video has a valid file in R2."""
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+        if not video or not video.get("r2_object_key"):
+            return False
+        if self.r2:
+            try:
+                return self.r2.file_exists(video["r2_object_key"])
+            except Exception:
+                return False
+        return True
 
     async def _get_youtube_service(self, channel_id: str):
         if not self.youtube_manager:
@@ -222,8 +233,9 @@ class VideoService:
 
     async def update_video_status(self, channel_id: str, video_id: str, new_status: str) -> dict[str, Any]:
         transitions = {
-            "todo": {"published"},
-            "ready": {"todo", "published"},
+            "todo": {"published", "ready", "processing"},
+            "processing": {"ready", "queued", "todo"},
+            "ready": {"todo", "published", "queued"},
             "queued": {"todo", "ready"},
             "scheduled": {"todo", "published"},
             "published": set(),
@@ -351,9 +363,9 @@ class VideoService:
         # They start as 'ready' (or 'queued' if we know they are going to be scheduled).
         now = now_ist()
         sch_at = data.get("scheduled_at")
-        # We start as 'ready' regardless of schedule.
-        # The background download task will promote it to 'queued' once the file is in R2.
-        initial_status = "ready"
+        # We start as 'processing' regardless of schedule.
+        # The background download task will promote it to 'ready' or 'queued' once the file is in R2.
+        initial_status = "processing"
 
         if platform == "instagram":
             src_ig = video.get("instagram_media_id")
@@ -393,7 +405,13 @@ class VideoService:
                 
                 await self.db.videos.update_one(
                     {"video_id": new_id},
-                    {"$set": {"r2_object_key": key, "updated_at": now_ist()}},
+                    {
+                        "$set": {
+                            "r2_object_key": key,
+                            "status": "queued" if (sch_at and sch_at > now_ist()) else "ready",
+                            "updated_at": now_ist(),
+                        }
+                    },
                 )
                 
                 # Add to appropriate queue since it's instant
@@ -452,7 +470,13 @@ class VideoService:
             
             await self.db.videos.update_one(
                 {"video_id": new_id},
-                {"$set": {"r2_object_key": key, "updated_at": now_ist()}},
+                {
+                    "$set": {
+                        "r2_object_key": key,
+                        "status": "queued" if (sch_at and sch_at > now_ist()) else "ready",
+                        "updated_at": now_ist(),
+                    }
+                },
             )
             
             # Add to appropriate queue since it's instant
@@ -567,10 +591,20 @@ class VideoService:
                         )
 
                 except Exception as e:
+                    tid = target_channel_id or channel_id
+                    # Reset status on failure so it's not stuck in 'processing'
+                    try:
+                        await self.db.videos.update_one(
+                            {"channel_id": tid, "video_id": new_video_id},
+                            {"$set": {"status": "ready", "updated_at": now_ist()}},
+                        )
+                    except Exception:
+                        pass
+
                     ctx: dict[str, Any] = {
                         "channel_id": channel_id,
                         "new_video_id": new_video_id,
-                        "target_channel_id": target_channel_id or channel_id,
+                        "target_channel_id": tid,
                     }
                     if youtube_video_id:
                         ctx["youtube_video_id"] = youtube_video_id

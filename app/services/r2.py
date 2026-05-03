@@ -58,6 +58,18 @@ class R2Service:
             Key=dest_key,
         )
 
+    def file_exists(self, key: str) -> bool:
+        """Check if *key* exists in the bucket."""
+        from botocore.exceptions import ClientError
+
+        try:
+            self._client.head_object(Bucket=self._bucket, Key=key)
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "404":
+                return False
+            raise
+
     def generate_presigned_url(self, key: str, expires_in: int = 3600) -> str:
         """Generate a temporary public URL for *key* (default 1 hour)."""
         from typing import cast
