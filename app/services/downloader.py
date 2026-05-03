@@ -28,7 +28,8 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
     github_repo = os.environ.get("GITHUB_REPO")  # Format: owner/repo
 
     if not github_token or not github_repo:
-        raise RuntimeError("GITHUB_TOKEN or GITHUB_REPO environment variables not set. Cannot trigger GitHub Action.")
+        print("GITHUB_TOKEN or GITHUB_REPO not set. Falling back to local download using yt-dlp.")
+        return _download_and_upload_local(youtube_video_id, r2_key, r2_service)
 
     # Trigger the GitHub Action
     api_url = f"https://api.github.com/repos/{github_repo}/dispatches"
@@ -51,6 +52,36 @@ def _download_and_upload_sync(youtube_video_id: str, r2_key: str, r2_service: "R
 
     # We return the key immediately, but the file won't be available until the action finishes
     # In a fully robust system, you'd poll R2 or wait for a webhook callback
+    return r2_key
+
+
+def _download_and_upload_local(youtube_video_id: str, r2_key: str, r2_service: "R2Service") -> str:
+    """Download video from YouTube using yt-dlp locally and upload to R2."""
+    import yt_dlp
+    
+    video_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        tmp_path = tmp.name
+        
+    ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': tmp_path,
+        'quiet': True,
+        'noprogress': True,
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
+            
+        with open(tmp_path, "rb") as f:
+            r2_service.upload_video(f, r2_key)
+            
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+            
     return r2_key
 
 

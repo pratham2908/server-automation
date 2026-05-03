@@ -41,8 +41,9 @@ async def _upload_one_video(
     r2_key = video_doc.get("r2_object_key")
     if not r2_key:
         logger.error(
-            "YouTube uploader: video '%s' has no r2_object_key — removing stale queue entry",
+            "[YouTube] Video '%s' for channel '%s' has no r2_object_key — removing stale queue entry",
             video_id,
+            channel_id,
         )
         await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
         return False
@@ -89,9 +90,10 @@ async def _upload_one_video(
         await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
 
         logger.success(
-            "YouTube uploader: uploaded '%s' (yt_id=%s) scheduled for %s",
+            "[YouTube] Uploaded '%s' (yt_id=%s) for channel '%s' scheduled for %s",
             video_doc.get("title", video_id)[:50],
             yt_id,
+            channel_id,
             publish_at_str or "immediate",
         )
         return True
@@ -99,7 +101,7 @@ async def _upload_one_video(
     except Exception as e:
         attempts = queue_entry.get("attempt_count", 0) + 1
         logger.exception(
-            "YouTube uploader: failed for video '%s' on channel '%s' (attempt %d/%d)",
+            "[YouTube] Failed for video '%s' on channel '%s' (attempt %d/%d)",
             video_id,
             channel_id,
             attempts,
@@ -119,8 +121,9 @@ async def _upload_one_video(
 
         if attempts >= _MAX_UPLOAD_ATTEMPTS:
             logger.error(
-                "YouTube uploader: giving up on video '%s' after %d attempts",
+                "[YouTube] Giving up on video '%s' for channel '%s' after %d attempts",
                 video_id,
+                channel_id,
                 _MAX_UPLOAD_ATTEMPTS,
             )
 
@@ -164,7 +167,7 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
     """One poll cycle: find all queued YouTube entries and upload them."""
     import app.main as main_app  # Lazy import to avoid circular dependency
 
-    logger.info("YouTube uploader: checking schedule queue...")
+    logger.info("[YouTube] Checking schedule queue...")
 
     # Only pick up entries explicitly marked as youtube (or missing platform).
     # We pick them up immediately so we can schedule them natively on YouTube.
@@ -173,7 +176,7 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
     ).to_list(length=None)
 
     if not queued_entries:
-        logger.info("YouTube uploader: no due YouTube entries.")
+        logger.info("[YouTube] No due YouTube entries.")
         return
 
     # Log summary per channel as requested
@@ -183,7 +186,7 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
         channel_counts[entry.get("channel_id", "unknown")] += 1
     
     for cid, count in channel_counts.items():
-        logger.info("YouTube uploader: found %d videos to upload to channel %s", count, cid)
+        logger.info("[YouTube] Found %d videos to upload to channel %s", count, cid)
 
     for entry in queued_entries:
         channel_id = entry.get("channel_id", "")
@@ -191,7 +194,7 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
         channel_doc = await db.channels.find_one({"channel_id": channel_id})
         if not channel_doc:
-            logger.warning("YouTube uploader: channel '%s' not found — removing stale entry", channel_id)
+            logger.warning("[YouTube] Channel '%s' not found — removing stale entry", channel_id)
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
             continue
 
@@ -202,27 +205,28 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
         video_doc = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video_doc:
-            logger.warning("YouTube uploader: video '%s' not found — removing stale entry", video_id)
+            logger.warning("[YouTube] Video '%s' for channel '%s' not found — removing stale entry", video_id, channel_id)
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
             continue
 
         # Guard: only process videos in queued state
         if video_doc.get("status") not in ("queued",):
             logger.warning(
-                "YouTube uploader: video '%s' status is '%s', not 'queued' — skipping",
+                "[YouTube] Video '%s' for channel '%s' status is '%s', not 'queued' — skipping",
                 video_id,
+                channel_id,
                 video_doc.get("status"),
             )
             continue
 
         if not main_app.youtube_service_manager:
-            logger.error("YouTube uploader: YouTubeServiceManager not available")
+            logger.error("[YouTube] YouTubeServiceManager not available")
             continue
 
         yt_service = await main_app.youtube_service_manager.get_service(channel_id)
         if not yt_service:
             logger.error(
-                "YouTube uploader: no YouTube service for channel '%s' — will retry next poll",
+                "[YouTube] No YouTube service for channel '%s' — will retry next poll",
                 channel_id,
             )
             continue
@@ -239,16 +243,16 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
 async def run_youtube_uploader(db: Any, r2_service: Any) -> None:
     """Long-running loop that uploads queued YouTube videos every 5 minutes."""
-    logger.info("YouTube uploader started (poll interval: %ds)", _POLL_INTERVAL_SECONDS)
+    logger.info("[YouTube] YouTube uploader started (poll interval: %ds)", _POLL_INTERVAL_SECONDS)
 
     while True:
         try:
             await _poll_and_upload(db, r2_service)
         except asyncio.CancelledError:
-            logger.info("YouTube uploader shutting down")
+            logger.info("[YouTube] YouTube uploader shutting down")
             break
         except Exception as e:
-            logger.exception("YouTube uploader encountered an error during poll cycle")
+            logger.exception("[YouTube] YouTube uploader encountered an error during poll cycle")
             error_service = get_error_service(db)
             await error_service.log_error(
                 feature="YouTube Uploader Loop",

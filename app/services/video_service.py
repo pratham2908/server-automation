@@ -351,7 +351,9 @@ class VideoService:
         # They start as 'ready' (or 'queued' if we know they are going to be scheduled).
         now = now_ist()
         sch_at = data.get("scheduled_at")
-        initial_status = "queued" if (sch_at and sch_at > now) else "ready"
+        # We start as 'ready' regardless of schedule.
+        # The background download task will promote it to 'queued' once the file is in R2.
+        initial_status = "ready"
 
         if platform == "instagram":
             src_ig = video.get("instagram_media_id")
@@ -395,7 +397,7 @@ class VideoService:
                 )
                 
                 # Add to appropriate queue since it's instant
-                if initial_status == "queued" and sch_at:
+                if sch_at and sch_at > now_ist():
                     last = await self.db.schedule_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
                     await self.db.schedule_queue.insert_one({
                         "channel_id": tid,
@@ -449,7 +451,7 @@ class VideoService:
             )
             
             # Add to appropriate queue since it's instant
-            if initial_status == "queued" and sch_at:
+            if sch_at and sch_at > now_ist():
                 last = await self.db.schedule_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
                 await self.db.schedule_queue.insert_one({
                     "channel_id": tid,
