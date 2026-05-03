@@ -444,7 +444,12 @@ class VideoService:
         await self.db.videos.insert_one(doc)
         if data.get("instant"):
             assert self.r2 is not None
-            key = await download_youtube_video_to_r2(video["youtube_video_id"], tid, self.r2)
+            src_r2 = video.get("r2_object_key")
+            if src_r2:
+                key = await copy_r2_video_to_r2(src_r2, tid, self.r2)
+            else:
+                key = await download_youtube_video_to_r2(video["youtube_video_id"], tid, self.r2)
+            
             await self.db.videos.update_one(
                 {"video_id": new_id},
                 {"$set": {"r2_object_key": key, "updated_at": now_ist()}},
@@ -469,11 +474,13 @@ class VideoService:
                     "added_at": now,
                 })
         else:
+            src_r2 = video.get("r2_object_key")
             self.trigger_repost_download(
                 channel_id,
                 new_id,
                 target_channel_id=tid,
-                youtube_video_id=video["youtube_video_id"],
+                youtube_video_id=None if src_r2 else video["youtube_video_id"],
+                source_r2_key=src_r2 if src_r2 else None,
             )
         return {"ok": True, "new_video_id": new_id}
 
