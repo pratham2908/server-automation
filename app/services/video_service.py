@@ -845,16 +845,25 @@ class VideoService:
             existing = await self.db.videos.find_one(
                 {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]}
             )
+            # Determine status based on privacy
+            target_status = "published"
+            if v.get("youtube_privacy_status") == "private":
+                target_status = "scheduled"
+
             upd: dict[str, Any] = {
                 "title": v["title"],
                 "description": v["description"],
                 "metadata.views": v["views"],
                 "metadata.youtube_privacy_status": v.get("youtube_privacy_status"),
+                "status": target_status,
                 "updated_at": now_ist(),
             }
-            if existing and existing.get("status") in ("scheduled", "queued"):
-                upd["status"] = "published"
+
+            # Update timing
+            if target_status == "published":
                 upd["published_at"] = v["published_at"] or now_ist()
+            elif v.get("scheduled_at"):
+                upd["scheduled_at"] = v["scheduled_at"]
 
             if not self._has_thumbnail_url(existing) and v.get("thumbnail_url"):
                 upd["thumbnail_url"] = v["thumbnail_url"]
@@ -890,6 +899,10 @@ class VideoService:
                         }
                     )
                     cats.append({"name": cat})
+                target_status = "published"
+                if v.get("youtube_privacy_status") == "private":
+                    target_status = "scheduled"
+
                 await self.db.videos.insert_one(
                     {
                         "channel_id": channel_id,
@@ -898,8 +911,9 @@ class VideoService:
                         "title": v["title"],
                         "description": v["description"],
                         "category": cat,
-                        "status": "published",
-                        "published_at": v["published_at"],
+                        "status": target_status,
+                        "published_at": v["published_at"] if target_status == "published" else None,
+                        "scheduled_at": v.get("scheduled_at") if target_status == "scheduled" else None,
                         "thumbnail_url": v.get("thumbnail_url"),
                         "metadata": {
                             "youtube_privacy_status": v.get("youtube_privacy_status"),
@@ -924,33 +938,71 @@ class VideoService:
                 {"instagram_media_id": 1},
             )
         }
+        # Batch fetch insights for all media IDs
+        media_ids = [r["id"] for r in ig_reels]
+        insights_map = ig.get_reel_insights(media_ids)
+
         new_vids = []
         for r in ig_reels:
-            if r["id"] not in db_ids:
+            mid = r["id"]
+            ins = insights_map.get(mid, {})
+            
+            # Map metrics correctly
+            # video_views is available on the media object directly for Reels
+            # reach, saved, shares come from insights
+            views = int(r.get("video_views", 0))
+            likes = int(r.get("like_count", 0))
+            comments = int(r.get("comments_count", 0))
+            reach = int(ins.get("reach", 0))
+            saves = int(ins.get("saved", 0))
+            shares = int(ins.get("shares", 0))
+
+            if mid not in db_ids:
                 new_vids.append(
                     {
-                        "instagram_media_id": r["id"],
+                        "instagram_media_id": mid,
                         "title": r.get("caption", "Untitled Reel"),
                         "description": r.get("caption", ""),
                         "published_at": (isoparse(r.get("timestamp")) if r.get("timestamp") else None),
-                        "views": r.get("view_count", 0),
                         "thumbnail_url": self._instagram_reel_thumbnail_url(r),
+                        "metadata": {
+                            "views": views,
+                            "likes": likes,
+                            "comments": comments,
+                            "reach": reach,
+                            "saves": saves,
+                            "shares": shares,
+                        }
                     }
                 )
             else:
+                mid = r["id"]
+                ins = insights_map.get(mid, {})
+                views = int(r.get("video_views", 0))
+                likes = int(r.get("like_count", 0))
+                comments = int(r.get("comments_count", 0))
+                reach = int(ins.get("reach", 0))
+                saves = int(ins.get("saved", 0))
+                shares = int(ins.get("shares", 0))
+
                 existing = await self.db.videos.find_one(
-                    {"channel_id": channel_id, "instagram_media_id": r["id"]},
+                    {"channel_id": channel_id, "instagram_media_id": mid},
                     {"thumbnail_url": 1},
                 )
                 thumb = self._instagram_reel_thumbnail_url(r)
                 set_doc: dict[str, Any] = {
-                    "metadata.views": r.get("view_count", 0),
+                    "metadata.views": views,
+                    "metadata.likes": likes,
+                    "metadata.comments": comments,
+                    "metadata.reach": reach,
+                    "metadata.saves": saves,
+                    "metadata.shares": shares,
                     "updated_at": now_ist(),
                 }
                 if thumb and not self._has_thumbnail_url(existing):
                     set_doc["thumbnail_url"] = thumb
                 await self.db.videos.update_one(
-                    {"channel_id": channel_id, "instagram_media_id": r["id"]},
+                    {"channel_id": channel_id, "instagram_media_id": mid},
                     {"$set": set_doc},
                 )
 
@@ -991,6 +1043,7 @@ class VideoService:
                         "status": "published",
                         "published_at": v["published_at"],
                         "thumbnail_url": v.get("thumbnail_url"),
+                        "metadata": v.get("metadata", {}),
                         "content_params": ana.get("content_params"),
                         "verification_status": "unverified",
                         "created_at": now_ist(),
@@ -1064,6 +1117,7 @@ class VideoService:
                         "duration_seconds": self._parse_duration(content.get("duration")),
                         "thumbnail_url": self._youtube_thumbnail_from_snippet(snippet),
                         "youtube_privacy_status": youtube_privacy,
+                        "scheduled_at": isoparse(st.get("publishAt")) if st.get("publishAt") else None,
                         **self._compute_rates(views, likes, comments),
                     }
                 )

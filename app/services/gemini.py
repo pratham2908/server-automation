@@ -815,7 +815,8 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
    - **Description**: A search-optimized description. YouTube: SEO-rich, includes keywords. Instagram: Minimalist, hashtag strategy, viral caption.
    - **Tags**: A comprehensive list of tags/hashtags. (Strict: max 500 characters total for YT).
    - **Thumbnail Selection**: Identify the exact timestamp of the most visually "wow" or representative moment for a thumbnail. Provide reasoning.
-3. **Retention Curve Prediction**: Based on the pacing and narrative structure, predict the full retention curve. Provide a data point for every 5% interval (0.0, 0.05, 0.1, ..., 1.0) where 1.0 = 100% of viewers.
+3. **Intelligence Insights**: Summarize the video's core structural **strengths** (what will keep people watching) and **weaknesses** (what will cause drops), plus actionable **recommendations**.
+4. **Retention Curve Prediction**: Based on the pacing and narrative structure, predict the full retention curve. Provide a data point for every 5% interval (0.0, 0.05, 0.1, ..., 1.0) where 1.0 = 100% of viewers.
 
 ## Rules
 
@@ -826,6 +827,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
 2. **The 5-Second Rule**: Be hyper-critical of the first 5 seconds. Flag it as HIGH RISK if no visual change occurs.
 3. **Objective Data**: Focus on structural data: what happens, when, and how long.
 4. **Thumbnail Reasoning**: Explain why that specific timestamp is the best "click-bait" frame (e.g., "High-action collision at 12.4s").
+5. **Pacing Templates**: If pacing templates were provided, explicitly evaluate how well the video aligns with them.
 
 ## Required Output Format
 
@@ -843,7 +845,8 @@ Return a JSON object with exactly these keys:
   "hook_analysis": {{
     "score": 72,
     "risk_level": "medium",
-    "notes": ["Strong visual opening at 0.5s"]
+    "notes": ["Strong visual opening at 0.5s"],
+    "first_frame_description": "Close-up of the protagonist holding the key component."
   }},
   "pacing_analysis": {{
     "total_scene_cuts": 24,
@@ -864,7 +867,9 @@ Return a JSON object with exactly these keys:
     "thumbnail_reasoning": "Highest visual drama with primary subject clearly visible"
   }},
   "narrative_structure": "tutorial",
-  "recommendations": ["Add B-roll at 45s"],
+  "strengths": ["Excellent visual hook in first 2s", "Consistent high-energy pacing"],
+  "weaknesses": ["Long static segment at 45s", "Audio levels slightly inconsistent"],
+  "recommendations": ["Add B-roll at 45s", "Normalize audio in post"],
   "predicted_retention_curve": {{
     "0.0": 1.0,
     "0.05": 0.85,

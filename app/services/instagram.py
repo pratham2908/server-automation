@@ -157,7 +157,7 @@ class InstagramService:
         """
         fields = (
             "id,caption,media_type,media_url,thumbnail_url,timestamp,"
-            "permalink,like_count,comments_count"
+            "permalink,like_count,comments_count,video_views"
         )
         reels: list[dict[str, Any]] = []
         url: str | None = f"{ig_user_id}/media"
