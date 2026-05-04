@@ -950,10 +950,10 @@ class VideoService:
             # Map metrics correctly
             # video_views is available on the media object directly for Reels
             # reach, saved, shares come from insights
-            views = int(r.get("video_views", 0))
             likes = int(r.get("like_count", 0))
             comments = int(r.get("comments_count", 0))
             reach = int(ins.get("reach", 0))
+            views = reach # Use reach as views for Reels since video_views is deprecated
             saves = int(ins.get("saved", 0))
             shares = int(ins.get("shares", 0))
 
@@ -978,10 +978,10 @@ class VideoService:
             else:
                 mid = r["id"]
                 ins = insights_map.get(mid, {})
-                views = int(r.get("video_views", 0))
                 likes = int(r.get("like_count", 0))
                 comments = int(r.get("comments_count", 0))
                 reach = int(ins.get("reach", 0))
+                views = reach # Use reach as views for Reels
                 saves = int(ins.get("saved", 0))
                 shares = int(ins.get("shares", 0))
 
