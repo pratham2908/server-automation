@@ -997,6 +997,7 @@ class VideoService:
                     "metadata.reach": reach,
                     "metadata.saves": saves,
                     "metadata.shares": shares,
+                    "status": "published",
                     "updated_at": now_ist(),
                 }
                 if thumb and not self._has_thumbnail_url(existing):
