@@ -125,7 +125,7 @@ class MetricsService:
             "requests": {
                 "total": self.total_requests,
                 "avg_latency_ms": round(avg_latency, 2),
-                "status_codes": self.status_codes,
+                "status_codes": {str(k): v for k, v in self.status_codes.items()},
                 "recent": list(self.last_requests),
             },
             "ai": {
