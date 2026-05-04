@@ -804,7 +804,7 @@ async def get_log_viewer():
                             <span class="feature">${err.feature}</span>
                             <div style="display:flex; align-items:center; gap:0.5rem">
                                 ${err.count > 1 ? `<span class="count-badge">x${err.count}</span>` : ''}
-                                <span class="time">${new Date(err.last_occurred_at || err.timestamp).toLocaleTimeString()}</span>
+                                <span class="time">${formatIST(err.last_occurred_at || err.timestamp)}</span>
                             </div>
                         </div>
                         <div class="msg">${err.message}</div>
@@ -828,6 +828,18 @@ async def get_log_viewer():
                 const isHidden = aside.style.display === 'none';
                 aside.style.display = isHidden ? 'flex' : 'none';
                 document.getElementById('toggle-queue-btn').textContent = `Queue: ${isHidden ? 'Visible' : 'Hidden'}`;
+            }
+
+            function formatIST(dateStr) {
+                if (!dateStr) return '';
+                const date = new Date(dateStr);
+                return date.toLocaleString('en-IN', {
+                    day: '2-digit',
+                    month: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                });
             }
 
             function stripAnsi(s) {
