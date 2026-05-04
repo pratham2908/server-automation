@@ -672,7 +672,7 @@ async def get_log_viewer():
             
             <aside id="error-queue">
                 <div class="queue-header">
-                    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg> Error Queue</h2>
+                    <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg> Error Queue <span id="error-count-badge" class="count-badge" style="display:none; margin-left:0.5rem">0</span></h2>
                     <button class="action-btn" onclick="fetchErrors()" title="Refresh Queue">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                     </button>
@@ -735,6 +735,16 @@ async def get_log_viewer():
                 try {
                     const res = await fetch('/api/v1/errors/?resolved=false');
                     const data = await res.json();
+                    
+                    // Update badge
+                    const badge = document.getElementById('error-count-badge');
+                    if (data && data.length > 0) {
+                        badge.textContent = data.length;
+                        badge.style.display = 'inline-block';
+                    } else {
+                        badge.style.display = 'none';
+                    }
+
                     renderErrors(data);
                 } catch (e) {
                     console.error('Failed to fetch errors:', e);
