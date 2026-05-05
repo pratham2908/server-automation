@@ -59,6 +59,7 @@ class GeminiService:
                         contents=prompt,
                         config=types.GenerateContentConfig(
                             response_mime_type="application/json",
+                            labels={"application": "automation-server"},
                         ),
                     ),
                     timeout=90.0,
@@ -688,6 +689,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                             contents=[video_part, prompt],
                             config=types.GenerateContentConfig(
                                 response_mime_type="application/json",
+                                labels={"application": "automation-server"},
                             ),
                         ),
                         timeout=180.0,
@@ -1202,6 +1204,7 @@ Return a JSON object with exactly these keys:
                         contents=[image_part, prompt],
                         config=types.GenerateContentConfig(
                             response_mime_type="application/json",
+                            labels={"application": "automation-server"},
                         ),
                     ),
                     timeout=90.0,
