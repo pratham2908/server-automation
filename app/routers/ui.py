@@ -252,6 +252,42 @@ async def get_log_viewer():
                 border-color: var(--error);
             }
 
+            .bulk-actions-container {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+
+            .error-checkbox {
+                appearance: none;
+                width: 14px;
+                height: 14px;
+                border: 2px solid rgba(248, 113, 113, 0.4);
+                border-radius: 3px;
+                cursor: pointer;
+                position: relative;
+                transition: all 0.2s;
+                background: transparent;
+                flex-shrink: 0;
+            }
+
+            .error-checkbox:checked {
+                background: var(--error);
+                border-color: var(--error);
+            }
+
+            .error-checkbox:checked::after {
+                content: '';
+                position: absolute;
+                left: 3px;
+                top: 0px;
+                width: 4px;
+                height: 7px;
+                border: solid white;
+                border-width: 0 2px 2px 0;
+                transform: rotate(45deg);
+            }
+
             .error-card details {
                 margin-top: 0.5rem;
                 font-size: 0.7rem;
@@ -673,9 +709,15 @@ async def get_log_viewer():
             <aside id="error-queue">
                 <div class="queue-header">
                     <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg> Error Queue <span id="error-count-badge" class="count-badge" style="display:none; margin-left:0.5rem">0</span></h2>
-                    <button class="action-btn" onclick="fetchErrors()" title="Refresh Queue">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-                    </button>
+                    <div class="bulk-actions-container">
+                        <button id="bulk-clear-btn" class="action-btn" onclick="clearSelectedErrors()" style="display:none; background:rgba(248, 113, 113, 0.2); color:var(--error); border-color:var(--error)">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+                            Clear Selected (<span id="selected-count">0</span>)
+                        </button>
+                        <button class="action-btn" onclick="fetchErrors()" title="Refresh Queue">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                        </button>
+                    </div>
                 </div>
                 <div id="error-list">
                     <div class="empty-state">Loading errors...</div>
@@ -745,6 +787,7 @@ async def get_log_viewer():
                         badge.style.display = 'none';
                     }
 
+                    updateBulkUI();
                     renderErrors(data);
                 } catch (e) {
                     console.error('Failed to fetch errors:', e);
@@ -799,10 +842,13 @@ async def get_log_viewer():
                 }
 
                 errorList.innerHTML = errors.map(err => `
-                    <div class="error-card">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem">
-                            <span class="feature">${err.feature}</span>
-                            <div style="display:flex; align-items:center; gap:0.5rem">
+                    <div class="error-card" data-id="${err._id}">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:0.5rem; gap: 0.5rem">
+                            <div style="display:flex; align-items:center; gap:0.5rem; min-width:0">
+                                <input type="checkbox" class="error-checkbox" onchange="updateBulkUI()">
+                                <span class="feature" style="margin-bottom:0">${err.feature}</span>
+                            </div>
+                            <div style="display:flex; align-items:center; gap:0.5rem; flex-shrink:0">
                                 ${err.count > 1 ? `<span class="count-badge">x${err.count}</span>` : ''}
                                 <span class="time">${formatIST(err.last_occurred_at || err.timestamp)}</span>
                             </div>
@@ -828,6 +874,43 @@ async def get_log_viewer():
                 const isHidden = aside.style.display === 'none';
                 aside.style.display = isHidden ? 'flex' : 'none';
                 document.getElementById('toggle-queue-btn').textContent = `Queue: ${isHidden ? 'Visible' : 'Hidden'}`;
+            }
+
+            function updateBulkUI() {
+                const checkboxes = document.querySelectorAll('.error-checkbox:checked');
+                const bulkBtn = document.getElementById('bulk-clear-btn');
+                const countSpan = document.getElementById('selected-count');
+                
+                if (checkboxes.length > 0) {
+                    bulkBtn.style.display = 'flex';
+                    countSpan.innerText = checkboxes.length;
+                } else {
+                    bulkBtn.style.display = 'none';
+                }
+            }
+
+            async function clearSelectedErrors() {
+                const checkboxes = document.querySelectorAll('.error-checkbox:checked');
+                const ids = Array.from(checkboxes).map(cb => cb.closest('.error-card').dataset.id);
+                
+                if (!confirm(`Clear ${ids.length} selected errors?`)) return;
+
+                const bulkBtn = document.getElementById('bulk-clear-btn');
+                bulkBtn.disabled = true;
+                bulkBtn.innerText = 'Clearing...';
+
+                try {
+                    await fetch('/api/v1/errors/bulk-resolve', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(ids)
+                    });
+                    fetchErrors();
+                } catch (e) {
+                    alert('Failed to clear selected errors');
+                    bulkBtn.disabled = false;
+                    updateBulkUI();
+                }
             }
 
             function formatIST(dateStr) {

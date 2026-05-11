@@ -65,6 +65,16 @@ async def update_error(error_id: str, update: ErrorUpdate, db: AsyncIOMotorDatab
     return result
 
 
+@router.post("/bulk-resolve", status_code=status.HTTP_200_OK)
+async def bulk_resolve(error_ids: list[str], db: AsyncIOMotorDatabase = Depends(get_db)):
+    """Resolve multiple errors at once."""
+    await db.errors.update_many(
+        {"_id": {"$in": error_ids}},
+        {"$set": {"resolved": True, "updated_at": now_ist()}}
+    )
+    return {"status": "ok", "resolved_count": len(error_ids)}
+
+
 @router.delete("/{error_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_error(error_id: str, db: AsyncIOMotorDatabase = Depends(get_db)):
     """Delete an error from the database."""
