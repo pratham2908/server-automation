@@ -723,7 +723,7 @@ class VideoService:
                     "added_at": now,
                 }
             )
-        if status == "ready":
+        if status in ("ready", "scheduled"):
             self.trigger_retention_analysis(channel_id, vid_id, local_video_path=tpath)
         elif os.path.exists(tpath):
             os.unlink(tpath)

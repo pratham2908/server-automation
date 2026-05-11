@@ -55,10 +55,16 @@ async def _publish_one_reel(
         # This is much more robust againstrupload/encoding issues.
         video_url = r2_service.generate_presigned_url(r2_key, expires_in=3600)
 
+        # Use AI-suggested best time frame for thumbnail if available
+        ai_packaging = video_doc.get("ai_packaging") or {}
+        thumb_offset_sec = ai_packaging.get("best_thumbnail_timestamp")
+        thumb_offset_ms = int(thumb_offset_sec * 1000) if thumb_offset_sec is not None else None
+
         media_id = instagram_service.publish_reel_from_url(
             ig_user_id=ig_user_id,
             video_url=video_url,
             caption=caption,
+            thumb_offset=thumb_offset_ms,
         )
 
         now = now_ist()
