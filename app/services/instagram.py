@@ -346,16 +346,20 @@ class InstagramService:
         caption: str,
         *,
         upload_type: str = "resumable",
+        thumb_offset: int | None = None,
     ) -> dict[str, str]:
         """Create a Reel media container for resumable upload.
 
         Returns ``{"container_id": "...", "upload_uri": "..."}``.
         """
-        params: dict[str, str] = {
+        params: dict[str, Any] = {
             "media_type": "REELS",
             "upload_type": upload_type,
             "caption": caption,
         }
+        if thumb_offset is not None:
+            params["thumb_offset"] = str(thumb_offset)
+
         data = self._post(f"{ig_user_id}/media", params)
         container_id = data.get("id", "")
         upload_uri = data.get("uri", "")
@@ -480,6 +484,7 @@ class InstagramService:
         video_url: str,
         caption: str,
         *,
+        thumb_offset: int | None = None,
         poll_interval: float = 10.0,
         max_polls: int = 40,
     ) -> str:
@@ -490,11 +495,14 @@ class InstagramService:
         import time
         
         # 1. Create container with video_url
-        params = {
+        params: dict[str, Any] = {
             "media_type": "REELS",
             "video_url": video_url,
             "caption": caption,
         }
+        if thumb_offset is not None:
+            params["thumb_offset"] = str(thumb_offset)
+
         data = self._post(f"{ig_user_id}/media", params)
         cid = data.get("id", "")
         if not cid:
