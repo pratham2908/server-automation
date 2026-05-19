@@ -96,6 +96,16 @@ class Video(BaseModel):
         description="When the video was published on the platform. Null until published.",
     )
 
+    # Repost tracking
+    is_repost: bool = False
+    original_video_id: str | None = Field(
+        None, description="video_id of the original video this was reposted from"
+    )
+    repost_count: int = 0  # Number of times this original video has been reposted
+    repost_index: int | None = Field(
+        None, description="Which repost this is (1st, 2nd, etc.)"
+    )
+
     # Unified Analytics Data
     retention: dict[str, Any] | None = Field(
         None, description="Pre-publish multimodal analysis and predicted retention curve."

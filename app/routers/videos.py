@@ -62,6 +62,11 @@ class RepostRequest(BaseModel):
     instant: bool = Field(False)
 
 
+class RepostStatusRequest(BaseModel):
+    is_repost: bool
+    original_video_id: str | None = None
+
+
 class ScheduleRequest(BaseModel):
     scheduled_at: datetime | None = None
 
@@ -398,10 +403,20 @@ async def repost_video(
     service: VideoService = Depends(get_video_service),
 ):
     """Repost a published video."""
-    # repost_video was also complex, service has trigger_repost_download
-    # but the endpoint logic involves creating the new doc.
-    # I'll use the service's helper or just let it be.
-    # Actually, I'll just call service if I added it.
-    # I see I didn't add a full 'repost_video' method to service, just the trigger.
-    # I'll fix the service to have repost_video.
     return await service.repost_video(channel_id, video_id, body.dict())
+
+
+@router.patch("/{video_id}/repost-status")
+async def update_repost_status(
+    channel_id: str,
+    video_id: str,
+    body: RepostStatusRequest,
+    service: VideoService = Depends(get_video_service),
+):
+    """Mark or unmark a video as a repost of another video."""
+    try:
+        return await service.mark_repost_status(
+            channel_id, video_id, body.is_repost, body.original_video_id
+        )
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))

@@ -368,6 +368,14 @@ class VideoService:
         # The background download task will promote it to 'ready' or 'queued' once the file is in R2.
         initial_status = "processing"
 
+        # Increment repost_count on the original and capture repost_index for the new video
+        await self.db.videos.update_one(
+            {"video_id": video_id},
+            {"$inc": {"repost_count": 1}, "$set": {"updated_at": now}},
+        )
+        updated_original = await self.db.videos.find_one({"video_id": video_id})
+        repost_index = (updated_original or {}).get("repost_count", 1)
+
         if platform == "instagram":
             src_ig = video.get("instagram_media_id")
             src_r2 = video.get("r2_object_key")
@@ -388,6 +396,10 @@ class VideoService:
                 "instagram_media_id": src_ig,
                 "thumbnail_url": video.get("thumbnail_url"),
                 "scheduled_at": sch_at,
+                "is_repost": True,
+                "original_video_id": video_id,
+                "repost_index": repost_index,
+                "repost_count": 0,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -457,6 +469,10 @@ class VideoService:
             "youtube_video_id": video["youtube_video_id"],
             "thumbnail_url": video.get("thumbnail_url"),
             "scheduled_at": sch_at,
+            "is_repost": True,
+            "original_video_id": video_id,
+            "repost_index": repost_index,
+            "repost_count": 0,
             "created_at": now,
             "updated_at": now,
         }
@@ -509,6 +525,75 @@ class VideoService:
             )
         return {"ok": True, "new_video_id": new_id}
 
+    async def mark_repost_status(
+        self,
+        channel_id: str,
+        video_id: str,
+        is_repost: bool,
+        original_video_id: str | None,
+    ) -> dict:
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+        if not video:
+            raise ValueError("Video not found")
+
+        now = now_ist()
+
+        if is_repost:
+            if not original_video_id:
+                raise ValueError("original_video_id is required when marking as repost")
+            original = await self.db.videos.find_one({"video_id": original_video_id})
+            if not original:
+                raise ValueError("Original video not found")
+
+            # Un-link from any previous original first
+            prev_original_id = video.get("original_video_id")
+            if prev_original_id and prev_original_id != original_video_id:
+                await self.db.videos.update_one(
+                    {"video_id": prev_original_id},
+                    {"$inc": {"repost_count": -1}, "$set": {"updated_at": now}},
+                )
+
+            # Increment repost_count on new original
+            if not video.get("is_repost") or prev_original_id != original_video_id:
+                await self.db.videos.update_one(
+                    {"video_id": original_video_id},
+                    {"$inc": {"repost_count": 1}, "$set": {"updated_at": now}},
+                )
+            updated_original = await self.db.videos.find_one({"video_id": original_video_id})
+            repost_index = (updated_original or {}).get("repost_count", 1)
+
+            await self.db.videos.update_one(
+                {"video_id": video_id},
+                {
+                    "$set": {
+                        "is_repost": True,
+                        "original_video_id": original_video_id,
+                        "repost_index": repost_index,
+                        "updated_at": now,
+                    }
+                },
+            )
+        else:
+            # Un-mark as repost — decrement original's repost_count
+            prev_original_id = video.get("original_video_id")
+            if prev_original_id:
+                await self.db.videos.update_one(
+                    {"video_id": prev_original_id},
+                    {"$inc": {"repost_count": -1}, "$set": {"updated_at": now}},
+                )
+            await self.db.videos.update_one(
+                {"video_id": video_id},
+                {
+                    "$set": {
+                        "is_repost": False,
+                        "original_video_id": None,
+                        "repost_index": None,
+                        "updated_at": now,
+                    }
+                },
+            )
+
+        return {"ok": True}
 
     def trigger_retention_analysis(self, channel_id: str, video_id: str, local_video_path: str | None = None) -> None:
 
@@ -1118,7 +1203,7 @@ class VideoService:
                         "duration_seconds": self._parse_duration(content.get("duration")),
                         "thumbnail_url": self._youtube_thumbnail_from_snippet(snippet),
                         "youtube_privacy_status": youtube_privacy,
-                        "scheduled_at": isoparse(st.get("publishAt")) if st.get("publishAt") else None,
+                        "scheduled_at": isoparse(str(st.get("publishAt"))) if st.get("publishAt") else None,
                         **self._compute_rates(views, likes, comments),
                     }
                 )
