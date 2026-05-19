@@ -71,6 +71,19 @@ def _download_and_upload_local(youtube_video_id: str, r2_key: str, r2_service: "
         'noprogress': True,
     }
     
+    # Check for cookies.txt in current directory or app root
+    cookie_paths = [
+        "cookies.txt",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "cookies.txt")
+    ]
+    for cp in cookie_paths:
+        if os.path.exists(cp):
+            print(f"Using cookies file: {cp}")
+            ydl_opts['cookiefile'] = cp
+            break
+    else:
+        print("No cookies.txt found. Downloading without cookies.")
+    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
