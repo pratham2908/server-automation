@@ -134,14 +134,16 @@ async def storage_files(
     prefix = f"{channel_id}/"
     raw = service.r2.list_objects_with_prefix(prefix)
     key_to_title: dict[str, str] = {}
+    key_to_status: dict[str, str] = {}
     cur = service.db.videos.find(
         {"channel_id": channel_id, "r2_object_key": {"$exists": True, "$ne": None}},
-        {"r2_object_key": 1, "title": 1},
+        {"r2_object_key": 1, "title": 1, "status": 1},
     )
     async for doc in cur:
         k = doc.get("r2_object_key")
         if k:
             key_to_title[k] = doc.get("title") or ""
+            key_to_status[k] = doc.get("status") or "unknown"
 
     files: list[dict[str, Any]] = []
     for o in raw:
@@ -153,6 +155,7 @@ async def storage_files(
                 "size": int(o.get("size", 0)),
                 "last_modified": lm.isoformat() if hasattr(lm, "isoformat") and lm else None,
                 "title": key_to_title.get(k),
+                "status": key_to_status.get(k),
             }
         )
     return {"ok": True, "files": files}
