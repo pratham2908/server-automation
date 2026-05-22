@@ -69,6 +69,7 @@ def _download_and_upload_local(youtube_video_id: str, r2_key: str, r2_service: "
         'outtmpl': tmp_path,
         'quiet': True,
         'noprogress': True,
+        'js_runtimes': ['node'],
     }
     
     # Check for cookies.txt in current directory or app root

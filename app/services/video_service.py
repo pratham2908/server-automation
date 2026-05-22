@@ -648,6 +648,9 @@ class VideoService:
                     now = now_ist()
                     # Determine final status based on whether it's scheduled
                     sch_at = video.get("scheduled_at")
+                    if sch_at and sch_at.tzinfo is None:
+                        from app.timezone import UTC
+                        sch_at = sch_at.replace(tzinfo=UTC)
                     final_status = "queued" if (sch_at and sch_at > now) else "ready"
                     
                     upd = {"r2_object_key": key, "updated_at": now, "status": final_status}
