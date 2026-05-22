@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_channel_platform, get_db
-from app.routers.observability import verify_api_key
+from app.dependencies import verify_api_key
 from app.services.growth_tracking import GrowthTrackingService
 
 router = APIRouter(prefix="/api/v1/growth", tags=["growth"])
