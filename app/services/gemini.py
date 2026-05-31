@@ -884,6 +884,67 @@ Return a JSON object with exactly these keys:
 
 Be thorough, objective, and data-driven. Predict the curve at 5% intervals exactly."""
 
+    async def generate_platform_packaging(
+        self,
+        analysis_result: dict[str, Any],
+        platform: str,
+        channel_name: str = "",
+        default_description: str = "",
+        default_tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Generate platform-specific packaging from an existing analysis result.
+
+        Used after a multi-channel upload: the expensive multimodal analysis
+        has already run; this text-only call re-packages the findings for a
+        different platform / channel without re-uploading the video file.
+
+        Returns a ``packaging`` dict with the same shape as the primary
+        ``packaging`` block produced by ``analyze_video_retention``.
+        """
+        platform_note = (
+            "Instagram Reel — write a punchy single-block caption with relevant hashtags, "
+            "no separate title/description split needed."
+            if platform == "instagram"
+            else "YouTube Short/video — write a click-worthy title (max 100 chars) and a "
+            "2-3 sentence description with keywords; provide 5-10 tags."
+        )
+
+        defaults_section = ""
+        if default_description:
+            defaults_section += f"\nChannel default description style: {default_description[:300]}"
+        if default_tags:
+            defaults_section += f"\nChannel default tags: {', '.join(default_tags[:20])}"
+
+        prompt = f"""You are an expert video content packager.
+
+Below is the retention & content analysis that was already performed on a video.
+Use this analysis to generate high-converting packaging for a **{platform.upper()}** channel called "{channel_name}".
+{platform_note}
+{defaults_section}
+
+## Analysis Result
+```json
+{json.dumps(analysis_result, indent=2)[:6000]}
+```
+
+Return ONLY valid JSON matching this schema (no markdown, no explanation):
+{{
+  "suggested_titles": ["Title 1", "Title 2", "Title 3"],
+  "suggested_description": "...",
+  "suggested_tags": ["tag1", "tag2"],
+  "best_thumbnail_timestamp": <float seconds from analysis>,
+  "thumbnail_reasoning": "..."
+}}
+
+For Instagram, put the full caption in `suggested_description` and leave `suggested_titles` as an empty list."""
+
+        text = await self._generate(prompt)
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            logger.error("Failed to parse platform packaging response: %s", text)
+            raise ValueError("Failed to parse platform packaging response")
+
     # ------------------------------------------------------------------
     # Comment sentiment classification (for auto-reply)
     # ------------------------------------------------------------------

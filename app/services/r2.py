@@ -122,8 +122,17 @@ class R2Service:
                 total_b += int(o.get("size", 0))
         return n, total_b
 
-    def purge_prefix_older_than(self, prefix: str, days_old: int) -> tuple[int, int]:
-        """Delete objects under *prefix* older than *days_old* days. Returns (purged, errors)."""
+    def purge_prefix_older_than(
+        self,
+        prefix: str,
+        days_old: int,
+        protected_keys: set[str] | None = None,
+    ) -> tuple[int, int]:
+        """Delete objects under *prefix* older than *days_old* days.
+
+        Skips any key present in *protected_keys* (i.e. still referenced by a
+        video record in the DB).  Returns (purged, errors).
+        """
         cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
         purged = 0
         errors = 0
@@ -131,6 +140,8 @@ class R2Service:
             lm = self._normalize_utc(o.get("last_modified"))
             key = o.get("key")
             if not key or lm is None or lm >= cutoff:
+                continue
+            if protected_keys and key in protected_keys:
                 continue
             try:
                 self.delete_video(key)

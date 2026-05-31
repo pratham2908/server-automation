@@ -190,6 +190,7 @@ async def run_retention_analysis(
                 else:
                     updates["tags"] = tags
 
+            thumb_url: str | None = None
             if extract_thumbnail(temp_path, ts, local_thumb_path):
                 try:
                     # Upload to R2 under channel/thumbnails/
@@ -209,6 +210,71 @@ async def run_retention_analysis(
                         os.unlink(local_thumb_path)
 
             await db.videos.update_one({"channel_id": channel_id, "video_id": video_id}, {"$set": updates})
+
+            # --- MULTI-CHANNEL SIBLING PROPAGATION ---
+            # If this video belongs to a multi-channel group, generate
+            # platform-appropriate packaging for every sibling record using
+            # the analysis result we already have (no re-upload needed).
+            primary_doc = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+            group_id = (primary_doc or {}).get("multi_channel_group_id")
+            if group_id:
+                siblings = await db.videos.find(
+                    {
+                        "multi_channel_group_id": group_id,
+                        "video_id": {"$neq": video_id},
+                    }
+                ).to_list(length=None)
+                # Fix: use $ne operator
+                siblings = [s for s in await db.videos.find(
+                    {"multi_channel_group_id": group_id}
+                ).to_list(length=None) if s.get("video_id") != video_id]
+
+                for sibling in siblings:
+                    sib_channel_id = sibling["channel_id"]
+                    sib_video_id = sibling["video_id"]
+                    try:
+                        sib_channel = await db.channels.find_one({"channel_id": sib_channel_id})
+                        sib_platform = (sib_channel or {}).get("platform", "youtube")
+                        sib_name = (sib_channel or {}).get("name", "")
+                        sib_default_desc = (sib_channel or {}).get("default_description", "")
+                        sib_default_tags = (sib_channel or {}).get("default_tags") or []
+
+                        sib_packaging = await gemini_service.generate_platform_packaging(
+                            analysis_result=result,
+                            platform=sib_platform,
+                            channel_name=sib_name,
+                            default_description=sib_default_desc,
+                            default_tags=sib_default_tags,
+                        )
+                        if thumb_url:
+                            sib_packaging["thumbnail_url"] = thumb_url
+
+                        sib_updates: dict[str, Any] = {
+                            "packaging_status": "completed",
+                            "ai_packaging": sib_packaging,
+                            "updated_at": now,
+                        }
+                        sib_titles = sib_packaging.get("suggested_titles")
+                        if sib_titles and isinstance(sib_titles, list) and sib_titles:
+                            sib_updates["title"] = sib_titles[0]
+                        sib_desc = sib_packaging.get("suggested_description")
+                        if sib_desc:
+                            sib_updates["description"] = sib_desc
+                        sib_tags = sib_packaging.get("suggested_tags")
+                        if sib_tags:
+                            sib_updates["tags"] = sib_tags if isinstance(sib_tags, list) else [t.strip() for t in sib_tags.split(",") if t.strip()]
+
+                        await db.videos.update_one(
+                            {"channel_id": sib_channel_id, "video_id": sib_video_id},
+                            {"$set": sib_updates},
+                        )
+                        logger.info("Propagated packaging to sibling %s (%s)", sib_video_id, sib_platform)
+                    except Exception as e:
+                        logger.error("Failed to generate packaging for sibling %s: %s", sib_video_id, e)
+                        await db.videos.update_one(
+                            {"channel_id": sib_channel_id, "video_id": sib_video_id},
+                            {"$set": {"packaging_status": "failed", "updated_at": now}},
+                        )
 
         logger.success(
             "Retention analysis complete for '%s' — predicted retention: %s%%",

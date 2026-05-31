@@ -19,7 +19,6 @@ from app.database import (
 )
 from app.logger import get_logger
 from app.services.downloader import (
-    copy_r2_video_to_r2,
     download_instagram_media_to_r2,
     download_youtube_video_to_r2,
 )
@@ -53,6 +52,20 @@ class VideoService:
         self.instagram_manager = instagram_manager
 
     # --- Helper methods ---
+    async def _r2_refcount(self, r2_key: str) -> int:
+        """Count how many video records share this R2 key."""
+        return await self.db.videos.count_documents({"r2_object_key": r2_key})
+
+    async def _safe_delete_r2(self, r2_key: str) -> None:
+        """Delete from R2 only if no other video record references the same key."""
+        if not self.r2 or not r2_key:
+            return
+        if await self._r2_refcount(r2_key) <= 1:
+            try:
+                self.r2.delete_video(r2_key)
+            except Exception:
+                pass
+
     async def verify_video_file(self, channel_id: str, video_id: str) -> bool:
         """Check if a video has a valid file in R2."""
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
@@ -252,11 +265,8 @@ class VideoService:
 
         update_fields = {"status": new_status, "updated_at": now_ist()}
         if old_status == "ready":
-            if video.get("r2_object_key") and self.r2:
-                try:
-                    self.r2.delete_video(video["r2_object_key"])
-                except Exception:
-                    pass
+            if video.get("r2_object_key"):
+                await self._safe_delete_r2(video["r2_object_key"])
             await self.db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
             update_fields["r2_object_key"] = None
         if old_status in ("queued", "scheduled"):
@@ -311,11 +321,8 @@ class VideoService:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
             raise ValueError("Video not found")
-        if video.get("r2_object_key") and self.r2:
-            try:
-                self.r2.delete_video(video["r2_object_key"])
-            except Exception:
-                pass
+        if video.get("r2_object_key"):
+            await self._safe_delete_r2(video["r2_object_key"])
         await self.db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
         await self.db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
         await self.db.videos.delete_one({"_id": video["_id"]})
@@ -407,7 +414,7 @@ class VideoService:
             if data.get("instant"):
                 assert self.r2 is not None
                 if src_r2:
-                    key = await copy_r2_video_to_r2(src_r2, tid, self.r2)
+                    key = src_r2  # reuse same R2 object — no copy needed
                 else:
                     ig = await self._get_instagram_service(channel_id)
                     if not ig:
@@ -481,7 +488,7 @@ class VideoService:
             assert self.r2 is not None
             src_r2 = video.get("r2_object_key")
             if src_r2:
-                key = await copy_r2_video_to_r2(src_r2, tid, self.r2)
+                key = src_r2  # reuse same R2 object — no copy needed
             else:
                 key = await download_youtube_video_to_r2(video["youtube_video_id"], tid, self.r2)
             
@@ -631,7 +638,7 @@ class VideoService:
                     if youtube_video_id:
                         key = await download_youtube_video_to_r2(youtube_video_id, tid, self.r2)
                     elif source_r2_key:
-                        key = await copy_r2_video_to_r2(source_r2_key, tid, self.r2)
+                        key = source_r2_key  # reuse same R2 object — no copy needed
                     elif instagram_media_id:
                         ig = await self._get_instagram_service(channel_id)
                         if not ig:
@@ -817,6 +824,150 @@ class VideoService:
             os.unlink(tpath)
         doc.pop("_id", None)
         return {"ok": True, "video": doc}
+
+    async def create_multi_channel_video(
+        self,
+        primary_channel_id: str,
+        file: Any,
+        channels: list[dict],
+    ) -> dict[str, Any]:
+        """Upload a video file once and create records for every target channel.
+
+        All records share the same R2 object key.  AI packaging (retention
+        analysis) runs once on the primary channel's record; after it
+        completes the service propagates platform-appropriate packaging to
+        every sibling record.
+
+        Parameters
+        ----------
+        primary_channel_id:
+            The channel the file is uploaded under.  Also used as the R2
+            prefix for the object key.
+        file:
+            File-like object (from the multipart upload).
+        channels:
+            List of per-channel configs::
+
+                [
+                  {
+                    "channel_id": "...",
+                    "title": "...",
+                    "description": "...",
+                    "tags": [...],          # list[str]
+                    "category": "...",
+                    "content_params": {...},
+                    "scheduled_at": "...",  # ISO string or None
+                  },
+                  ...
+                ]
+
+        Returns
+        -------
+        {"ok": True, "group_id": ..., "primary_video_id": ...,
+         "channel_videos": [{"channel_id": ..., "video_id": ...}, ...]}
+        """
+        if not channels:
+            raise ValueError("At least one channel config is required")
+        assert self.r2 is not None
+
+        group_id = str(uuid.uuid4())
+        primary_vid_id = str(uuid.uuid4())
+        r2_key = f"{primary_channel_id}/{primary_vid_id}.mp4"
+
+        # ── 1. Upload file to R2 once ────────────────────────────────────
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            shutil.copyfileobj(file, tmp)
+            tpath = tmp.name
+        with open(tpath, "rb") as f:
+            self.r2.upload_video(f, r2_key)
+
+        now = now_ist()
+        channel_videos: list[dict] = []
+        primary_doc: dict | None = None
+
+        # ── 2. Create a video record for every target channel ────────────
+        for ch_cfg in channels:
+            cid = ch_cfg["channel_id"]
+            channel = await self.db.channels.find_one({"channel_id": cid})
+            if not channel:
+                continue
+
+            is_primary = cid == primary_channel_id
+            vid_id = primary_vid_id if is_primary else str(uuid.uuid4())
+            platform = get_channel_platform(channel)
+
+            raw_tags = ch_cfg.get("tags") or []
+            parsed_tags = (
+                [t.strip() for t in raw_tags.split(",") if t.strip()]
+                if isinstance(raw_tags, str)
+                else list(raw_tags)
+            )
+
+            sch_at: datetime | None = None
+            if ch_cfg.get("scheduled_at"):
+                try:
+                    sch_at = isoparse(ch_cfg["scheduled_at"]).replace(tzinfo=IST)
+                except Exception:
+                    pass
+
+            status = "scheduled" if (sch_at and platform == "instagram") else "ready"
+
+            doc = {
+                "channel_id": cid,
+                "video_id": vid_id,
+                "title": ch_cfg.get("title", ""),
+                "description": ch_cfg.get("description", ""),
+                "tags": parsed_tags,
+                "category": ch_cfg.get("category") or "Uncategorized",
+                "status": status,
+                "r2_object_key": r2_key,  # shared across all channel records
+                "content_params": ch_cfg.get("content_params"),
+                "verification_status": (
+                    "verified"
+                    if (ch_cfg.get("category") and ch_cfg.get("content_params"))
+                    else "unverified"
+                ),
+                "scheduled_at": sch_at if status == "scheduled" else None,
+                "multi_channel_group_id": group_id,
+                "created_at": now,
+                "updated_at": now,
+            }
+            await self.db.videos.insert_one(doc)
+            channel_videos.append({"channel_id": cid, "video_id": vid_id})
+
+            if is_primary:
+                primary_doc = dict(doc)
+
+            # Add to queues
+            if status == "scheduled":
+                last = await self.db.schedule_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
+                await self.db.schedule_queue.insert_one({
+                    "channel_id": cid, "video_id": vid_id,
+                    "position": (last["position"] + 1) if last else 1,
+                    "scheduled_at": sch_at, "added_at": now,
+                })
+            else:
+                last = await self.db.posting_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
+                await self.db.posting_queue.insert_one({
+                    "channel_id": cid, "video_id": vid_id,
+                    "position": (last["position"] + 1) if last else 1,
+                    "added_at": now,
+                })
+
+        if not primary_doc:
+            raise ValueError("Primary channel config missing from channels list")
+
+        # ── 3. Trigger retention analysis once on the primary record ────
+        #    retention_analysis.py will propagate packaging to siblings via
+        #    multi_channel_group_id after the Gemini call completes.
+        self.trigger_retention_analysis(primary_channel_id, primary_vid_id, local_video_path=tpath)
+
+        return {
+            "ok": True,
+            "group_id": group_id,
+            "primary_video_id": primary_vid_id,
+            "channel_videos": channel_videos,
+        }
 
     async def schedule_video(
         self, channel_id: str, video_id: str, scheduled_at: datetime | None = None

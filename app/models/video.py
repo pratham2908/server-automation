@@ -96,6 +96,9 @@ class Video(BaseModel):
         description="When the video was published on the platform. Null until published.",
     )
 
+    # Multi-channel group: set to the same UUID for all videos created in one multi-channel upload
+    multi_channel_group_id: str | None = None
+
     # Repost tracking
     is_repost: bool = False
     original_video_id: str | None = Field(

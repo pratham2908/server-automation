@@ -188,7 +188,16 @@ async def storage_purge(
     if not service.r2:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
     prefix = f"{channel_id}/"
-    purged, errs = service.r2.purge_prefix_older_than(prefix, days_old)
+    # Collect all R2 keys still referenced by any video — never delete these
+    referenced: set[str] = {
+        doc["r2_object_key"]
+        async for doc in service.db.videos.find(
+            {"r2_object_key": {"$ne": None}},
+            {"r2_object_key": 1},
+        )
+        if doc.get("r2_object_key")
+    }
+    purged, errs = service.r2.purge_prefix_older_than(prefix, days_old, protected_keys=referenced)
     return {"ok": True, "purged_count": purged, "errors": errs, "days_old": days_old}
 
 
@@ -301,6 +310,38 @@ async def upload_video(
     # I'll quickly fix the service to include upload_video.
     # Actually, I'll just put it in the service now.
     return await service.create_video(channel_id, file.file, "Uploaded Video", category="Uncategorized")
+
+
+@router.post("/create-multi", status_code=status.HTTP_201_CREATED)
+async def create_multi_channel_video(
+    channel_id: str,
+    file: UploadFile = File(...),
+    channels: str = Form(..., description="JSON array of per-channel configs"),
+    service: VideoService = Depends(get_video_service),
+):
+    """Upload a video file once and create records for multiple channels.
+
+    ``channels`` is a JSON-encoded list::
+
+        [
+          {"channel_id": "...", "title": "...", "description": "...",
+           "tags": [...], "category": "...", "content_params": {...},
+           "scheduled_at": "..."},
+          ...
+        ]
+
+    All channel records share the same R2 object.  AI packaging runs once
+    and is propagated to sibling records per their platform.
+    """
+    import json as _json
+    try:
+        channel_configs = _json.loads(channels)
+    except Exception:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="channels must be valid JSON")
+    try:
+        return await service.create_multi_channel_video(channel_id, file.file, channel_configs)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.post("/create", status_code=status.HTTP_201_CREATED)
