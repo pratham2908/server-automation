@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import re
@@ -263,7 +262,7 @@ class VideoService:
         if new_status not in transitions.get(old_status, set()):
             raise ValueError(f"Invalid transition {old_status}->{new_status}")
 
-        update_fields = {"status": new_status, "updated_at": now_ist()}
+        update_fields: dict[str, Any] = {"status": new_status, "updated_at": now_ist()}
         if old_status == "ready":
             if video.get("r2_object_key"):
                 await self._safe_delete_r2(video["r2_object_key"])
@@ -824,6 +823,136 @@ class VideoService:
             os.unlink(tpath)
         doc.pop("_id", None)
         return {"ok": True, "video": doc}
+
+    async def expand_channels(
+        self,
+        channel_id: str,
+        video_id: str,
+        new_channel_ids: list[str],
+        scheduled_at: str | None = None,
+    ) -> dict[str, Any]:
+        """After a video has been uploaded and analysed, expand it to more channels.
+
+        Creates a new video record per channel (sharing the same R2 key) and
+        generates platform-appropriate packaging using the already-computed
+        retention analysis result — no re-upload, one text-only Gemini call
+        per channel.
+        """
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+        if not video:
+            raise ValueError("Video not found")
+
+        r2_key = video.get("r2_object_key")
+        if not r2_key:
+            raise ValueError("Video has no R2 file — cannot expand to other channels")
+
+        analysis_result = (video.get("retention") or {}).get("analysis") or {}
+        thumb_url = (video.get("ai_packaging") or {}).get("thumbnail_url")
+
+        now = now_ist()
+
+        # Ensure primary video has a group_id so all records are linkable
+        group_id = video.get("multi_channel_group_id") or str(uuid.uuid4())
+        if not video.get("multi_channel_group_id"):
+            await self.db.videos.update_one(
+                {"video_id": video_id},
+                {"$set": {"multi_channel_group_id": group_id, "updated_at": now}},
+            )
+
+        sch_at: datetime | None = None
+        if scheduled_at:
+            try:
+                sch_at = isoparse(scheduled_at).replace(tzinfo=IST)
+            except Exception:
+                pass
+
+        channel_videos: list[dict] = []
+
+        for cid in new_channel_ids:
+            ch = await self.db.channels.find_one({"channel_id": cid})
+            if not ch:
+                continue
+
+            platform = get_channel_platform(ch)
+            new_vid_id = str(uuid.uuid4())
+
+            # Create the DB record first (packaging_status = analyzing)
+            status = "scheduled" if (sch_at and platform == "instagram") else "ready"
+            doc: dict[str, Any] = {
+                "channel_id": cid,
+                "video_id": new_vid_id,
+                "title": video.get("title", ""),
+                "description": video.get("description", ""),
+                "tags": video.get("tags", []),
+                "category": video.get("category", "Uncategorized"),
+                "status": status,
+                "r2_object_key": r2_key,
+                "multi_channel_group_id": group_id,
+                "packaging_status": "analyzing",
+                "scheduled_at": sch_at if status == "scheduled" else None,
+                "created_at": now,
+                "updated_at": now,
+            }
+            await self.db.videos.insert_one(doc)
+
+            if status == "scheduled":
+                last = await self.db.schedule_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
+                await self.db.schedule_queue.insert_one({
+                    "channel_id": cid, "video_id": new_vid_id,
+                    "position": (last["position"] + 1) if last else 1,
+                    "scheduled_at": sch_at, "added_at": now,
+                })
+            else:
+                last = await self.db.posting_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
+                await self.db.posting_queue.insert_one({
+                    "channel_id": cid, "video_id": new_vid_id,
+                    "position": (last["position"] + 1) if last else 1,
+                    "added_at": now,
+                })
+
+            # Generate platform-specific packaging using existing analysis
+            packaging: dict | None = None
+            if self.gemini and analysis_result:
+                try:
+                    packaging = await self.gemini.generate_platform_packaging(
+                        analysis_result=analysis_result,
+                        platform=platform,
+                        channel_name=ch.get("name", ""),
+                        default_description=ch.get("default_description", ""),
+                        default_tags=ch.get("default_tags") or [],
+                    )
+                    if thumb_url:
+                        packaging["thumbnail_url"] = thumb_url
+                except Exception:
+                    packaging = None
+
+            pkg_status = "completed" if packaging else "failed"
+            pkg_updates: dict[str, Any] = {"packaging_status": pkg_status, "updated_at": now}
+            if packaging:
+                pkg_updates["ai_packaging"] = packaging
+                titles = packaging.get("suggested_titles")
+                if titles and isinstance(titles, list) and titles:
+                    pkg_updates["title"] = titles[0]
+                desc = packaging.get("suggested_description")
+                if desc:
+                    pkg_updates["description"] = desc
+                raw_tags = packaging.get("suggested_tags")
+                if raw_tags:
+                    pkg_updates["tags"] = raw_tags if isinstance(raw_tags, list) else [t.strip() for t in raw_tags.split(",") if t.strip()]
+
+            await self.db.videos.update_one({"video_id": new_vid_id}, {"$set": pkg_updates})
+
+            channel_videos.append({
+                "channel_id": cid,
+                "video_id": new_vid_id,
+                "packaging_status": pkg_status,
+                "ai_packaging": packaging,
+                "title": pkg_updates.get("title", doc["title"]),
+                "description": pkg_updates.get("description", doc["description"]),
+                "tags": pkg_updates.get("tags", doc["tags"]),
+            })
+
+        return {"ok": True, "group_id": group_id, "channel_videos": channel_videos}
 
     async def create_multi_channel_video(
         self,

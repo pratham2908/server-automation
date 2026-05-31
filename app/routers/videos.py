@@ -67,6 +67,11 @@ class RepostStatusRequest(BaseModel):
     original_video_id: str | None = None
 
 
+class ExpandChannelsRequest(BaseModel):
+    channel_ids: list[str] = Field(..., description="IDs of channels to expand this video to")
+    scheduled_at: str | None = Field(None, description="ISO datetime to schedule on each new channel")
+
+
 class ScheduleRequest(BaseModel):
     scheduled_at: datetime | None = None
 
@@ -448,6 +453,27 @@ async def repost_video(
 ):
     """Repost a published video."""
     return await service.repost_video(channel_id, video_id, body.dict())
+
+
+@router.post("/{video_id}/expand-channels")
+async def expand_channels(
+    channel_id: str,
+    video_id: str,
+    body: ExpandChannelsRequest,
+    service: VideoService = Depends(get_video_service),
+):
+    """Create sibling records on additional channels from an already-uploaded video.
+
+    Uses the existing R2 file and retention analysis — no re-upload needed.
+    Generates platform-appropriate packaging for each new channel via a
+    text-only Gemini call.
+    """
+    try:
+        return await service.expand_channels(
+            channel_id, video_id, body.channel_ids, body.scheduled_at
+        )
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.patch("/{video_id}/repost-status")
