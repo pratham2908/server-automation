@@ -72,7 +72,7 @@ class R2Service:
             raise
 
     def generate_presigned_url(self, key: str, expires_in: int = 3600) -> str:
-        """Generate a temporary public URL for *key* (default 1 hour)."""
+        """Generate a temporary GET URL for *key* (default 1 hour)."""
         from typing import cast
 
         return cast(
@@ -80,6 +80,24 @@ class R2Service:
             self._client.generate_presigned_url(
                 "get_object",
                 Params={"Bucket": self._bucket, "Key": key},
+                ExpiresIn=expires_in,
+            ),
+        )
+
+    def generate_presigned_put_url(self, key: str, expires_in: int = 900) -> str:
+        """Generate a presigned PUT URL so the browser can upload directly to R2.
+
+        NOTE: Your R2 bucket must allow CORS with PUT from the frontend origin.
+        Default expiry is 15 minutes, enough for large video files on typical
+        home connections.
+        """
+        from typing import cast
+
+        return cast(
+            str,
+            self._client.generate_presigned_url(
+                "put_object",
+                Params={"Bucket": self._bucket, "Key": key, "ContentType": "video/mp4"},
                 ExpiresIn=expires_in,
             ),
         )

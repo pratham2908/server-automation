@@ -31,6 +31,7 @@ _comment_reply_task = None
 _sync_analysis_task = None
 _growth_tracking_task = None
 _metrics_persistence_task = None
+_batch_analysis_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background growth tracking cron started")
 
+    # ---- Sequential batch analysis worker ----
+    from app.services.batch_upload_service import run_batch_analysis_worker
+
+    global _batch_analysis_task
+    _batch_analysis_task = create_monitored_task(
+        run_batch_analysis_worker(db, r2_service, gemini_service),
+        feature="Background: Batch analysis worker",
+    )
+    logger.info("Background batch analysis worker started")
+
     yield
 
     # ---- Shutdown ----
@@ -214,6 +225,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _metrics_persistence_task,
         _sync_analysis_task,
         _growth_tracking_task,
+        _batch_analysis_task,
     ):
         if task and not task.done():
             task.cancel()
@@ -255,6 +267,7 @@ app.add_middleware(StructuredLoggingMiddleware)
 from app.routers import (
     analysis,
     auth,
+    batch_upload,
     categories,
     channels,
     comment_analysis,
@@ -278,6 +291,7 @@ app.include_router(auth.router)
 app.include_router(channels.router)
 app.include_router(errors.router)
 app.include_router(videos.router)
+app.include_router(batch_upload.router)
 app.include_router(scorecard.router)
 app.include_router(categories.router)
 app.include_router(analysis.router)
