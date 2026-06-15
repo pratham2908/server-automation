@@ -461,13 +461,13 @@ class VideoService:
                 )
             return {"ok": True, "new_video_id": new_id}
 
-        if not video.get("youtube_video_id"):
-            raise ValueError("Original YouTube video not found")
-            
+        if not video.get("youtube_video_id") and not video.get("r2_object_key"):
+            raise ValueError("Original YouTube video not found and no R2 file available to repost")
+
         doc = {
             "channel_id": tid,
             "video_id": new_id,
-            "title": data["title"],
+            "title": data.get("title") or (video.get("title") or ""),
             "description": data.get("description", ""),
             "tags": data.get("tags", []),
             "category": video.get("category") or "Uncategorized",
