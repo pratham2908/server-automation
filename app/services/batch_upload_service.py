@@ -334,8 +334,6 @@ async def _process_batch_item(
             raise ValueError("No channel video records found")
 
         primary_video_id = primary_cv["video_id"]
-        primary_channel = await db.channels.find_one({"channel_id": primary_channel_id})
-        primary_platform = (primary_channel or {}).get("platform", "youtube")
 
         await db.batch_analysis_queue.update_one(
             {"file_id": file_id},

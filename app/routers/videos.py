@@ -112,12 +112,13 @@ async def list_videos(
 @router.get("/storage/stats")
 async def storage_stats(
     channel_id: str,
+    all_channels: bool = Query(False),
     service: VideoService = Depends(get_video_service),
 ):
-    """Aggregate R2 object count and size for *channel_id* prefix."""
+    """Aggregate R2 object count and size. Pass all_channels=true to cover every channel."""
     if not service.r2:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
-    prefix = f"{channel_id}/"
+    prefix = "" if all_channels else f"{channel_id}/"
     objs = service.r2.list_objects_with_prefix(prefix)
     total_b = sum(int(o.get("size", 0)) for o in objs)
     return {
@@ -131,19 +132,20 @@ async def storage_stats(
 @router.get("/storage/files")
 async def storage_files(
     channel_id: str,
+    all_channels: bool = Query(False),
     service: VideoService = Depends(get_video_service),
 ):
-    """List R2 objects for *channel_id* with optional video title from DB."""
+    """List R2 objects with video metadata. Pass all_channels=true to cover every channel."""
     if not service.r2:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
-    prefix = f"{channel_id}/"
+    prefix = "" if all_channels else f"{channel_id}/"
     raw = service.r2.list_objects_with_prefix(prefix)
     key_to_title: dict[str, str] = {}
     key_to_status: dict[str, str] = {}
-    cur = service.db.videos.find(
-        {"channel_id": channel_id, "r2_object_key": {"$exists": True, "$ne": None}},
-        {"r2_object_key": 1, "title": 1, "status": 1},
-    )
+    db_filter: dict[str, Any] = {"r2_object_key": {"$exists": True, "$ne": None}}
+    if not all_channels:
+        db_filter["channel_id"] = channel_id
+    cur = service.db.videos.find(db_filter, {"r2_object_key": 1, "title": 1, "status": 1})
     async for doc in cur:
         k = doc.get("r2_object_key")
         if k:
@@ -166,16 +168,35 @@ async def storage_files(
     return {"ok": True, "files": files}
 
 
+async def _active_r2_keys(service: VideoService) -> set[str]:
+    """R2 keys for videos that still need their file (not yet published).
+
+    Published videos have been uploaded to the platform so their R2 copy is
+    safe to delete.  Everything else (ready, queued, processing, scheduled,
+    todo) must be kept.
+    """
+    return {
+        doc["r2_object_key"]
+        async for doc in service.db.videos.find(
+            {"r2_object_key": {"$ne": None}, "status": {"$ne": "published"}},
+            {"r2_object_key": 1},
+        )
+        if doc.get("r2_object_key")
+    }
+
+
 @router.get("/storage/purge-estimate")
 async def storage_purge_estimate(
     channel_id: str,
     days_old: int = Query(30, ge=1, le=3650),
+    all_channels: bool = Query(False),
     service: VideoService = Depends(get_video_service),
 ):
     if not service.r2:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
-    prefix = f"{channel_id}/"
-    count, est_bytes = service.r2.count_purgeable(prefix, days_old)
+    prefix = "" if all_channels else f"{channel_id}/"
+    protected = await _active_r2_keys(service)
+    count, est_bytes = service.r2.count_purgeable(prefix, days_old, protected_keys=protected)
     return {
         "ok": True,
         "count": count,
@@ -188,21 +209,14 @@ async def storage_purge_estimate(
 async def storage_purge(
     channel_id: str,
     days_old: int = Query(30, ge=1, le=3650),
+    all_channels: bool = Query(False),
     service: VideoService = Depends(get_video_service),
 ):
     if not service.r2:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
-    prefix = f"{channel_id}/"
-    # Collect all R2 keys still referenced by any video — never delete these
-    referenced: set[str] = {
-        doc["r2_object_key"]
-        async for doc in service.db.videos.find(
-            {"r2_object_key": {"$ne": None}},
-            {"r2_object_key": 1},
-        )
-        if doc.get("r2_object_key")
-    }
-    purged, errs = service.r2.purge_prefix_older_than(prefix, days_old, protected_keys=referenced)
+    prefix = "" if all_channels else f"{channel_id}/"
+    protected = await _active_r2_keys(service)
+    purged, errs = service.r2.purge_prefix_older_than(prefix, days_old, protected_keys=protected)
     return {"ok": True, "purged_count": purged, "errors": errs, "days_old": days_old}
 
 

@@ -1210,9 +1210,6 @@ class VideoService:
         }
         new_vids = [v for v in yt_vids if v["youtube_video_id"] not in db_ids]
         for v in [v for v in yt_vids if v["youtube_video_id"] in db_ids]:
-            existing = await self.db.videos.find_one(
-                {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]}
-            )
             # Determine status based on privacy
             target_status = "published"
             if v.get("youtube_privacy_status") == "private":
@@ -1222,6 +1219,11 @@ class VideoService:
                 "title": v["title"],
                 "description": v["description"],
                 "metadata.views": v["views"],
+                "metadata.likes": v["likes"],
+                "metadata.comments": v["comments"],
+                "metadata.engagement_rate": v.get("engagement_rate"),
+                "metadata.like_rate": v.get("like_rate"),
+                "metadata.comment_rate": v.get("comment_rate"),
                 "metadata.youtube_privacy_status": v.get("youtube_privacy_status"),
                 "status": target_status,
                 "updated_at": now_ist(),
@@ -1233,7 +1235,8 @@ class VideoService:
             elif v.get("scheduled_at"):
                 upd["scheduled_at"] = v["scheduled_at"]
 
-            if not self._has_thumbnail_url(existing) and v.get("thumbnail_url"):
+            # Always overwrite with fresh URL — YouTube thumbnail URLs expire
+            if v.get("thumbnail_url"):
                 upd["thumbnail_url"] = v["thumbnail_url"]
 
             await self.db.videos.update_one(
@@ -1284,6 +1287,12 @@ class VideoService:
                         "scheduled_at": v.get("scheduled_at") if target_status == "scheduled" else None,
                         "thumbnail_url": v.get("thumbnail_url"),
                         "metadata": {
+                            "views": v["views"],
+                            "likes": v["likes"],
+                            "comments": v["comments"],
+                            "engagement_rate": v.get("engagement_rate"),
+                            "like_rate": v.get("like_rate"),
+                            "comment_rate": v.get("comment_rate"),
                             "youtube_privacy_status": v.get("youtube_privacy_status"),
                         },
                         "content_params": ana.get("content_params"),

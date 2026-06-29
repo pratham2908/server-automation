@@ -940,7 +940,8 @@ For Instagram, put the full caption in `suggested_description` and leave `sugges
 
         text = await self._generate(prompt)
         try:
-            return json.loads(text)
+            from typing import cast
+            return cast(dict[str, Any], json.loads(text))
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse platform packaging response: %s", text)
             raise ValueError("Failed to parse platform packaging response")

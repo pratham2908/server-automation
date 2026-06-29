@@ -127,17 +127,28 @@ class R2Service:
         return dt
 
     def count_purgeable(
-        self, prefix: str, days_old: int
+        self,
+        prefix: str,
+        days_old: int,
+        protected_keys: set[str] | None = None,
     ) -> tuple[int, int]:
-        """Count objects and total bytes older than *days_old* under *prefix*."""
+        """Count objects and total bytes older than *days_old* under *prefix*.
+
+        Skips keys in *protected_keys* so the estimate matches what purge will
+        actually delete.
+        """
         cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
         n = 0
         total_b = 0
         for o in self.list_objects_with_prefix(prefix):
             lm = self._normalize_utc(o.get("last_modified"))
-            if lm is not None and lm < cutoff:
-                n += 1
-                total_b += int(o.get("size", 0))
+            key = o.get("key")
+            if not key or lm is None or lm >= cutoff:
+                continue
+            if protected_keys and key in protected_keys:
+                continue
+            n += 1
+            total_b += int(o.get("size", 0))
         return n, total_b
 
     def purge_prefix_older_than(
