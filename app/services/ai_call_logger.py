@@ -39,11 +39,10 @@ GEMINI_PRICING: dict[str, dict[str, float]] = {
         "input_per_1m": 0.10,
         "output_per_1m": 0.40,
     },
-    # Preview model with no published pricing — proxied to 2.5-flash rates so
-    # spend is approximated rather than silently dropped.
+    # Vertex AI published pricing (confirmed 2026-07-24).
     "gemini-3-flash-preview": {
-        "input_per_1m": 0.30,
-        "output_per_1m": 2.50,
+        "input_per_1m": 0.50,
+        "output_per_1m": 3.00,
     },
 }
 
