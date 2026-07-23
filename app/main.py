@@ -292,7 +292,7 @@ from app.routers import (
     thumbnail_analysis,
     ui,
     videos,
-)  # noqa: E402
+)
 
 app.include_router(auth.router)
 app.include_router(channels.router)

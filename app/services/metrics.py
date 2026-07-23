@@ -116,12 +116,6 @@ class MetricsService:
             }
         )
 
-    def record_task_run(self, task_name: str, status: str = "success"):
-        if task_name in self.tasks:
-            self.tasks[task_name]["last_run"] = datetime.now(timezone.utc).isoformat()
-            self.tasks[task_name]["last_status"] = status
-            self.tasks[task_name]["count"] += 1
-
     def track_task_start(self, task_name: str):
         if task_name not in self.tasks:
             self.tasks[task_name] = {"last_run": None, "last_status": "none", "count": 0, "is_running": False}

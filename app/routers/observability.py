@@ -805,11 +805,11 @@ async def get_ai_cost_summary(
         {
             "$group": {
                 "_id": None,
-                "total_cost_usd":      {"$sum": "$cost_usd"},
-                "total_calls":         {"$sum": 1},
-                "total_input_tokens":  {"$sum": "$input_tokens"},
+                "total_cost_usd": {"$sum": "$cost_usd"},
+                "total_calls": {"$sum": 1},
+                "total_input_tokens": {"$sum": "$input_tokens"},
                 "total_output_tokens": {"$sum": "$output_tokens"},
-                "success_count":       {"$sum": {"$cond": ["$success", 1, 0]}},
+                "success_count": {"$sum": {"$cond": ["$success", 1, 0]}},
             }
         },
     ]
@@ -819,10 +819,10 @@ async def get_ai_cost_summary(
         {"$match": {"timestamp": {"$gte": date_from}}},
         {
             "$group": {
-                "_id":           "$model",
-                "calls":         {"$sum": 1},
-                "cost_usd":      {"$sum": "$cost_usd"},
-                "input_tokens":  {"$sum": "$input_tokens"},
+                "_id": "$model",
+                "calls": {"$sum": 1},
+                "cost_usd": {"$sum": "$cost_usd"},
+                "input_tokens": {"$sum": "$input_tokens"},
                 "output_tokens": {"$sum": "$output_tokens"},
             }
         },
@@ -834,8 +834,8 @@ async def get_ai_cost_summary(
         {"$match": {"timestamp": {"$gte": date_from}}},
         {
             "$group": {
-                "_id":      "$task",
-                "calls":    {"$sum": 1},
+                "_id": "$task",
+                "calls": {"$sum": 1},
                 "cost_usd": {"$sum": "$cost_usd"},
             }
         },
@@ -855,7 +855,7 @@ async def get_ai_cost_summary(
                     }
                 },
                 "cost_usd": {"$sum": "$cost_usd"},
-                "calls":    {"$sum": 1},
+                "calls": {"$sum": 1},
             }
         },
         {"$sort": {"_id": 1}},
@@ -871,34 +871,31 @@ async def get_ai_cost_summary(
     success_count = totals.get("success_count", 0)
 
     return {
-        "total_cost_usd":       round(total_cost, 8),
-        "total_calls":          total_calls,
-        "total_input_tokens":   totals.get("total_input_tokens", 0),
-        "total_output_tokens":  totals.get("total_output_tokens", 0),
-        "success_rate_pct":     round(success_count / total_calls * 100, 2) if total_calls else 0.0,
-        "avg_cost_per_call":    round(total_cost / total_calls, 8) if total_calls else 0.0,
+        "total_cost_usd": round(total_cost, 8),
+        "total_calls": total_calls,
+        "total_input_tokens": totals.get("total_input_tokens", 0),
+        "total_output_tokens": totals.get("total_output_tokens", 0),
+        "success_rate_pct": round(success_count / total_calls * 100, 2) if total_calls else 0.0,
+        "avg_cost_per_call": round(total_cost / total_calls, 8) if total_calls else 0.0,
         "by_model": [
             {
-                "model":         r["_id"],
-                "calls":         r["calls"],
-                "cost_usd":      round(r["cost_usd"], 8),
-                "input_tokens":  r["input_tokens"],
+                "model": r["_id"],
+                "calls": r["calls"],
+                "cost_usd": round(r["cost_usd"], 8),
+                "input_tokens": r["input_tokens"],
                 "output_tokens": r["output_tokens"],
             }
             for r in by_model_res
         ],
         "by_task": [
             {
-                "task":     r["_id"],
-                "calls":    r["calls"],
+                "task": r["_id"],
+                "calls": r["calls"],
                 "cost_usd": round(r["cost_usd"], 8),
             }
             for r in by_task_res
         ],
-        "daily": [
-            {"date": r["_id"], "cost_usd": round(r["cost_usd"], 8), "calls": r["calls"]}
-            for r in daily_res
-        ],
+        "daily": [{"date": r["_id"], "cost_usd": round(r["cost_usd"], 8), "calls": r["calls"]} for r in daily_res],
     }
 
 

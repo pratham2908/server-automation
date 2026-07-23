@@ -41,7 +41,7 @@ async def _refresh_last_video_stats(
 
     Returns the updated view count.
     """
-    import app.main as main_mod  # noqa: PLC0415
+    import app.main as main_mod
 
     assert main_mod.r2_service is not None
     service = VideoService(

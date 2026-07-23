@@ -84,8 +84,11 @@ def test_pro_exactly_at_the_threshold_still_uses_standard_rates():
     assert compute_cost("gemini-2.5-pro", threshold, 0) == pytest.approx(threshold / 1_000_000 * 1.25)
 
 
-def test_preview_model_is_priced_as_flash():
-    assert compute_cost("gemini-3-flash-preview", 10_000, 10_000) == compute_cost("gemini-2.5-flash", 10_000, 10_000)
+def test_preview_model_uses_its_own_published_rates():
+    """gemini-3-flash-preview was once proxied to flash rates; it now has published pricing."""
+    # 10k input @ $0.50/1M + 10k output @ $3.00/1M
+    assert compute_cost("gemini-3-flash-preview", 10_000, 10_000) == pytest.approx(0.005 + 0.03)
+    assert compute_cost("gemini-3-flash-preview", 10_000, 10_000) != compute_cost("gemini-2.5-flash", 10_000, 10_000)
 
 
 def test_unknown_model_costs_zero_rather_than_raising():

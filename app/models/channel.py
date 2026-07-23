@@ -122,8 +122,7 @@ class Channel(BaseModel):
     paused: bool = Field(
         False,
         description=(
-            "When true, background crons skip this channel entirely. Manual and "
-            "API-triggered actions are unaffected."
+            "When true, background crons skip this channel entirely. Manual and API-triggered actions are unaffected."
         ),
     )
 

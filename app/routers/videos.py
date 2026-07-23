@@ -355,6 +355,7 @@ async def create_multi_channel_video(
     and is propagated to sibling records per their platform.
     """
     import json as _json
+
     try:
         channel_configs = _json.loads(channels)
     except Exception:
@@ -485,9 +486,7 @@ async def expand_channels(
     text-only Gemini call.
     """
     try:
-        return await service.expand_channels(
-            channel_id, video_id, body.channel_ids, body.scheduled_at
-        )
+        return await service.expand_channels(channel_id, video_id, body.channel_ids, body.scheduled_at)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -501,8 +500,6 @@ async def update_repost_status(
 ):
     """Mark or unmark a video as a repost of another video."""
     try:
-        return await service.mark_repost_status(
-            channel_id, video_id, body.is_repost, body.original_video_id
-        )
+        return await service.mark_repost_status(channel_id, video_id, body.is_repost, body.original_video_id)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
