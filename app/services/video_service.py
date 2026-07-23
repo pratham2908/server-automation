@@ -472,7 +472,7 @@ class VideoService:
             "tags": data.get("tags", []),
             "category": video.get("category") or "Uncategorized",
             "status": initial_status,
-            "youtube_video_id": video["youtube_video_id"],
+            "youtube_video_id": video.get("youtube_video_id"),
             "thumbnail_url": video.get("thumbnail_url"),
             "scheduled_at": sch_at,
             "is_repost": True,

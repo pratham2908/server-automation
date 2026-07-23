@@ -16,6 +16,35 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _loads_json_object(text: str) -> dict[str, Any]:
+    """Parse a Gemini response that is required to be a JSON object.
+
+    ``typing.cast`` does nothing at runtime, so a model that replies with a
+    JSON array used to flow through untouched and only surface much later as
+    ``AttributeError: 'list' object has no attribute 'get'`` deep inside the
+    caller. Raise ``TypeError`` at the boundary instead — every call site
+    already handles it alongside ``json.JSONDecodeError``, so each keeps its
+    own logging and error message.
+    """
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise TypeError(f"expected a JSON object, got {type(parsed).__name__}")
+    return parsed
+
+
+def _loads_json_array(text: str) -> list[dict[str, Any]]:
+    """Parse a Gemini response that is required to be a JSON array.
+
+    Mirror of :func:`_loads_json_object` for the call sites that expect a
+    list; without it a JSON object would be iterated as bare key strings
+    downstream.
+    """
+    parsed = json.loads(text)
+    if not isinstance(parsed, list):
+        raise TypeError(f"expected a JSON array, got {type(parsed).__name__}")
+    return parsed
+
+
 class GeminiService:
     """Provides AI-powered analysis and content generation via Gemini."""
 
@@ -129,10 +158,7 @@ class GeminiService:
         text = await self._generate(prompt)
 
         try:
-            from typing import cast
-
-            return cast(dict[str, Any], json.loads(text))
-
+            return _loads_json_object(text)
         except (json.JSONDecodeError, TypeError):
             logger.error("🚨 Failed to parse JSON from Gemini analysis response: %s", text)
             raise ValueError("Failed to parse Gemini analysis response")
@@ -159,10 +185,7 @@ class GeminiService:
         text = await self._generate(prompt)
 
         try:
-            from typing import cast
-
-            return cast(dict[str, Any], json.loads(text))
-
+            return _loads_json_object(text)
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse Gemini per-video analysis response: %s", text)
             raise ValueError("Failed to parse Gemini per-video analysis response")
@@ -192,7 +215,7 @@ class GeminiService:
         try:
             from typing import cast
 
-            result = cast(dict[str, Any], json.loads(text))
+            result = _loads_json_object(text)
             return cast(list[dict[str, Any]], result.get("topics", []))
 
         except (json.JSONDecodeError, TypeError):
@@ -760,10 +783,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
         text = await self._generate_with_video(video_path, prompt)
 
         try:
-            from typing import cast
-
-            return cast(dict[str, Any], json.loads(text))
-
+            return _loads_json_object(text)
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse Gemini video retention response: %s", text)
             raise ValueError("Failed to parse Gemini video retention analysis response")
@@ -940,8 +960,7 @@ For Instagram, put the full caption in `suggested_description` and leave `sugges
 
         text = await self._generate(prompt)
         try:
-            from typing import cast
-            return cast(dict[str, Any], json.loads(text))
+            return _loads_json_object(text)
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse platform packaging response: %s", text)
             raise ValueError("Failed to parse platform packaging response")
@@ -980,10 +999,7 @@ Classify every comment. Do not skip any."""
 
         text = await self._generate(prompt)
         try:
-            from typing import cast
-
-            return cast(list[dict[str, Any]], json.loads(text))
-
+            return _loads_json_array(text)
         except (json.JSONDecodeError, TypeError):
             return []
 
@@ -1079,10 +1095,7 @@ Return a JSON object:
         text = await self._generate(prompt)
 
         try:
-            from typing import cast
-
-            return cast(dict[str, Any], json.loads(text))
-
+            return _loads_json_object(text)
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse Gemini comment analysis response: %s", text)
             raise ValueError("Failed to parse Gemini comment analysis response")
@@ -1284,9 +1297,7 @@ Return a JSON object with exactly these keys:
                 if response.text is None:
                     raise ValueError("Gemini returned empty response text")
 
-                from typing import cast
-
-                return cast(dict[str, Any], json.loads(response.text))
+                return _loads_json_object(response.text)
 
             except Exception as exc:
                 duration = (time.time() - start_time) * 1000
@@ -1418,10 +1429,7 @@ Be thorough, specific, and ruthlessly honest. Generic feedback is useless."""
         text = await self._generate(prompt)
 
         try:
-            from typing import cast
-
-            return cast(dict[str, Any], json.loads(text))
-
+            return _loads_json_object(text)
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse Gemini scorecard response: %s", text)
             raise ValueError("Failed to parse Gemini scorecard response")
@@ -1575,10 +1583,7 @@ Return a JSON array with one object per video:
 
         text = await self._generate(prompt)
         try:
-            from typing import cast
-
-            return cast(list[dict[str, Any]], json.loads(text))
-
+            return _loads_json_array(text)
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse video intelligence extraction: %s", text[:500])
             return []
@@ -1672,10 +1677,7 @@ Return a JSON object:
 
         text = await self._generate(prompt)
         try:
-            from typing import cast
-
-            return cast(dict[str, Any], json.loads(text))
-
+            return _loads_json_object(text)
         except (json.JSONDecodeError, TypeError):
             logger.error("Failed to parse content pattern comparison: %s", text[:500])
             raise ValueError("Failed to parse content pattern comparison response")
