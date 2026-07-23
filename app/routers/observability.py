@@ -739,3 +739,172 @@ async def get_metrics_api(api_key: str = Depends(verify_api_key)):
     summary = metrics_service.get_summary()
     summary["database"] = counts
     return summary
+
+
+@router.get("/api/v1/observability/ai-calls")
+async def get_ai_calls(
+    model: str | None = Query(None),
+    task: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    _api_key: str = Depends(verify_api_key),
+):
+    """Paginated AI call log with optional model/task/date filters."""
+    from datetime import datetime, timezone
+
+    db = get_db()
+    match: dict = {}
+
+    if model:
+        match["model"] = model
+    if task:
+        match["task"] = task
+
+    date_filter: dict = {}
+    if date_from:
+        try:
+            date_filter["$gte"] = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            date_filter["$lte"] = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    if date_filter:
+        match["timestamp"] = date_filter
+
+    total = await db.ai_call_logs.count_documents(match)
+    skip = (page - 1) * limit
+    cursor = db.ai_call_logs.find(match, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit)
+    docs = await cursor.to_list(length=limit)
+
+    for doc in docs:
+        if isinstance(doc.get("timestamp"), datetime):
+            doc["timestamp"] = doc["timestamp"].replace(tzinfo=timezone.utc).isoformat()
+
+    return {"calls": docs, "total": total, "page": page, "limit": limit}
+
+
+@router.get("/api/v1/observability/ai-costs/summary")
+async def get_ai_cost_summary(
+    days: int = Query(30, ge=1, le=365),
+    _api_key: str = Depends(verify_api_key),
+):
+    """Aggregated AI cost summary: totals, by-model, by-task, and daily breakdown."""
+    from datetime import datetime, timedelta, timezone
+
+    db = get_db()
+    date_from = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # ── totals ────────────────────────────────────────────────────────────────
+    totals_pipeline = [
+        {"$match": {"timestamp": {"$gte": date_from}}},
+        {
+            "$group": {
+                "_id": None,
+                "total_cost_usd":      {"$sum": "$cost_usd"},
+                "total_calls":         {"$sum": 1},
+                "total_input_tokens":  {"$sum": "$input_tokens"},
+                "total_output_tokens": {"$sum": "$output_tokens"},
+                "success_count":       {"$sum": {"$cond": ["$success", 1, 0]}},
+            }
+        },
+    ]
+
+    # ── by model ──────────────────────────────────────────────────────────────
+    by_model_pipeline = [
+        {"$match": {"timestamp": {"$gte": date_from}}},
+        {
+            "$group": {
+                "_id":           "$model",
+                "calls":         {"$sum": 1},
+                "cost_usd":      {"$sum": "$cost_usd"},
+                "input_tokens":  {"$sum": "$input_tokens"},
+                "output_tokens": {"$sum": "$output_tokens"},
+            }
+        },
+        {"$sort": {"cost_usd": -1}},
+    ]
+
+    # ── by task ───────────────────────────────────────────────────────────────
+    by_task_pipeline = [
+        {"$match": {"timestamp": {"$gte": date_from}}},
+        {
+            "$group": {
+                "_id":      "$task",
+                "calls":    {"$sum": 1},
+                "cost_usd": {"$sum": "$cost_usd"},
+            }
+        },
+        {"$sort": {"cost_usd": -1}},
+    ]
+
+    # ── daily breakdown ───────────────────────────────────────────────────────
+    daily_pipeline = [
+        {"$match": {"timestamp": {"$gte": date_from}}},
+        {
+            "$group": {
+                "_id": {
+                    "$dateToString": {
+                        "format": "%Y-%m-%d",
+                        "date": "$timestamp",
+                        "timezone": "UTC",
+                    }
+                },
+                "cost_usd": {"$sum": "$cost_usd"},
+                "calls":    {"$sum": 1},
+            }
+        },
+        {"$sort": {"_id": 1}},
+    ]
+
+    totals_res, by_model_res, by_task_res, daily_res = await _run_agg_parallel(
+        db, totals_pipeline, by_model_pipeline, by_task_pipeline, daily_pipeline
+    )
+
+    totals = totals_res[0] if totals_res else {}
+    total_calls = totals.get("total_calls", 0)
+    total_cost = totals.get("total_cost_usd", 0.0)
+    success_count = totals.get("success_count", 0)
+
+    return {
+        "total_cost_usd":       round(total_cost, 8),
+        "total_calls":          total_calls,
+        "total_input_tokens":   totals.get("total_input_tokens", 0),
+        "total_output_tokens":  totals.get("total_output_tokens", 0),
+        "success_rate_pct":     round(success_count / total_calls * 100, 2) if total_calls else 0.0,
+        "avg_cost_per_call":    round(total_cost / total_calls, 8) if total_calls else 0.0,
+        "by_model": [
+            {
+                "model":         r["_id"],
+                "calls":         r["calls"],
+                "cost_usd":      round(r["cost_usd"], 8),
+                "input_tokens":  r["input_tokens"],
+                "output_tokens": r["output_tokens"],
+            }
+            for r in by_model_res
+        ],
+        "by_task": [
+            {
+                "task":     r["_id"],
+                "calls":    r["calls"],
+                "cost_usd": round(r["cost_usd"], 8),
+            }
+            for r in by_task_res
+        ],
+        "daily": [
+            {"date": r["_id"], "cost_usd": round(r["cost_usd"], 8), "calls": r["calls"]}
+            for r in daily_res
+        ],
+    }
+
+
+async def _run_agg_parallel(db, *pipelines):
+    """Run multiple aggregation pipelines concurrently and return their results."""
+    import asyncio
+
+    tasks = [db.ai_call_logs.aggregate(p).to_list(length=None) for p in pipelines]
+    return await asyncio.gather(*tasks)
