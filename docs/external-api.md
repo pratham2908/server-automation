@@ -12,7 +12,8 @@ Get from zero to your first video in the Ready tab in under 5 minutes.
 
 1. **Get your channel key** — a platform admin generates it from the Developer Keys panel in channel settings. You receive the raw key once; save it. Format: `ckey_mychannel_A3kxF7…`
 2. **Note your channel ID** — the short slug used in every URL path (e.g. `histriphy`)
-3. **Upload a video and confirm it appears in the Ready tab**
+3. **Check what you can do** — call `GET /` to get the live API contract at any time
+4. **Upload a video and confirm it appears in the Ready tab**
 
 ```bash
 # Upload
@@ -22,9 +23,15 @@ curl -X POST "https://{your-api-host}/api/v1/ext/histriphy/upload" \
   -F "title=My First Upload"
 
 # Response: {"ok": true, "video_id": "vid_abc123", "status": "ready", "analysis_queued": true}
+
+# Poll until AI analysis finishes
+curl "https://{your-api-host}/api/v1/ext/histriphy/videos/vid_abc123" \
+  -H "X-Channel-Api-Key: ckey_histriphy_A3kxF7…"
+
+# Keep polling until: {"packaging_status": "completed", ...}
 ```
 
-> After upload, AI analysis runs in the background. `packaging_status` moves `analyzing` → `completed` in 1–3 minutes. Poll the list endpoint before scheduling if you want AI-suggested metadata applied first.
+> After upload, AI analysis runs in the background. `packaging_status` moves `analyzing` → `completed` in 1–3 minutes. Poll `GET /videos/{video_id}` instead of the full list — it's faster and only fetches what you need.
 
 ---
 
@@ -51,7 +58,40 @@ Do not include the key in URLs, query params, or client-side code. Store in envi
 
 ---
 
+## Video Status Lifecycle
+
+The main `status` field tracks the publishing lifecycle. `packaging_status` is a separate field that tracks AI analysis progress.
+
+**`status` values:**
+
+| Value | Meaning |
+|-------|---------|
+| `ready` | File stored in R2. AI analysis may still be running — check `packaging_status`. |
+| `queued` | Scheduled for a future publish time. |
+| `scheduled` | Queued at a specific time (Instagram only). |
+| `published` | Live on the platform. |
+| `failed` | Publishing failed. |
+
+**`packaging_status` values (AI analysis):**
+
+| Value | Meaning |
+|-------|---------|
+| *(absent)* | Analysis hasn't started yet — poll again in a moment. |
+| `analyzing` | AI is processing: retention scoring, title/description/tag suggestions. |
+| `completed` | AI done. Safe to read suggestions, schedule, or publish. |
+| `failed` | AI failed. Video can still be published with its original metadata. |
+
+---
+
 ## Endpoints
+
+### GET `/api/v1/ext/{channel_id}/`
+
+Returns the full API contract — all endpoints, request/response shapes, status definitions, and error codes. Check `api_version` on each call to detect breaking changes automatically.
+
+**Response:** structured JSON document describing every available operation.
+
+---
 
 ### POST `/api/v1/ext/{channel_id}/upload`
 
@@ -62,10 +102,10 @@ Upload a video file. Stores in R2 and queues AI analysis automatically.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `file` | file | **required** | Video file. MP4 recommended. |
-| `title` | string | optional | Initial title. |
+| `title` | string | optional | Initial title. Falls back to filename if omitted. |
 | `description` | string | optional | Video description. |
 | `tags` | string | optional | Comma-separated: `history,facts,rome` |
-| `scheduled_at` | string | optional | UTC ISO 8601 to schedule on upload. |
+| `scheduled_at` | string | optional | UTC ISO 8601 to auto-schedule on upload. |
 
 **Response:**
 ```json
@@ -79,29 +119,52 @@ Upload a video file. Stores in R2 and queues AI analysis automatically.
 
 ---
 
+### GET `/api/v1/ext/{channel_id}/videos/{video_id}`
+
+Fetch a single video by its `video_id`. Use this to poll `packaging_status` after upload without fetching the full list.
+
+**Response:** single video object (same fields as list entries — see below).
+
+```json
+{
+  "video_id":         "vid_abc123",
+  "title":            "How the Roman Empire Fell",
+  "description":      "A deep-dive into the fall of Rome…",
+  "tags":             ["history", "rome", "documentary"],
+  "status":           "ready",
+  "packaging_status": "completed",
+  "scheduled_at":     null,
+  "published_at":     null,
+  "created_at":       "2026-07-24T10:00:00+00:00"
+}
+```
+
+---
+
 ### GET `/api/v1/ext/{channel_id}/videos`
 
-List channel videos. OAuth tokens and internal fields are stripped from the response.
+List all channel videos. OAuth tokens and internal fields are stripped from the response.
 
 **Query params:**
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `status` | string | Filter: `ready`, `scheduled`, `published`, `uploading` |
+| `status` | string | Filter: `ready`, `queued`, `published`, `scheduled` |
 
 **Response:**
 ```json
 {
   "videos": [
     {
-      "video_id":          "vid_abc123",
-      "title":             "How the Roman Empire Fell",
-      "description":       "A deep-dive into the fall of Rome…",
-      "tags":              ["history", "rome", "documentary"],
-      "status":            "ready",
-      "packaging_status":  "completed",
-      "scheduled_at":      null,
-      "published_at":      null
+      "video_id":         "vid_abc123",
+      "title":            "How the Roman Empire Fell",
+      "description":      "A deep-dive into the fall of Rome…",
+      "tags":             ["history", "rome", "documentary"],
+      "status":           "ready",
+      "packaging_status": "completed",
+      "scheduled_at":     null,
+      "published_at":     null,
+      "created_at":       "2026-07-24T10:00:00+00:00"
     }
   ]
 }
@@ -111,7 +174,7 @@ List channel videos. OAuth tokens and internal fields are stripped from the resp
 
 ### PATCH `/api/v1/ext/{channel_id}/videos/{video_id}/metadata`
 
-Update title, description, or tags. All fields optional — send only what changes. Server verifies video belongs to the given channel.
+Update title, description, or tags. All fields optional — send only what changes. `tags` is a full replacement, not an append. Server verifies video belongs to the given channel.
 
 **Request:** `application/json`
 
@@ -125,7 +188,7 @@ Update title, description, or tags. All fields optional — send only what chang
 
 ### POST `/api/v1/ext/{channel_id}/videos/{video_id}/schedule`
 
-Set a UTC publish time. The scheduler handles it automatically.
+Set a UTC publish time. Video must be in `ready` or `queued` status. If already queued, this reschedules to the new time.
 
 **Request:** `application/json`
 
@@ -144,31 +207,49 @@ Set a UTC publish time. The scheduler handles it automatically.
 
 ### POST `/api/v1/ext/{channel_id}/videos/{video_id}/publish`
 
-Publish the video immediately using the channel's stored OAuth credentials. Creator app never sees the tokens.
+Queue the video for immediate publishing. The background publisher picks it up within minutes. Video must be in `ready` status.
 
-> **Note:** This publishes right now. For timed publishing, use the schedule endpoint instead.
+Publishing is **asynchronous** — the platform ID (YouTube video ID / Instagram media ID) is not returned immediately. Poll `GET /videos/{video_id}` until `status == "published"` to confirm and retrieve the platform ID via the sync endpoint.
+
+> **Note:** For timed publishing, use the schedule endpoint instead.
 
 **Response:**
 ```json
-{ "ok": true, "platform_id": "dQw4w9WgXcQ" }
+{
+  "ok": true,
+  "queued": true,
+  "message": "Queued for immediate publishing. Poll GET /videos/{video_id} to confirm status == 'published'."
+}
 ```
 
-(`platform_id` is the YouTube video ID or Instagram media ID.)
+---
+
+### POST `/api/v1/ext/{channel_id}/sync`
+
+Pull the latest platform metrics (views, likes, comments) for this channel's published videos from YouTube or Instagram. Runs in the background — returns immediately. Wait a few seconds, then call `GET /videos` to see refreshed data.
+
+**Response:**
+```json
+{
+  "ok": true,
+  "message": "Sync started in the background. Call GET /videos in a few seconds to see refreshed metrics."
+}
+```
 
 ---
 
 ## End-to-End Workflow
 
 ```
-Upload → Wait for analysis → (Optional: apply metadata) → Schedule → Done
+Upload → Poll for analysis → (Optional: apply metadata) → Schedule or Publish → Poll for confirmation
 ```
 
 1. **Upload** — `POST /upload` with file. Save `video_id`.
-2. **Wait for analysis** — poll `GET /videos` until `packaging_status == "completed"` (1–3 min).
-3. *(Optional)* **Apply AI metadata** — read packaging suggestions from the list response, apply with `PATCH /metadata`.
+2. **Poll for analysis** — `GET /videos/{video_id}` every 5–10 s until `packaging_status == "completed"` (1–3 min).
+3. *(Optional)* **Apply AI metadata** — use `PATCH /metadata` with AI-suggested title/description/tags.
 4. **Schedule** — `POST /schedule` with a future UTC datetime.
-5. *(Alternative)* **Publish now** — `POST /publish` for immediate publishing.
-6. **Confirm** — `GET /videos` and verify `status == "published"` with a non-null `published_at`.
+5. *(Alternative)* **Publish now** — `POST /publish` for immediate publishing. Poll `GET /videos/{video_id}` until `status == "published"`.
+6. *(Optional)* **Sync metrics** — `POST /sync` to pull views/likes from the platform after publishing.
 
 ### Full Python Example
 
@@ -193,15 +274,15 @@ resp.raise_for_status()
 video_id = resp.json()["video_id"]
 print(f"Uploaded → {video_id}")
 
-# 2. Wait for AI analysis
+# 2. Poll for AI analysis (single-video endpoint — efficient)
 while True:
-    videos = requests.get(f"{BASE}/{CHANNEL}/videos", headers=HEADERS).json()["videos"]
-    v = next(x for x in videos if x["video_id"] == video_id)
-    if v["packaging_status"] in ("completed", "failed"):
+    v = requests.get(f"{BASE}/{CHANNEL}/videos/{video_id}", headers=HEADERS).json()
+    if v.get("packaging_status") in ("completed", "failed"):
         break
-    time.sleep(15)
+    time.sleep(10)
+print(f"Analysis: {v['packaging_status']}")
 
-# 4. Schedule for tomorrow 9 AM UTC
+# 3. Schedule for tomorrow 9 AM UTC
 publish_at = (
     datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
     + timedelta(days=1)
@@ -212,6 +293,12 @@ requests.post(
     json={"scheduled_at": publish_at.isoformat()},
 ).raise_for_status()
 print(f"Scheduled for {publish_at.isoformat()}")
+
+# 4. (Later) Sync metrics after publishing
+requests.post(f"{BASE}/{CHANNEL}/sync", headers=HEADERS).raise_for_status()
+time.sleep(10)
+v = requests.get(f"{BASE}/{CHANNEL}/videos/{video_id}", headers=HEADERS).json()
+print(f"Status: {v['status']}")
 ```
 
 ---
@@ -227,6 +314,7 @@ All errors return: `{ "detail": "human-readable message" }`
 | 403 | Forbidden | Valid key, wrong channel | Verify `{channel_id}` matches the key's channel. |
 | 404 | Not Found | `video_id` doesn't exist or belongs to different channel | Confirm video_id from upload response. Check channel_id. |
 | 422 | Validation Error | Missing required field, wrong type, past datetime in schedule | Read `detail` field — it names the specific field and reason. |
+| 503 | Service Unavailable | AI service not yet initialised (rare, on cold start) | Retry after a few seconds. |
 | 500 | Server Error | R2 failure, platform API error, database error | Retry after a delay. Contact admin with `video_id` and timestamp if it persists. |
 
 ### Python Error Handling
