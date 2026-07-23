@@ -226,15 +226,21 @@ Publishing is **asynchronous** — the platform ID (YouTube video ID / Instagram
 
 ### POST `/api/v1/ext/{channel_id}/sync`
 
-Pull the latest platform metrics (views, likes, comments) for this channel's published videos from YouTube or Instagram. Runs in the background — returns immediately. Wait a few seconds, then call `GET /videos` to see refreshed data.
+Sync this channel's video library with the platform — identical to the "Sync Videos" button in the dashboard.
+
+Fetches all videos from YouTube or Instagram and:
+- Updates existing records: title, description, views, likes, comments, thumbnail URL, and `status`
+- Imports any videos that exist on the platform but are not yet in the system
 
 **Response:**
 ```json
 {
   "ok": true,
-  "message": "Sync started in the background. Call GET /videos in a few seconds to see refreshed metrics."
+  "synced": 3
 }
 ```
+
+`synced` is the count of new videos imported from the platform.
 
 ---
 
@@ -249,7 +255,7 @@ Upload → Poll for analysis → (Optional: apply metadata) → Schedule or Publ
 3. *(Optional)* **Apply AI metadata** — use `PATCH /metadata` with AI-suggested title/description/tags.
 4. **Schedule** — `POST /schedule` with a future UTC datetime.
 5. *(Alternative)* **Publish now** — `POST /publish` for immediate publishing. Poll `GET /videos/{video_id}` until `status == "published"`.
-6. *(Optional)* **Sync metrics** — `POST /sync` to pull views/likes from the platform after publishing.
+6. *(Optional)* **Sync** — `POST /sync` to pull the full video library from the platform: refreshes views/likes/comments and imports any videos not yet in the system.
 
 ### Full Python Example
 
@@ -294,11 +300,9 @@ requests.post(
 ).raise_for_status()
 print(f"Scheduled for {publish_at.isoformat()}")
 
-# 4. (Later) Sync metrics after publishing
-requests.post(f"{BASE}/{CHANNEL}/sync", headers=HEADERS).raise_for_status()
-time.sleep(10)
-v = requests.get(f"{BASE}/{CHANNEL}/videos/{video_id}", headers=HEADERS).json()
-print(f"Status: {v['status']}")
+# 4. (Later) Sync full library from platform — refreshes metrics, imports new videos
+result = requests.post(f"{BASE}/{CHANNEL}/sync", headers=HEADERS).json()
+print(f"Sync complete — {result.get('synced', 0)} new videos imported")
 ```
 
 ---

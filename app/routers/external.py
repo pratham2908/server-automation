@@ -268,16 +268,16 @@ _CAPABILITIES: dict[str, Any] = {
             "method": "POST",
             "path": "/api/v1/ext/{channel_id}/sync",
             "description": (
-                "Pull the latest platform metrics (views, likes, comments) for this channel's "
-                "published videos from YouTube or Instagram. Runs in the background — "
-                "returns immediately with a confirmation. Wait a few seconds, then "
-                "call GET /videos to see refreshed data."
+                "Sync this channel's video library with the platform (YouTube or Instagram). "
+                "Fetches all videos from the platform API: updates metadata, views, likes, and "
+                "comments on existing records, and imports any videos that exist on the platform "
+                "but are not yet in the system. Returns a summary of what changed."
             ),
             "auth_required": True,
             "request": {"body": None},
             "response": {
                 "ok": "boolean",
-                "message": "string — confirmation that sync was queued",
+                "synced": "integer — number of new videos imported from the platform",
             },
         },
     ],
@@ -553,51 +553,18 @@ async def get_video(
 @router.post("/sync")
 async def sync_channel(
     channel_id: str,
-    db: AsyncIOMotorDatabase = Depends(get_db),
+    service: VideoService = Depends(_get_service),
 ) -> dict[str, Any]:
-    """Trigger a platform metrics sync for this channel.
+    """Sync this channel's video library with the platform.
 
-    Pulls the latest views, likes, and comments from YouTube or Instagram for
-    all published videos and updates the local records. Runs in the background
-    — returns immediately. Wait a few seconds, then call ``GET /videos`` to see
-    refreshed data.
+    Identical to the "Sync Videos" button in the dashboard: fetches all videos
+    from YouTube or Instagram, updates metadata (views, likes, comments,
+    thumbnail, status) on existing records, and imports any videos that exist
+    on the platform but are not yet in the system.
+
+    Returns a summary with the count of newly imported videos.
     """
-    import asyncio
-
-    import app.main as main_mod
-    from app.services.sync_analysis_cron import run_sync_analysis_for_channel
-
-    channel = await db.channels.find_one({"channel_id": channel_id})
-    if not channel:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
-
-    gemini_service = main_mod.gemini_service
-    if not gemini_service:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI service not available — try again shortly",
-        )
-
-    config = await db.config.find_one({"key": "sync_analysis_config"})
-    threshold = (config or {}).get("analysis_threshold", 5)
-
-    async def _run():
-        try:
-            await run_sync_analysis_for_channel(
-                channel_id=channel_id,
-                channel=channel,
-                db=db,
-                youtube_service_manager=main_mod.youtube_service_manager,
-                instagram_service_manager=main_mod.instagram_service_manager,
-                gemini_service=gemini_service,
-                analysis_threshold=threshold,
-            )
-        except Exception as exc:
-            logger.warning("Background sync failed for channel %s: %s", channel_id, exc)
-
-    asyncio.create_task(_run())
-
-    return {
-        "ok": True,
-        "message": "Sync started in the background. Call GET /videos in a few seconds to see refreshed metrics.",
-    }
+    try:
+        return await service.sync_videos(channel_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
