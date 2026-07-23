@@ -732,7 +732,7 @@ class VideoService:
         )
 
         try:
-            params = json.loads(await self.gemini._generate(prompt))
+            params = json.loads(await self.gemini._generate(prompt, task="content_param_extraction"))
             await self.db.videos.update_one(
                 {"_id": video["_id"]},
                 {
@@ -1440,7 +1440,7 @@ class VideoService:
             f"Categories: {json.dumps(cats)}\nVideos: {json.dumps(summaries)}\n{instructions}"
         )  # noqa: E501
         try:
-            res = await self.gemini._generate(prompt)
+            res = await self.gemini._generate(prompt, task="batch_param_categorization")
             return json.loads(res)
         except Exception:
             return []

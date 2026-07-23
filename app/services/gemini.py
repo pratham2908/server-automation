@@ -12,8 +12,24 @@ from google import genai
 from google.genai import types
 
 from app.logger import get_logger
+from app.services.ai_call_logger import schedule_ai_call_log
 
 logger = get_logger(__name__)
+
+
+def _token_counts(response: Any) -> tuple[int, int]:
+    """Return ``(input_tokens, output_tokens)`` from a response.
+
+    Preview models sometimes omit ``usage_metadata`` entirely, so every hop is
+    treated as optional and falls back to 0 rather than raising.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return 0, 0
+    return (
+        getattr(usage, "prompt_token_count", 0) or 0,
+        getattr(usage, "candidates_token_count", 0) or 0,
+    )
 
 
 def _loads_json_object(text: str) -> dict[str, Any]:
@@ -68,7 +84,7 @@ class GeminiService:
     # Internal — model fallback
     # ------------------------------------------------------------------
 
-    async def _generate(self, prompt: str, specific_model: str | None = None) -> str:
+    async def _generate(self, prompt: str, specific_model: str | None = None, task: str = "unknown") -> str:
         """Try each model in the fallback chain until one succeeds."""
         import asyncio
         import time
@@ -94,7 +110,9 @@ class GeminiService:
                     timeout=90.0,
                 )
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, True)
+                input_tokens, output_tokens = _token_counts(response)
+                metrics_service.record_ai_call(model, duration, True, task, input_tokens, output_tokens)
+                schedule_ai_call_log(task, model, input_tokens, output_tokens, duration, True)
                 logger.info(
                     "Gemini response from model '%s' (%.2fms)",
                     model,
@@ -107,7 +125,8 @@ class GeminiService:
 
             except Exception as exc:
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, False)
+                metrics_service.record_ai_call(model, duration, False, task, 0, 0)
+                schedule_ai_call_log(task, model, 0, 0, duration, False)
 
                 last_error = exc
                 is_last = model == models_to_try[-1]
@@ -155,7 +174,7 @@ class GeminiService:
         """
         logger.info("Starting Gemini analysis for %d videos", len(video_data))
         prompt = self._build_analysis_prompt(video_data, previous_analysis, content_schema, platform)
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="channel_analysis")
 
         try:
             return _loads_json_object(text)
@@ -182,7 +201,7 @@ class GeminiService:
             ``{"performance_rating": 0-100, "what_worked": "...", "what_didnt": "...", "key_learnings": [...]}``
         """
         prompt = self._build_single_video_prompt(video_data, platform)
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="single_video_analysis")
 
         try:
             return _loads_json_object(text)
@@ -210,7 +229,7 @@ class GeminiService:
         """
         logger.info("Clustering %d videos into topics via Gemini", len(videos))
         prompt = self._build_clustering_prompt(videos, platform)
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="topic_clustering")
 
         try:
             from typing import cast
@@ -282,7 +301,7 @@ class GeminiService:
             existing_content_params,
             platform,
         )
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="content_generation")
 
         try:
             result = json.loads(text)
@@ -669,7 +688,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
     # Multimodal video retention analysis
     # ------------------------------------------------------------------
 
-    async def _generate_with_video(self, video_path: str, prompt: str) -> str:
+    async def _generate_with_video(self, video_path: str, prompt: str, task: str = "retention_analysis") -> str:
         """Run multimodal generate with a video file.
 
         Videos are staged to GCS (``GCS_VERTEX_STAGING_BUCKET``) and passed as a
@@ -718,7 +737,9 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                         timeout=180.0,
                     )
                     duration = (time.time() - start_time) * 1000
-                    metrics_service.record_ai_call(model, duration, True)
+                    input_tokens, output_tokens = _token_counts(response)
+                    metrics_service.record_ai_call(model, duration, True, task, input_tokens, output_tokens)
+                    schedule_ai_call_log(task, model, input_tokens, output_tokens, duration, True)
                     logger.info(
                         "Gemini video analysis response from model '%s' (%.2fms)",
                         model,
@@ -730,7 +751,8 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                     return cast(str, response.text)
                 except Exception as exc:
                     duration = (time.time() - start_time) * 1000
-                    metrics_service.record_ai_call(model, duration, False)
+                    metrics_service.record_ai_call(model, duration, False, task, 0, 0)
+                    schedule_ai_call_log(task, model, 0, 0, duration, False)
                     last_error = exc
                     is_last = model == self._MODEL_CHAIN[-1]
                     if is_last:
@@ -780,7 +802,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
         dict matching the ``RetentionPrediction`` schema.
         """
         prompt = self._build_retention_analysis_prompt(video_title, platform, pacing_templates)
-        text = await self._generate_with_video(video_path, prompt)
+        text = await self._generate_with_video(video_path, prompt, task="retention_analysis")
 
         try:
             return _loads_json_object(text)
@@ -958,7 +980,7 @@ Return ONLY valid JSON matching this schema (no markdown, no explanation):
 
 For Instagram, put the full caption in `suggested_description` and leave `suggested_titles` as an empty list."""
 
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="platform_packaging")
         try:
             return _loads_json_object(text)
         except (json.JSONDecodeError, TypeError):
@@ -997,7 +1019,7 @@ Return a JSON array with one entry per comment:
 
 Classify every comment. Do not skip any."""
 
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="comment_sentiment")
         try:
             return _loads_json_array(text)
         except (json.JSONDecodeError, TypeError):
@@ -1035,7 +1057,7 @@ Guidelines:
 Return a JSON object:
 {{"reply": "..."}}"""
 
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="comment_reply")
         try:
             result = json.loads(text)
             from typing import cast
@@ -1092,7 +1114,7 @@ Return a JSON object:
                 platform,
             )
 
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="comment_analysis")
 
         try:
             return _loads_json_object(text)
@@ -1285,7 +1307,9 @@ Return a JSON object with exactly these keys:
                     timeout=90.0,
                 )
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, True)
+                input_tokens, output_tokens = _token_counts(response)
+                metrics_service.record_ai_call(model, duration, True, "thumbnail_analysis", input_tokens, output_tokens)
+                schedule_ai_call_log("thumbnail_analysis", model, input_tokens, output_tokens, duration, True)
 
                 logger.info(
                     "Gemini thumbnail analysis from '%s' (%.2fms)",
@@ -1301,7 +1325,8 @@ Return a JSON object with exactly these keys:
 
             except Exception as exc:
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, False)
+                metrics_service.record_ai_call(model, duration, False, "thumbnail_analysis", 0, 0)
+                schedule_ai_call_log("thumbnail_analysis", model, 0, 0, duration, False)
 
                 last_error = exc
                 is_last = model == self._MODEL_CHAIN[-1]
@@ -1426,7 +1451,7 @@ Be thorough, specific, and ruthlessly honest. Generic feedback is useless."""
         produces a combined readiness verdict.
         """
         prompt = self._build_scorecard_prompt(signals, platform)
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="scorecard_generation")
 
         try:
             return _loads_json_object(text)
@@ -1581,7 +1606,7 @@ Return a JSON array with one object per video:
 - Be precise with classifications — don't default to "other" unless nothing else fits.
 - key_topics should be specific themes, not generic categories."""
 
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="content_intelligence")
         try:
             return _loads_json_array(text)
         except (json.JSONDecodeError, TypeError):
@@ -1675,7 +1700,7 @@ Return a JSON object:
 - **overall_gap_score**: 0-100, where 0 = creator is doing everything competitors do (no gap), 100 = massive gaps across all dimensions. This measures how much room for improvement exists based on competitor patterns.
 - Be brutally honest. The creator wants to know what to change, not be reassured."""
 
-        text = await self._generate(prompt)
+        text = await self._generate(prompt, task="pattern_comparison")
         try:
             return _loads_json_object(text)
         except (json.JSONDecodeError, TypeError):
