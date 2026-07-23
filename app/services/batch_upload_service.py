@@ -397,5 +397,6 @@ async def _process_batch_item(
         if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort cleanup; leaked temp files fill the disk quietly.
+                logger.debug("Could not remove temp file '%s': %s", temp_path, exc)

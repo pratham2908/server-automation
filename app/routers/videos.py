@@ -1,6 +1,8 @@
 """Videos router – refactored to use VideoService."""
 
 from datetime import datetime
+
+from app.timezone import now_ist
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -308,7 +310,7 @@ async def verify_video(
     # This endpoint was mostly just setting verification_status to 'verified'
     await service.db.videos.update_one(
         {"channel_id": channel_id, "video_id": video_id},
-        {"$set": {"verification_status": "verified", "updated_at": datetime.now()}},
+        {"$set": {"verification_status": "verified", "updated_at": now_ist()}},
     )
     return {"ok": True}
 

@@ -63,8 +63,9 @@ class VideoService:
         if await self._r2_refcount(r2_key) <= 1:
             try:
                 self.r2.delete_video(r2_key)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Not fatal, but the object is now orphaned in R2 and still billable.
+                logger.warning("Failed to delete R2 object '%s': %s", r2_key, exc)
 
     async def verify_video_file(self, channel_id: str, video_id: str) -> bool:
         """Check if a video has a valid file in R2."""
@@ -124,8 +125,15 @@ class VideoService:
                         published_at_dt = isoparse(published_at_str).astimezone(IST)
                         if published_at_dt > now:
                             is_live = False
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Leaves published_at unset and is_live at its default, so a
+                        # scheduled video can read as already live.
+                        logger.warning(
+                            "Could not parse publishedAt '%s' for video %s: %s",
+                            published_at_str,
+                            vid_id,
+                            exc,
+                        )
                 result[vid_id] = {"live": is_live, "published_at": published_at_dt}
         return result
 
@@ -163,8 +171,14 @@ class VideoService:
             try:
                 live_status = self._check_youtube_live_status(yt, [d["youtube_video_id"] for d in scheduled_docs])
                 pending_reconciliation = sum(1 for info in live_status.values() if info["live"])
-            except Exception:
-                pass
+            except Exception as exc:
+                # pending_reconciliation stays 0, so the UI reports "nothing to
+                # reconcile" when the truth is simply unknown.
+                logger.warning(
+                    "Live-status check failed for channel '%s'; reporting 0 pending: %s",
+                    channel_id,
+                    exc,
+                )
         return {
             "available": True,
             "youtube_total": len(yt_video_ids),
@@ -694,8 +708,15 @@ class VideoService:
                             {"channel_id": tid, "video_id": new_video_id},
                             {"$set": {"status": "ready", "updated_at": now_ist()}},
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # The video stays in its previous status indefinitely with no
+                        # other signal that the transition failed.
+                        logger.error(
+                            "Failed to mark repost '%s' ready on channel '%s': %s",
+                            new_video_id,
+                            tid,
+                            exc,
+                        )
 
                     ctx: dict[str, Any] = {
                         "channel_id": channel_id,
@@ -864,8 +885,14 @@ class VideoService:
         if scheduled_at:
             try:
                 sch_at = isoparse(scheduled_at).replace(tzinfo=IST)
-            except Exception:
-                pass
+            except Exception as exc:
+                # sch_at stays None, so the caller asked for a scheduled video and
+                # silently gets an unscheduled one that never publishes.
+                logger.error(
+                    "Invalid scheduled_at '%s' — video will NOT be scheduled: %s",
+                    scheduled_at,
+                    exc,
+                )
 
         channel_videos: list[dict] = []
 
@@ -1037,8 +1064,15 @@ class VideoService:
             if ch_cfg.get("scheduled_at"):
                 try:
                     sch_at = isoparse(ch_cfg["scheduled_at"]).replace(tzinfo=IST)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # As above: the video lands unscheduled with no error surfaced.
+                    logger.error(
+                        "Invalid scheduled_at '%s' for channel '%s' — video will NOT be "
+                        "scheduled: %s",
+                        ch_cfg.get("scheduled_at"),
+                        ch_cfg.get("channel_id", "?"),
+                        exc,
+                    )
 
             status = "scheduled" if (sch_at and platform == "instagram") else "ready"
 

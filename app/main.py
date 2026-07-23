@@ -215,8 +215,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         # Take final snapshot
         try:
             await metrics_service.persist_snapshot(db)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Shutdown must not be blocked, but losing the final snapshot silently
+            # makes post-mortems harder.
+            logger.warning("Final metrics snapshot failed during shutdown: %s", exc)
 
     for task in (
         _auto_publisher_task,

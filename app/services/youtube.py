@@ -279,7 +279,7 @@ class YouTubeService:
             return {}
 
         try:
-            today = datetime.now().strftime("%Y-%m-%d")
+            today = now_ist().strftime("%Y-%m-%d")
             result = self._execute(
                 self._youtube_analytics.reports().query(
                     ids="channel==MINE",

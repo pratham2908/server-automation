@@ -127,6 +127,30 @@ class Channel(BaseModel):
         ),
     )
 
+    # --- Platform profile metadata, refreshed on sync ---
+    description: str | None = Field(None, description="Channel description from the platform")
+    custom_url: str | None = Field(None, description="YouTube custom URL, e.g. '@handle'")
+    handle: str | None = Field(None, description="Platform handle")
+    subscriber_count: int | None = Field(None, description="Subscribers (YouTube) / followers (Instagram)")
+    video_count: int | None = Field(None, description="Videos published on the platform")
+    view_count: int | None = Field(None, description="Lifetime views reported by the platform")
+
+    # --- Content defaults applied when packaging new videos ---
+    default_description: str | None = Field(None, description="Description template for new videos")
+    default_tags: list[str] = Field(default_factory=list, description="Tags applied to new videos by default")
+
+    competitors: list[Competitor] = Field(
+        default_factory=list, description="Competitor channels tracked for this channel"
+    )
+    content_schema: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "Legacy channel-level content params. Superseded by the content_params "
+            "collection (ContentParamDefinition) but still present on older documents "
+            "and still read by the frontend."
+        ),
+    )
+
     automation_config: AutomationConfig = Field(default_factory=AutomationConfig)
     last_tasks: dict[str, datetime] = Field(
         default_factory=dict, description="Last run timestamps for various background tasks"
