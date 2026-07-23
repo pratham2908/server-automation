@@ -56,15 +56,28 @@ def _get_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> VideoService:
 # ──────────────────────────────────────────────────────────────────────────────
 
 _EXTERNAL_VIDEO_FIELDS = {
-    "video_id", "title", "description", "tags",
-    "status", "packaging_status",
-    "scheduled_at", "published_at", "created_at",
+    "video_id",
+    "title",
+    "description",
+    "tags",
+    "status",
+    "packaging_status",
+    "scheduled_at",
+    "published_at",
+    "created_at",
 }
 
 _STRIP_FIELDS = {
-    "r2_object_key", "content_params", "ai_packaging", "retention",
-    "performance", "multi_channel_group_id", "verification_status",
-    "suggested", "channel_id", "_id",
+    "r2_object_key",
+    "content_params",
+    "ai_packaging",
+    "retention",
+    "performance",
+    "multi_channel_group_id",
+    "verification_status",
+    "suggested",
+    "channel_id",
+    "_id",
 }
 
 
@@ -334,8 +347,8 @@ async def upload_video(
             effective_title,
             description,
             tags,
-            None,   # category — creator apps don't manage categories
-            None,   # content_params
+            None,  # category — creator apps don't manage categories
+            None,  # content_params
             scheduled_at,
         )
     except ValueError as exc:

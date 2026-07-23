@@ -66,18 +66,6 @@ class VideoService:
             except Exception:
                 pass
 
-    async def verify_video_file(self, channel_id: str, video_id: str) -> bool:
-        """Check if a video has a valid file in R2."""
-        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video or not video.get("r2_object_key"):
-            return False
-        if self.r2:
-            try:
-                return self.r2.file_exists(video["r2_object_key"])
-            except Exception:
-                return False
-        return True
-
     async def _get_youtube_service(self, channel_id: str):
         if not self.youtube_manager:
             return None
@@ -422,7 +410,7 @@ class VideoService:
                     assert src_ig is not None
                     media_url = ig.get_reel_media_url(src_ig)
                     key = await download_instagram_media_to_r2(tid, media_url, self.r2)
-                
+
                 await self.db.videos.update_one(
                     {"video_id": new_id},
                     {
@@ -433,25 +421,29 @@ class VideoService:
                         }
                     },
                 )
-                
+
                 # Add to appropriate queue since it's instant
                 if sch_at and sch_at > now_ist():
                     last = await self.db.schedule_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
-                    await self.db.schedule_queue.insert_one({
-                        "channel_id": tid,
-                        "video_id": new_id,
-                        "position": (last["position"] + 1) if last else 1,
-                        "scheduled_at": sch_at,
-                        "added_at": now,
-                    })
+                    await self.db.schedule_queue.insert_one(
+                        {
+                            "channel_id": tid,
+                            "video_id": new_id,
+                            "position": (last["position"] + 1) if last else 1,
+                            "scheduled_at": sch_at,
+                            "added_at": now,
+                        }
+                    )
                 else:
                     last = await self.db.posting_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
-                    await self.db.posting_queue.insert_one({
-                        "channel_id": tid,
-                        "video_id": new_id,
-                        "position": (last["position"] + 1) if last else 1,
-                        "added_at": now,
-                    })
+                    await self.db.posting_queue.insert_one(
+                        {
+                            "channel_id": tid,
+                            "video_id": new_id,
+                            "position": (last["position"] + 1) if last else 1,
+                            "added_at": now,
+                        }
+                    )
             else:
                 self.trigger_repost_download(
                     channel_id,
@@ -491,7 +483,7 @@ class VideoService:
                 key = src_r2  # reuse same R2 object — no copy needed
             else:
                 key = await download_youtube_video_to_r2(video["youtube_video_id"], tid, self.r2)
-            
+
             await self.db.videos.update_one(
                 {"video_id": new_id},
                 {
@@ -502,25 +494,29 @@ class VideoService:
                     }
                 },
             )
-            
+
             # Add to appropriate queue since it's instant
             if sch_at and sch_at > now_ist():
                 last = await self.db.schedule_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
-                await self.db.schedule_queue.insert_one({
-                    "channel_id": tid,
-                    "video_id": new_id,
-                    "position": (last["position"] + 1) if last else 1,
-                    "scheduled_at": sch_at,
-                    "added_at": now,
-                })
+                await self.db.schedule_queue.insert_one(
+                    {
+                        "channel_id": tid,
+                        "video_id": new_id,
+                        "position": (last["position"] + 1) if last else 1,
+                        "scheduled_at": sch_at,
+                        "added_at": now,
+                    }
+                )
             else:
                 last = await self.db.posting_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
-                await self.db.posting_queue.insert_one({
-                    "channel_id": tid,
-                    "video_id": new_id,
-                    "position": (last["position"] + 1) if last else 1,
-                    "added_at": now,
-                })
+                await self.db.posting_queue.insert_one(
+                    {
+                        "channel_id": tid,
+                        "video_id": new_id,
+                        "position": (last["position"] + 1) if last else 1,
+                        "added_at": now,
+                    }
+                )
         else:
             src_r2 = video.get("r2_object_key")
             self.trigger_repost_download(
@@ -657,11 +653,12 @@ class VideoService:
                     sch_at = video.get("scheduled_at")
                     if sch_at and sch_at.tzinfo is None:
                         from app.timezone import UTC
+
                         sch_at = sch_at.replace(tzinfo=UTC)
                     final_status = "queued" if (sch_at and sch_at > now) else "ready"
-                    
+
                     upd = {"r2_object_key": key, "updated_at": now, "status": final_status}
-                    
+
                     if final_status == "queued":
                         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
                         last = await self.db.schedule_queue.find_one({"channel_id": tid}, sort=[("position", -1)])
@@ -898,18 +895,25 @@ class VideoService:
 
             if status == "scheduled":
                 last = await self.db.schedule_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
-                await self.db.schedule_queue.insert_one({
-                    "channel_id": cid, "video_id": new_vid_id,
-                    "position": (last["position"] + 1) if last else 1,
-                    "scheduled_at": sch_at, "added_at": now,
-                })
+                await self.db.schedule_queue.insert_one(
+                    {
+                        "channel_id": cid,
+                        "video_id": new_vid_id,
+                        "position": (last["position"] + 1) if last else 1,
+                        "scheduled_at": sch_at,
+                        "added_at": now,
+                    }
+                )
             else:
                 last = await self.db.posting_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
-                await self.db.posting_queue.insert_one({
-                    "channel_id": cid, "video_id": new_vid_id,
-                    "position": (last["position"] + 1) if last else 1,
-                    "added_at": now,
-                })
+                await self.db.posting_queue.insert_one(
+                    {
+                        "channel_id": cid,
+                        "video_id": new_vid_id,
+                        "position": (last["position"] + 1) if last else 1,
+                        "added_at": now,
+                    }
+                )
 
             # Generate platform-specific packaging using existing analysis
             packaging: dict | None = None
@@ -939,19 +943,25 @@ class VideoService:
                     pkg_updates["description"] = desc
                 raw_tags = packaging.get("suggested_tags")
                 if raw_tags:
-                    pkg_updates["tags"] = raw_tags if isinstance(raw_tags, list) else [t.strip() for t in raw_tags.split(",") if t.strip()]
+                    pkg_updates["tags"] = (
+                        raw_tags
+                        if isinstance(raw_tags, list)
+                        else [t.strip() for t in raw_tags.split(",") if t.strip()]
+                    )
 
             await self.db.videos.update_one({"video_id": new_vid_id}, {"$set": pkg_updates})
 
-            channel_videos.append({
-                "channel_id": cid,
-                "video_id": new_vid_id,
-                "packaging_status": pkg_status,
-                "ai_packaging": packaging,
-                "title": pkg_updates.get("title", doc["title"]),
-                "description": pkg_updates.get("description", doc["description"]),
-                "tags": pkg_updates.get("tags", doc["tags"]),
-            })
+            channel_videos.append(
+                {
+                    "channel_id": cid,
+                    "video_id": new_vid_id,
+                    "packaging_status": pkg_status,
+                    "ai_packaging": packaging,
+                    "title": pkg_updates.get("title", doc["title"]),
+                    "description": pkg_updates.get("description", doc["description"]),
+                    "tags": pkg_updates.get("tags", doc["tags"]),
+                }
+            )
 
         return {"ok": True, "group_id": group_id, "channel_videos": channel_videos}
 
@@ -1028,9 +1038,7 @@ class VideoService:
 
             raw_tags = ch_cfg.get("tags") or []
             parsed_tags = (
-                [t.strip() for t in raw_tags.split(",") if t.strip()]
-                if isinstance(raw_tags, str)
-                else list(raw_tags)
+                [t.strip() for t in raw_tags.split(",") if t.strip()] if isinstance(raw_tags, str) else list(raw_tags)
             )
 
             sch_at: datetime | None = None
@@ -1053,9 +1061,7 @@ class VideoService:
                 "r2_object_key": r2_key,  # shared across all channel records
                 "content_params": ch_cfg.get("content_params"),
                 "verification_status": (
-                    "verified"
-                    if (ch_cfg.get("category") and ch_cfg.get("content_params"))
-                    else "unverified"
+                    "verified" if (ch_cfg.get("category") and ch_cfg.get("content_params")) else "unverified"
                 ),
                 "scheduled_at": sch_at if status == "scheduled" else None,
                 "multi_channel_group_id": group_id,
@@ -1071,18 +1077,25 @@ class VideoService:
             # Add to queues
             if status == "scheduled":
                 last = await self.db.schedule_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
-                await self.db.schedule_queue.insert_one({
-                    "channel_id": cid, "video_id": vid_id,
-                    "position": (last["position"] + 1) if last else 1,
-                    "scheduled_at": sch_at, "added_at": now,
-                })
+                await self.db.schedule_queue.insert_one(
+                    {
+                        "channel_id": cid,
+                        "video_id": vid_id,
+                        "position": (last["position"] + 1) if last else 1,
+                        "scheduled_at": sch_at,
+                        "added_at": now,
+                    }
+                )
             else:
                 last = await self.db.posting_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
-                await self.db.posting_queue.insert_one({
-                    "channel_id": cid, "video_id": vid_id,
-                    "position": (last["position"] + 1) if last else 1,
-                    "added_at": now,
-                })
+                await self.db.posting_queue.insert_one(
+                    {
+                        "channel_id": cid,
+                        "video_id": vid_id,
+                        "position": (last["position"] + 1) if last else 1,
+                        "added_at": now,
+                    }
+                )
 
         if not primary_doc:
             raise ValueError("Primary channel config missing from channels list")
@@ -1324,14 +1337,14 @@ class VideoService:
         for r in ig_reels:
             mid = r["id"]
             ins = insights_map.get(mid, {})
-            
+
             # Map metrics correctly
             # video_views is available on the media object directly for Reels
             # reach, saved, shares come from insights
             likes = int(r.get("like_count", 0))
             comments = int(r.get("comments_count", 0))
             reach = int(ins.get("reach", 0))
-            views = reach # Use reach as views for Reels since video_views is deprecated
+            views = reach  # Use reach as views for Reels since video_views is deprecated
             saves = int(ins.get("saved", 0))
             shares = int(ins.get("shares", 0))
 
@@ -1350,7 +1363,7 @@ class VideoService:
                             "reach": reach,
                             "saves": saves,
                             "shares": shares,
-                        }
+                        },
                     }
                 )
             else:
@@ -1359,7 +1372,7 @@ class VideoService:
                 likes = int(r.get("like_count", 0))
                 comments = int(r.get("comments_count", 0))
                 reach = int(ins.get("reach", 0))
-                views = reach # Use reach as views for Reels
+                views = reach  # Use reach as views for Reels
                 saves = int(ins.get("saved", 0))
                 shares = int(ins.get("shares", 0))
 
@@ -1439,7 +1452,7 @@ class VideoService:
         prompt = (
             f"Extract params:\nSchema: {json.dumps(schema)}\n"
             f"Categories: {json.dumps(cats)}\nVideos: {json.dumps(summaries)}\n{instructions}"
-        )  # noqa: E501
+        )
         try:
             res = await self.gemini._generate(prompt, task="batch_param_categorization")
             return json.loads(res)

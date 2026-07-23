@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -29,9 +28,7 @@ async def create_error(error: ErrorCreate, db: AsyncIOMotorDatabase = Depends(ge
 
     # Find the newly created/updated doc to return it
     # Note: Since log_error might have incremented a count, we return the current state
-    doc = await db.errors.find_one(
-        {"feature": error.feature, "message": error.message, "resolved": False}
-    )
+    doc = await db.errors.find_one({"feature": error.feature, "message": error.message, "resolved": False})
     return doc
 
 
@@ -68,10 +65,7 @@ async def update_error(error_id: str, update: ErrorUpdate, db: AsyncIOMotorDatab
 @router.post("/bulk-resolve", status_code=status.HTTP_200_OK)
 async def bulk_resolve(error_ids: list[str], db: AsyncIOMotorDatabase = Depends(get_db)):
     """Resolve multiple errors at once."""
-    await db.errors.update_many(
-        {"_id": {"$in": error_ids}},
-        {"$set": {"resolved": True, "updated_at": now_ist()}}
-    )
+    await db.errors.update_many({"_id": {"$in": error_ids}}, {"$set": {"resolved": True, "updated_at": now_ist()}})
     return {"status": "ok", "resolved_count": len(error_ids)}
 
 

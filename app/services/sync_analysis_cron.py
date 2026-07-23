@@ -68,8 +68,7 @@ async def run_sync_analysis_for_channel(
 
     Returns a summary dict with sync and analysis results.
     """
-    import app.main as main_mod  # noqa: PLC0415
-
+    import app.main as main_mod
 
     assert main_mod.r2_service is not None
     service = VideoService(
@@ -212,7 +211,6 @@ async def run_sync_analysis_cron(
         if not enabled:
             logger.info("Sync-analysis cron: disabled via config — skipping this cycle")
             continue
-
 
         try:
             metrics_service.track_task_start("sync_analysis")

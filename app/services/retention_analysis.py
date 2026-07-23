@@ -258,7 +258,11 @@ async def run_retention_analysis(
                             sib_updates["description"] = sib_desc
                         sib_tags = sib_packaging.get("suggested_tags")
                         if sib_tags:
-                            sib_updates["tags"] = sib_tags if isinstance(sib_tags, list) else [t.strip() for t in sib_tags.split(",") if t.strip()]
+                            sib_updates["tags"] = (
+                                sib_tags
+                                if isinstance(sib_tags, list)
+                                else [t.strip() for t in sib_tags.split(",") if t.strip()]
+                            )
 
                         await db.videos.update_one(
                             {"channel_id": sib_channel_id, "video_id": sib_video_id},

@@ -1362,7 +1362,7 @@ async def stream_logs():
                 msg = entry.get("MESSAGE")
                 if msg is None:
                     continue
-                
+
                 # journalctl -o json sometimes returns MESSAGE as a list of byte integers
                 # if it contains non-ASCII characters or binary data.
                 if isinstance(msg, list):

@@ -26,10 +26,6 @@ def bind_error_queue_db(db: AsyncIOMotorDatabase | None) -> None:
     _bound_db = db
 
 
-def get_bound_db() -> AsyncIOMotorDatabase | None:
-    return _bound_db
-
-
 async def report_error(
     feature: str,
     message: str,
