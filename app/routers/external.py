@@ -571,7 +571,8 @@ async def sync_channel(
     if not channel:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
 
-    if not main_mod.gemini_service:
+    gemini_service = main_mod.gemini_service
+    if not gemini_service:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI service not available — try again shortly",
@@ -588,7 +589,7 @@ async def sync_channel(
                 db=db,
                 youtube_service_manager=main_mod.youtube_service_manager,
                 instagram_service_manager=main_mod.instagram_service_manager,
-                gemini_service=main_mod.gemini_service,
+                gemini_service=gemini_service,
                 analysis_threshold=threshold,
             )
         except Exception as exc:
