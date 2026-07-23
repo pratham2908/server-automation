@@ -12,7 +12,7 @@ import asyncio
 import os
 from typing import Any
 
-from app.database import update_channel_task_status
+from app.database import is_channel_paused, update_channel_task_status
 from app.logger import get_logger
 from app.services.errors import get_error_service
 from app.services.schedule_operation import _build_instagram_caption
@@ -211,6 +211,17 @@ async def _poll_and_publish(db: Any, r2_service: Any) -> None:
         if not channel_doc:
             logger.warning("[Instagram] Channel '%s' not found — removing queue entry", channel_id)
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
+            continue
+
+        if is_channel_paused(channel_doc):
+            # Leave the queue entry intact — unlike the branches above, a paused
+            # channel is a temporary state, so the video must still be waiting
+            # when the channel is resumed.
+            logger.info(
+                "[Instagram] Channel '%s' is paused — leaving video '%s' queued",
+                channel_id,
+                video_id,
+            )
             continue
 
         platform = channel_doc.get("platform", "youtube")

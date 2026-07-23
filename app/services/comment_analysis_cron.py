@@ -15,7 +15,7 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import update_channel_task_status
+from app.database import not_paused_query, update_channel_task_status
 from app.logger import get_logger
 from app.services.comment_analysis_engine import run_cron_cycle
 from app.services.error_reporting import report_error
@@ -82,7 +82,7 @@ async def run_comment_analysis_cron(
 
         try:
             metrics_service.track_task_start("comment_analysis")
-            channels = await db.channels.find().to_list(length=None)
+            channels = await db.channels.find(not_paused_query()).to_list(length=None)
             logger.info(
                 "🔄 Comment analysis cron tick — processing %d channel(s)",
                 len(channels),

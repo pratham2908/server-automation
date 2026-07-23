@@ -12,7 +12,7 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import update_channel_task_status
+from app.database import not_paused_query, update_channel_task_status
 from app.logger import get_logger
 from app.services.error_reporting import report_error
 from app.services.growth_tracking import GrowthTrackingService
@@ -51,7 +51,7 @@ async def run_growth_tracking_cron(
 
             metrics_service.track_task_start("growth_tracking")
 
-            channels = await db.channels.find().to_list(length=None)
+            channels = await db.channels.find(not_paused_query()).to_list(length=None)
             logger.info(f"Growth tracking cron tick — processing {len(channels)} channel(s)")
 
             for channel in channels:

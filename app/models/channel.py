@@ -119,6 +119,14 @@ class Channel(BaseModel):
     api_key_prefix: str | None = Field(None, description="First 12 chars of the raw key, for display in the UI")
     api_key_created_at: datetime | None = Field(None, description="When the key was last generated or rotated")
 
+    paused: bool = Field(
+        False,
+        description=(
+            "When true, background crons skip this channel entirely. Manual and "
+            "API-triggered actions are unaffected."
+        ),
+    )
+
     automation_config: AutomationConfig = Field(default_factory=AutomationConfig)
     last_tasks: dict[str, datetime] = Field(
         default_factory=dict, description="Last run timestamps for various background tasks"

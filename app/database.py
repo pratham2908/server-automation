@@ -196,6 +196,32 @@ async def update_channel_task_status(db: AsyncIOMotorDatabase, channel_id: str, 
     )
 
 
+def not_paused_query() -> dict:
+    """Mongo filter selecting channels that background crons should process.
+
+    Use this for every cron-level ``db.channels.find()`` so "active" is
+    defined in one place and a new cron inherits the behaviour for free.
+
+    Matches on ``$ne: True`` rather than ``False`` deliberately: the ``paused``
+    field was added after these documents were written, so existing channels
+    have no such key at all. Filtering on ``{"paused": False}`` would match
+    none of them and silently halt the entire system.
+    """
+    return {"paused": {"$ne": True}}
+
+
+def is_channel_paused(channel: dict | None) -> bool:
+    """Whether background work should skip this channel.
+
+    For callers that already hold the document and cannot use
+    ``not_paused_query`` — ``auto_publisher`` looks its channel up per due
+    video rather than listing channels.
+    """
+    if not channel:
+        return False
+    return bool(channel.get("paused", False))
+
+
 def get_channel_platform(channel: dict | None) -> str:
     """Resolve the platform for a channel document, with graceful fallback.
 

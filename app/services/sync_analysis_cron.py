@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_channel_platform, update_channel_task_status
+from app.database import get_channel_platform, not_paused_query, update_channel_task_status
 from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
 from app.services.analysis_engine import run_analysis
@@ -219,7 +219,7 @@ async def run_sync_analysis_cron(
             config = await _get_config(db)
             threshold = config.get("analysis_threshold", _DEFAULT_ANALYSIS_THRESHOLD)
 
-            channels = await db.channels.find().to_list(length=None)
+            channels = await db.channels.find(not_paused_query()).to_list(length=None)
             logger.info(
                 "Sync-analysis cron tick — processing %d channel(s)",
                 len(channels),
