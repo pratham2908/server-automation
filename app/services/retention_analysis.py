@@ -221,13 +221,9 @@ async def run_retention_analysis(
                 siblings = await db.videos.find(
                     {
                         "multi_channel_group_id": group_id,
-                        "video_id": {"$neq": video_id},
+                        "video_id": {"$ne": video_id},
                     }
                 ).to_list(length=None)
-                # Fix: use $ne operator
-                siblings = [s for s in await db.videos.find(
-                    {"multi_channel_group_id": group_id}
-                ).to_list(length=None) if s.get("video_id") != video_id]
 
                 for sibling in siblings:
                     sib_channel_id = sibling["channel_id"]
