@@ -18,9 +18,7 @@ from app.services.gemini import _loads_json_array, _loads_json_object
 
 class TestLoadsJsonObject:
     def test_accepts_object(self):
-        assert _loads_json_object('{"best_posting_times": [1, 2]}') == {
-            "best_posting_times": [1, 2]
-        }
+        assert _loads_json_object('{"best_posting_times": [1, 2]}') == {"best_posting_times": [1, 2]}
 
     def test_rejects_array(self):
         """The exact shape that caused the production AttributeError."""

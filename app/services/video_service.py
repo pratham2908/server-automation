@@ -1075,8 +1075,7 @@ class VideoService:
                 except Exception as exc:
                     # As above: the video lands unscheduled with no error surfaced.
                     logger.error(
-                        "Invalid scheduled_at '%s' for channel '%s' — video will NOT be "
-                        "scheduled: %s",
+                        "Invalid scheduled_at '%s' for channel '%s' — video will NOT be scheduled: %s",
                         ch_cfg.get("scheduled_at"),
                         ch_cfg.get("channel_id", "?"),
                         exc,

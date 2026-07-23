@@ -35,9 +35,7 @@ class TestContainerStatusDetail:
         assert "status" in captured["params"]["fields"]
 
     def test_returns_code_and_detail(self):
-        svc, _ = _service(
-            {"status_code": "ERROR", "status": "The media is not a valid video file"}
-        )
+        svc, _ = _service({"status_code": "ERROR", "status": "The media is not a valid video file"})
         assert svc.get_container_status("123") == (
             "ERROR",
             "The media is not a valid video file",
@@ -55,9 +53,7 @@ class TestContainerStatusDetail:
 
 class TestPublishSurfacesReason:
     def test_error_message_includes_metas_reason(self):
-        svc, _ = _service(
-            {"status_code": "ERROR", "status": "Video duration exceeds the limit"}
-        )
+        svc, _ = _service({"status_code": "ERROR", "status": "Video duration exceeds the limit"})
         svc.create_reel_container = lambda *a, **k: {  # type: ignore[method-assign]
             "container_id": "c1",
             "upload_uri": "u",

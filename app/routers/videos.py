@@ -1,8 +1,6 @@
 """Videos router – refactored to use VideoService."""
 
 from datetime import datetime
-
-from app.timezone import now_ist
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -14,6 +12,7 @@ from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.services.errors import get_error_service
 from app.services.video_service import VideoService
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 

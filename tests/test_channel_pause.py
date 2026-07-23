@@ -69,12 +69,8 @@ class TestCronsUseTheFilter:
         import inspect
 
         src = inspect.getsource(importlib.import_module(f"app.services.{module}"))
-        assert "db.channels.find(not_paused_query())" in src, (
-            f"{module} must filter paused channels"
-        )
-        assert "db.channels.find()" not in src, (
-            f"{module} still has an unfiltered channel listing"
-        )
+        assert "db.channels.find(not_paused_query())" in src, f"{module} must filter paused channels"
+        assert "db.channels.find()" not in src, f"{module} still has an unfiltered channel listing"
 
     def test_auto_publisher_guards_and_keeps_the_video_queued(self):
         import inspect
@@ -87,9 +83,7 @@ class TestCronsUseTheFilter:
         # The paused branch must not delete the queue entry: the video has to
         # still be there when the channel is resumed.
         guard = src.split("is_channel_paused(channel_doc)")[1].split("continue")[0]
-        assert "delete_one" not in guard, (
-            "paused channels must not have their queued videos deleted"
-        )
+        assert "delete_one" not in guard, "paused channels must not have their queued videos deleted"
 
 
 class TestChannelModel:
