@@ -66,18 +66,6 @@ class VideoService:
             except Exception:
                 pass
 
-    async def verify_video_file(self, channel_id: str, video_id: str) -> bool:
-        """Check if a video has a valid file in R2."""
-        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video or not video.get("r2_object_key"):
-            return False
-        if self.r2:
-            try:
-                return self.r2.file_exists(video["r2_object_key"])
-            except Exception:
-                return False
-        return True
-
     async def _get_youtube_service(self, channel_id: str):
         if not self.youtube_manager:
             return None
@@ -1439,7 +1427,7 @@ class VideoService:
         prompt = (
             f"Extract params:\nSchema: {json.dumps(schema)}\n"
             f"Categories: {json.dumps(cats)}\nVideos: {json.dumps(summaries)}\n{instructions}"
-        )  # noqa: E501
+        )
         try:
             res = await self.gemini._generate(prompt, task="batch_param_categorization")
             return json.loads(res)

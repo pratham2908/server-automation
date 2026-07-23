@@ -637,12 +637,5 @@ class InstagramServiceManager:
             logger.exception("Failed to init Instagram service for channel '%s'", channel_id)
             return None
 
-    async def has_token(self, channel_id: str) -> bool:
-        channel = await self._db.channels.find_one(
-            {"channel_id": channel_id, "instagram_tokens": {"$exists": True, "$ne": None}},
-            {"_id": 1},
-        )
-        return channel is not None
-
     def invalidate(self, channel_id: str) -> None:
         self._cache.pop(channel_id, None)

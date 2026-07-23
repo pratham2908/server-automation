@@ -636,76 +636,6 @@ class YouTubeService:
 
         return comments
 
-    def get_video_comments_after(self, youtube_video_id: str, cutoff_timestamp: str | datetime) -> list[dict[str, Any]]:
-        """Fetch comments for a video that were published AFTER ``cutoff_timestamp``.
-
-        Returns the same dict shape as ``get_video_comments``.
-        """
-        if isinstance(cutoff_timestamp, str):
-            cutoff = datetime.fromisoformat(cutoff_timestamp.replace("Z", "+00:00"))
-        else:
-            cutoff = cutoff_timestamp
-        if cutoff.tzinfo is None:
-            cutoff = cutoff.replace(tzinfo=timezone.utc)
-
-        comments: list[dict[str, Any]] = []
-        page_token: str | None = None
-        done = False
-
-        while not done:
-            kwargs: dict[str, Any] = {
-                "part": "snippet",
-                "videoId": youtube_video_id,
-                "maxResults": 100,
-                "order": "time",
-                "textFormat": "plainText",
-            }
-            if page_token:
-                kwargs["pageToken"] = page_token
-
-            try:
-                response = self._execute(self._youtube.commentThreads().list(**kwargs))
-            except Exception as exc:
-                logger.warning(
-                    "Failed to fetch comments for video %s: %s",
-                    youtube_video_id,
-                    exc,
-                )
-                break
-
-            for item in response.get("items", []):
-                top = item["snippet"]["topLevelComment"]
-                snip = top["snippet"]
-                pub_raw = snip.get("publishedAt", "")
-                try:
-                    pub_dt = datetime.fromisoformat(pub_raw.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
-                    pub_dt = None
-
-                if pub_dt and pub_dt <= cutoff:
-                    done = True
-                    break
-
-                author_ch = snip.get("authorChannelId", {})
-                comments.append(
-                    {
-                        "comment_id": top.get("id", ""),
-                        "text": snip.get("textDisplay", ""),
-                        "like_count": int(snip.get("likeCount", 0)),
-                        "author": snip.get("authorDisplayName", ""),
-                        "author_channel_id": author_ch.get("value", ""),
-                        "published_at": pub_raw,
-                        "video_url": f"https://www.youtube.com/watch?v={youtube_video_id}",
-                        "comment_url": (f"https://www.youtube.com/watch?v={youtube_video_id}&lc={top.get('id', '')}"),
-                    }
-                )
-
-            page_token = response.get("nextPageToken")
-            if not page_token:
-                break
-
-        return comments
-
     def reply_to_comment(self, comment_id: str, text: str) -> str:
         """Post a reply to a top-level comment.
 
@@ -791,14 +721,6 @@ class YouTubeServiceManager:
         except Exception:
             logger.exception("Failed to initialise YouTube service for channel '%s'", channel_id)
             return None
-
-    async def has_token(self, channel_id: str) -> bool:
-        """Check if YouTube tokens exist for *channel_id* in the DB."""
-        channel = await self._db.channels.find_one(
-            {"channel_id": channel_id, "youtube_tokens": {"$exists": True, "$ne": None}},
-            {"_id": 1},
-        )
-        return channel is not None
 
     def invalidate(self, channel_id: str) -> None:
         """Remove a cached service instance (e.g. after token update)."""

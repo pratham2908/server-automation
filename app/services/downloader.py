@@ -145,9 +145,3 @@ def _copy_r2_key_sync(source_key: str, dest_key: str, r2_service: "R2Service") -
     return dest_key
 
 
-async def copy_r2_video_to_r2(source_key: str, target_channel_id: str, r2_service: "R2Service") -> str:
-    """Server-side copy within R2 to a new key under *target_channel_id*."""
-    new_id = str(uuid.uuid4())
-    dest_key = f"{target_channel_id}/{new_id}.mp4"
-    await asyncio.to_thread(_copy_r2_key_sync, source_key, dest_key, r2_service)
-    return dest_key

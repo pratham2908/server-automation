@@ -20,12 +20,11 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import get_channel_platform
 from app.logger import get_logger
 from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
 from app.services.r2 import R2Service
-from app.services.retention_analysis import extract_thumbnail, run_retention_analysis
+from app.services.retention_analysis import run_retention_analysis
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
