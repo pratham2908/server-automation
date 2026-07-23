@@ -113,6 +113,12 @@ class Channel(BaseModel):
     instagram_user_id: str | None = Field(None, description="Instagram Graph API user ID (instagram only)")
     instagram_tokens: InstagramTokens | None = Field(None, description="Instagram tokens (excluded from API responses)")
 
+    # Channel API key — scoped credential for external creator apps.
+    # Only the hash is ever persisted; the raw key is shown once at generation.
+    api_key_hash: str | None = Field(None, description="SHA-256 hex digest of the channel API key")
+    api_key_prefix: str | None = Field(None, description="First 12 chars of the raw key, for display in the UI")
+    api_key_created_at: datetime | None = Field(None, description="When the key was last generated or rotated")
+
     automation_config: AutomationConfig = Field(default_factory=AutomationConfig)
     last_tasks: dict[str, datetime] = Field(
         default_factory=dict, description="Last run timestamps for various background tasks"

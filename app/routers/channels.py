@@ -8,7 +8,13 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
 from app.database import get_channel_platform, get_db
-from app.dependencies import get_current_profile, verify_api_key
+from app.dependencies import (
+    CHANNEL_API_KEY_PREFIX_LENGTH,
+    generate_channel_api_key,
+    get_current_profile,
+    hash_channel_api_key,
+    verify_api_key,
+)
 from app.logger import get_logger
 from app.models.profile import ProfileInDB
 from app.timezone import now_ist
@@ -1364,3 +1370,94 @@ async def delete_channel(
     await db.competitors.delete_many({"channel_id": channel_id})
 
     return {"ok": True, "channel_id": channel_id, "deleted": True}
+
+
+# ------------------------------------------------------------------
+# Channel API keys  –  scoped credentials for external creator apps
+#
+# All three routes inherit the router-level global ``verify_api_key``
+# dependency, so key management is never reachable with a channel key.
+# ------------------------------------------------------------------
+
+_API_KEY_FIELDS = {"api_key_hash": 1, "api_key_prefix": 1, "api_key_created_at": 1}
+
+
+async def _get_channel_for_key_management(db: AsyncIOMotorDatabase, channel_id: str) -> dict:
+    doc: dict | None = await db.channels.find_one({"channel_id": channel_id}, _API_KEY_FIELDS)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Channel '{channel_id}' not found",
+        )
+    return doc
+
+
+@router.post("/{channel_id}/api-key")
+async def create_channel_api_key(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Generate or rotate the channel's API key.
+
+    The raw key is returned **only** in this response and is never stored —
+    rotating discards the previous hash, so the old key stops working at once.
+    """
+    await _get_channel_for_key_management(db, channel_id)
+
+    raw_key = generate_channel_api_key(channel_id)
+    prefix = raw_key[:CHANNEL_API_KEY_PREFIX_LENGTH]
+    created_at = now_ist()
+
+    await db.channels.update_one(
+        {"channel_id": channel_id},
+        {
+            "$set": {
+                "api_key_hash": hash_channel_api_key(raw_key),
+                "api_key_prefix": prefix,
+                "api_key_created_at": created_at,
+                "updated_at": created_at,
+            }
+        },
+    )
+    logger.info("Issued channel API key for '%s' (prefix %s)", channel_id, prefix)
+
+    return {"raw_key": raw_key, "prefix": prefix, "created_at": created_at}
+
+
+@router.get("/{channel_id}/api-key")
+async def get_channel_api_key_info(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Return key metadata for the settings UI — never the raw key or its hash."""
+    doc = await _get_channel_for_key_management(db, channel_id)
+
+    return {
+        "has_key": bool(doc.get("api_key_hash")),
+        "prefix": doc.get("api_key_prefix"),
+        "created_at": doc.get("api_key_created_at"),
+    }
+
+
+@router.delete("/{channel_id}/api-key")
+async def revoke_channel_api_key(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Revoke the channel's key. External requests start failing with 401 immediately."""
+    await _get_channel_for_key_management(db, channel_id)
+
+    await db.channels.update_one(
+        {"channel_id": channel_id},
+        {
+            "$set": {
+                "api_key_hash": None,
+                "api_key_prefix": None,
+                "api_key_created_at": None,
+                "updated_at": now_ist(),
+            }
+        },
+    )
+    logger.info("Revoked channel API key for '%s'", channel_id)
+
+    return {"ok": True}
