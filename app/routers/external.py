@@ -4,8 +4,8 @@ Every route is protected by ``verify_channel_api_key``, which validates the
 ``X-Channel-Api-Key`` header and confirms the key belongs to the channel_id
 in the path.  A valid key for channel A is rejected on channel B's endpoints.
 
-Scope: upload, list/status, metadata update, schedule, publish.
-Never exposes OAuth tokens, R2 keys, or internal analysis data.
+Scope: capabilities discovery, upload, list/status, metadata update, schedule,
+publish.  Never exposes OAuth tokens, R2 keys, or internal analysis data.
 """
 
 from __future__ import annotations
@@ -88,6 +88,183 @@ class MetadataBody(BaseModel):
     title: str | None = None
     description: str | None = None
     tags: list[str] | None = None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET / — capabilities discovery
+# ──────────────────────────────────────────────────────────────────────────────
+
+_CAPABILITIES: dict[str, Any] = {
+    "api_version": "1.0",
+    "auth": {
+        "header": "X-Channel-Api-Key",
+        "description": (
+            "Pass your channel API key in this header on every request. "
+            "Keys are scoped per-channel — a key for channel A is rejected on channel B."
+        ),
+    },
+    "video_statuses": {
+        "uploading": "File is being stored; analysis not yet started.",
+        "analyzing": "AI analysis (retention scoring, packaging, metadata) is running.",
+        "ready": "Analysis complete; video can be scheduled or published.",
+        "queued": "Scheduled for publishing; awaiting the publish window.",
+        "published": "Live on the platform. Poll for platform_id here.",
+        "failed": "Analysis or publishing failed.",
+    },
+    "endpoints": [
+        {
+            "name": "capabilities",
+            "method": "GET",
+            "path": "/api/v1/ext/{channel_id}/",
+            "description": "Returns this document. Call any time to discover the current API contract.",
+            "auth_required": True,
+            "request": {"headers": {"X-Channel-Api-Key": "string"}},
+            "response": {"api_version": "string", "endpoints": "array"},
+        },
+        {
+            "name": "upload_video",
+            "method": "POST",
+            "path": "/api/v1/ext/{channel_id}/upload",
+            "description": (
+                "Upload a video file. The file is stored immediately and AI analysis "
+                "(retention scoring, auto-packaging, metadata suggestions) is queued "
+                "in the background. Returns a video_id to use in all subsequent calls."
+            ),
+            "auth_required": True,
+            "request": {
+                "content_type": "multipart/form-data",
+                "fields": {
+                    "file": {"type": "file", "required": True, "description": "Video file (mp4 recommended)"},
+                    "title": {"type": "string", "required": False, "description": "Falls back to filename if omitted"},
+                    "description": {"type": "string", "required": False},
+                    "tags": {"type": "string", "required": False, "description": "Comma-separated tags"},
+                    "scheduled_at": {
+                        "type": "string",
+                        "required": False,
+                        "description": "UTC ISO 8601 datetime to auto-schedule on upload, e.g. 2026-08-01T09:00:00Z",
+                    },
+                },
+            },
+            "response": {
+                "ok": "boolean",
+                "video_id": "string — use this in all subsequent calls",
+                "status": "string — initial status, usually 'uploading' or 'analyzing'",
+                "analysis_queued": "boolean",
+            },
+        },
+        {
+            "name": "list_videos",
+            "method": "GET",
+            "path": "/api/v1/ext/{channel_id}/videos",
+            "description": (
+                "List all videos for this channel. Use ?status= to poll for "
+                "analysis completion (status == 'ready') before scheduling."
+            ),
+            "auth_required": True,
+            "request": {
+                "query_params": {
+                    "status": {
+                        "type": "string",
+                        "required": False,
+                        "description": "Filter by status: uploading | analyzing | ready | queued | published | failed",
+                    }
+                }
+            },
+            "response": {
+                "videos": "array of video objects (see video_fields below)",
+            },
+            "video_fields": {
+                "video_id": "string",
+                "title": "string",
+                "description": "string",
+                "tags": "array of strings",
+                "status": "string",
+                "packaging_status": "string — whether AI packaging has run",
+                "scheduled_at": "ISO datetime or null",
+                "published_at": "ISO datetime or null",
+                "created_at": "ISO datetime",
+            },
+        },
+        {
+            "name": "update_metadata",
+            "method": "PATCH",
+            "path": "/api/v1/ext/{channel_id}/videos/{video_id}/metadata",
+            "description": (
+                "Update title, description, or tags. All fields are optional — send "
+                "only what you want to change. Tags is a full replacement, not an append."
+            ),
+            "auth_required": True,
+            "request": {
+                "content_type": "application/json",
+                "body": {
+                    "title": {"type": "string", "required": False},
+                    "description": {"type": "string", "required": False},
+                    "tags": {"type": "array of strings", "required": False, "note": "Full replacement"},
+                },
+            },
+            "response": {"ok": "boolean"},
+        },
+        {
+            "name": "schedule_video",
+            "method": "POST",
+            "path": "/api/v1/ext/{channel_id}/videos/{video_id}/schedule",
+            "description": (
+                "Set a future UTC publish time. Video must be in 'ready' or 'queued' status. "
+                "If already queued, this reschedules it to the new time."
+            ),
+            "auth_required": True,
+            "request": {
+                "content_type": "application/json",
+                "body": {
+                    "scheduled_at": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Future UTC ISO 8601 datetime, e.g. 2026-08-01T09:00:00Z",
+                    }
+                },
+            },
+            "response": {"ok": "boolean", "scheduled_at": "ISO datetime — the confirmed publish time"},
+        },
+        {
+            "name": "publish_now",
+            "method": "POST",
+            "path": "/api/v1/ext/{channel_id}/videos/{video_id}/publish",
+            "description": (
+                "Queue the video for immediate publishing. The background publisher picks it up "
+                "within minutes. Video must be in 'ready' status. "
+                "Poll GET /videos?status=published to confirm and retrieve the platform_id."
+            ),
+            "auth_required": True,
+            "request": {"body": None},
+            "response": {
+                "ok": "boolean",
+                "queued": "boolean",
+                "message": "string — human-readable confirmation",
+            },
+        },
+    ],
+    "error_codes": {
+        "401": "Missing or invalid X-Channel-Api-Key header",
+        "404": "Video not found, or does not belong to this channel",
+        "422": "Validation error — check error detail for the specific field",
+    },
+    "notes": [
+        "All datetimes are UTC ISO 8601.",
+        "OAuth tokens, R2 storage keys, and internal AI analysis data are never returned.",
+        "Publish is asynchronous — poll GET /videos for final status and platform_id.",
+    ],
+}
+
+
+@router.get("/", summary="API capabilities discovery")
+async def get_capabilities(channel_id: str) -> dict[str, Any]:
+    """Returns the full API contract for this channel's external integration.
+
+    Call this endpoint to discover available operations, request/response shapes,
+    video status definitions, and error codes.  The response is versioned — check
+    ``api_version`` on each poll to detect breaking changes automatically.
+    """
+    return {"channel_id": channel_id, **_CAPABILITIES}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
