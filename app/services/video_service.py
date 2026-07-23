@@ -16,6 +16,7 @@ from app.database import (
     get_content_schema_for_prompt,
     update_channel_task_status,
 )
+from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
 from app.services.downloader import (
     download_instagram_media_to_r2,
@@ -1199,7 +1200,7 @@ class VideoService:
     async def _sync_youtube_videos(self, channel_id: str, channel: dict, instructions: str | None) -> dict[str, Any]:
         yt = await self._get_youtube_service(channel_id)
         if not yt:
-            raise ValueError("No YouTube token")
+            raise ChannelNotConnectedError("No YouTube token")
         yt_vids = self._fetch_all_youtube_videos(yt, channel["youtube_channel_id"])
         db_ids = {
             doc["youtube_video_id"]
@@ -1306,7 +1307,7 @@ class VideoService:
     async def _sync_instagram_videos(self, channel_id: str, channel: dict, instructions: str | None) -> dict[str, Any]:
         ig = await self._get_instagram_service(channel_id)
         if not ig:
-            raise ValueError("No Instagram token")
+            raise ChannelNotConnectedError("No Instagram token")
         ig_reels = ig.get_reels(channel["instagram_user_id"])
         db_ids = {
             doc["instagram_media_id"]

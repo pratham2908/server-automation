@@ -422,16 +422,22 @@ class InstagramService:
 
         logger.info("Uploaded video (%d bytes) to %s", file_size, upload_uri[:80])
 
-    def check_container_status(self, container_id: str) -> str:
-        """Poll container processing status.
+    def get_container_status(self, container_id: str) -> tuple[str, str]:
+        """Poll container processing status, with Meta's diagnostic detail.
 
-        Returns the ``status_code`` string (e.g. ``"FINISHED"``,
-        ``"IN_PROGRESS"``, ``"ERROR"``).
+        Returns ``(status_code, status)``. ``status_code`` is the machine
+        state (``FINISHED`` / ``IN_PROGRESS`` / ``ERROR`` / ``EXPIRED``);
+        ``status`` is the human-readable description, which is the only place
+        Meta explains *why* processing failed. Requesting only ``status_code``
+        used to discard that reason, leaving "processing failed (status:
+        ERROR)" with nothing to act on.
         """
-        data = self._get(container_id, {"fields": "status_code"})
-        from typing import cast
+        data = self._get(container_id, {"fields": "status_code,status"})
+        return str(data.get("status_code", "UNKNOWN")), str(data.get("status", ""))
 
-        return cast(str, data.get("status_code", "UNKNOWN"))
+    def check_container_status(self, container_id: str) -> str:
+        """Poll container processing status, returning just the status code."""
+        return self.get_container_status(container_id)[0]
 
     def publish_container(self, ig_user_id: str, container_id: str) -> str:
         """Publish a processed container as a Reel.
@@ -467,11 +473,14 @@ class InstagramService:
         self.upload_video_to_container(uri, file_path)
 
         for _ in range(max_polls):
-            st = self.check_container_status(cid)
+            st, detail = self.get_container_status(cid)
             if st == "FINISHED":
                 break
             if st == "ERROR":
-                raise RuntimeError(f"Instagram container {cid} processing failed")
+                raise RuntimeError(
+                    f"Instagram container {cid} processing failed"
+                    + (f": {detail}" if detail else " (Meta gave no reason)")
+                )
             time.sleep(poll_interval)
         else:
             raise TimeoutError(f"Instagram container {cid} not ready after {max_polls * poll_interval}s")
@@ -512,13 +521,16 @@ class InstagramService:
 
         # 2. Wait for processing
         for i in range(max_polls):
-            st = self.check_container_status(cid)
+            st, detail = self.get_container_status(cid)
             if st == "FINISHED":
                 logger.info("Container %s processing FINISHED", cid)
                 break
             if st == "ERROR":
-                raise RuntimeError(f"Instagram container {cid} processing failed (status: ERROR)")
-            
+                raise RuntimeError(
+                    f"Instagram container {cid} processing failed"
+                    + (f": {detail}" if detail else " (Meta gave no reason)")
+                )
+
             if i % 3 == 0:
                 logger.info("Waiting for container %s processing... (status: %s)", cid, st)
             time.sleep(poll_interval)

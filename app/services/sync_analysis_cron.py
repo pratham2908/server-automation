@@ -20,6 +20,7 @@ from fastapi import HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_channel_platform, update_channel_task_status
+from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
 from app.services.analysis_engine import run_analysis
 from app.services.error_reporting import report_error
@@ -105,6 +106,16 @@ async def run_sync_analysis_for_channel(
             "Auto-sync skipped for '%s': %s",
             channel_id,
             exc.detail,
+        )
+        return result
+    except ChannelNotConnectedError as exc:
+        # Not a fault — the channel needs reconnecting in the UI. Reporting it
+        # would file an identical error-queue entry on every cron run.
+        result["sync"] = f"skipped ({exc})"
+        logger.warning(
+            "Auto-sync skipped for '%s': %s — reconnect the channel to resume",
+            channel_id,
+            exc,
         )
         return result
     except Exception as exc:
