@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     import asyncio
 
+    from app.services.ai_call_logger import bind_ai_logger_db
     from app.services.error_reporting import (
         bind_error_queue_db,
         create_monitored_task,
@@ -62,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
 
     bind_error_queue_db(db)
+    bind_ai_logger_db(db)
     install_loop_exception_handler()
 
     # ---- R2 ----
@@ -233,9 +235,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
                 await task
             except asyncio.CancelledError:
                 pass
+    from app.services.ai_call_logger import bind_ai_logger_db
     from app.services.error_reporting import bind_error_queue_db
 
     bind_error_queue_db(None)
+    bind_ai_logger_db(None)
     await close_db()
     logger.info("Database connection closed")
 

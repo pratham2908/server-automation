@@ -91,6 +91,10 @@ async def connect_db(
     await _db.comment_replies.create_index(
         [("channel_id", 1), ("replied_at", -1)],
     )
+    # AI cost observability — recent-first feed plus per-model/per-task rollups.
+    await _db.ai_call_logs.create_index([("timestamp", -1)])
+    await _db.ai_call_logs.create_index([("task", 1), ("timestamp", -1)])
+    await _db.ai_call_logs.create_index([("model", 1), ("timestamp", -1)])
     await _db.preview_analysis.create_index(
         "expires_at",
         expireAfterSeconds=0,
