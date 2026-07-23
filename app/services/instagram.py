@@ -155,10 +155,7 @@ class InstagramService:
         Paginates through ``/{ig_user_id}/media`` and filters by
         ``media_type`` to keep only video/reel content.
         """
-        fields = (
-            "id,caption,media_type,media_url,thumbnail_url,timestamp,"
-            "permalink,like_count,comments_count"
-        )
+        fields = "id,caption,media_type,media_url,thumbnail_url,timestamp,permalink,like_count,comments_count"
         reels: list[dict[str, Any]] = []
         url: str | None = f"{ig_user_id}/media"
         params: dict = {"fields": fields, "limit": "100"}
@@ -384,12 +381,14 @@ class InstagramService:
             "X-Entity-Type": "video/mp4",
             "Content-Type": "application/octet-stream",
         }
-        
+
         # Some versions of the IG API prefer these simpler headers
-        headers.update({
-            "offset": "0",
-            "file_size": str(file_size),
-        })
+        headers.update(
+            {
+                "offset": "0",
+                "file_size": str(file_size),
+            }
+        )
 
         # Read file into memory to avoid 'Transfer-Encoding: chunked' issues with Instagram
         with open(file_path, "rb") as f:
@@ -403,7 +402,7 @@ class InstagramService:
                 data=binary_data,
                 timeout=600,
             )
-            
+
             if not resp.ok:
                 logger.error("Instagram rupload failed (%d): %s", resp.status_code, resp.text)
                 try:
@@ -411,7 +410,7 @@ class InstagramService:
                     logger.error("Instagram rupload error JSON: %s", json.dumps(error_json))
                 except Exception:
                     pass
-            
+
             resp.raise_for_status()
         except requests.exceptions.HTTPError as e:
             logger.error("HTTP error during Instagram upload: %s", e)
@@ -498,11 +497,11 @@ class InstagramService:
         max_polls: int = 40,
     ) -> str:
         """End-to-end reel publish using a public video URL.
-        
+
         This is often more robust than resumable upload for files already in the cloud.
         """
         import time
-        
+
         # 1. Create container with video_url
         params: dict[str, Any] = {
             "media_type": "REELS",
@@ -516,7 +515,7 @@ class InstagramService:
         cid = data.get("id", "")
         if not cid:
             raise RuntimeError(f"Failed to create media container: {data}")
-            
+
         logger.info("Created Instagram Reel container %s from URL", cid)
 
         # 2. Wait for processing

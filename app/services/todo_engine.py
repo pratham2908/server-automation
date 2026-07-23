@@ -170,5 +170,3 @@ async def update_categories_from_analysis(
             )
 
     logger.success("✅ Category updates complete", extra={"color": "BRIGHT_GREEN"})
-
-

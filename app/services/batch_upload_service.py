@@ -116,38 +116,44 @@ class BatchUploadService:
                 channel_video_ids.append({"channel_id": cid, "video_id": vid_id})
 
             # Track in batch_analysis_queue (status: uploading until confirmed)
-            await self.db.batch_analysis_queue.insert_one({
-                "batch_id": batch_id,
-                "file_id": file_id,
-                "filename": f.get("filename", "video.mp4"),
-                "r2_key": r2_key,
-                "primary_channel_id": primary_channel_id,
-                "channel_video_ids": channel_video_ids,
-                "scheduled_at": scheduled_at,
-                "status": "uploading",
-                "position": len(batch_file_ids) + 1,
-                "message": None,
-                "created_at": now,
-                "started_at": None,
-                "completed_at": None,
-            })
+            await self.db.batch_analysis_queue.insert_one(
+                {
+                    "batch_id": batch_id,
+                    "file_id": file_id,
+                    "filename": f.get("filename", "video.mp4"),
+                    "r2_key": r2_key,
+                    "primary_channel_id": primary_channel_id,
+                    "channel_video_ids": channel_video_ids,
+                    "scheduled_at": scheduled_at,
+                    "status": "uploading",
+                    "position": len(batch_file_ids) + 1,
+                    "message": None,
+                    "created_at": now,
+                    "started_at": None,
+                    "completed_at": None,
+                }
+            )
 
-            uploads.append({
-                "file_id": file_id,
-                "filename": f.get("filename", "video.mp4"),
-                "upload_url": upload_url,
-                "r2_key": r2_key,
-                "channel_video_ids": channel_video_ids,
-            })
+            uploads.append(
+                {
+                    "file_id": file_id,
+                    "filename": f.get("filename", "video.mp4"),
+                    "upload_url": upload_url,
+                    "r2_key": r2_key,
+                    "channel_video_ids": channel_video_ids,
+                }
+            )
             batch_file_ids.append(file_id)
 
         # Store batch record
-        await self.db.batch_uploads.insert_one({
-            "batch_id": batch_id,
-            "primary_channel_id": primary_channel_id,
-            "file_ids": batch_file_ids,
-            "created_at": now,
-        })
+        await self.db.batch_uploads.insert_one(
+            {
+                "batch_id": batch_id,
+                "primary_channel_id": primary_channel_id,
+                "file_ids": batch_file_ids,
+                "created_at": now,
+            }
+        )
 
         return {"batch_id": batch_id, "uploads": uploads}
 
@@ -167,18 +173,20 @@ class BatchUploadService:
             {"status": {"$in": ["queued", "analyzing"]}},
             sort=[("position", -1)],
         )
-        base_position = (last_queued["position"] if last_queued else 0)
+        base_position = last_queued["position"] if last_queued else 0
 
         queued_count = 0
         for idx, file_id in enumerate(confirmed_file_ids):
             result = await self.db.batch_analysis_queue.find_one_and_update(
                 {"batch_id": batch_id, "file_id": file_id, "status": "uploading"},
-                {"$set": {
-                    "status": "queued",
-                    "position": base_position + idx + 1,
-                    "message": f"Queued — position {base_position + idx + 1}",
-                    "updated_at": now,
-                }},
+                {
+                    "$set": {
+                        "status": "queued",
+                        "position": base_position + idx + 1,
+                        "message": f"Queued — position {base_position + idx + 1}",
+                        "updated_at": now,
+                    }
+                },
             )
             if result:
                 # Update video records to "ready" (upload done, waiting for analysis)
@@ -209,14 +217,16 @@ class BatchUploadService:
         for it in items:
             s = it["status"]
             status_counts[s] = status_counts.get(s, 0) + 1
-            serialised.append({
-                "file_id": it["file_id"],
-                "filename": it["filename"],
-                "status": s,
-                "position": it["position"],
-                "message": it.get("message"),
-                "channel_video_ids": it.get("channel_video_ids", []),
-            })
+            serialised.append(
+                {
+                    "file_id": it["file_id"],
+                    "filename": it["filename"],
+                    "status": s,
+                    "position": it["position"],
+                    "message": it.get("message"),
+                    "channel_video_ids": it.get("channel_video_ids", []),
+                }
+            )
 
         return {
             "batch_id": batch_id,
@@ -233,6 +243,7 @@ class BatchUploadService:
 # ------------------------------------------------------------------
 # Sequential analysis worker (singleton, started once in main.py)
 # ------------------------------------------------------------------
+
 
 async def run_batch_analysis_worker(
     db: AsyncIOMotorDatabase,
@@ -367,11 +378,13 @@ async def _process_batch_item(
         # ── 4. Mark complete ─────────────────────────────────────────
         await db.batch_analysis_queue.update_one(
             {"file_id": file_id},
-            {"$set": {
-                "status": "completed",
-                "completed_at": now_ist(),
-                "message": "Analysis complete",
-            }},
+            {
+                "$set": {
+                    "status": "completed",
+                    "completed_at": now_ist(),
+                    "message": "Analysis complete",
+                }
+            },
         )
         logger.success("Batch item %s completed (%s)", file_id, filename)
 

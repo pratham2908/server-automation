@@ -70,7 +70,6 @@ async def run_sync_analysis_for_channel(
     """
     import app.main as main_mod
 
-
     assert main_mod.r2_service is not None
     service = VideoService(
         db=db,
@@ -212,7 +211,6 @@ async def run_sync_analysis_cron(
         if not enabled:
             logger.info("Sync-analysis cron: disabled via config — skipping this cycle")
             continue
-
 
         try:
             metrics_service.track_task_start("sync_analysis")

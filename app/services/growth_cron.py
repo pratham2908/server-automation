@@ -1,7 +1,7 @@
 """Background cron loop for daily channel growth snapshots.
 
 Runs every 24 hours (configurable via ``growth_tracking_config``
-in the ``config`` collection).  Iterates over all channels, 
+in the ``config`` collection).  Iterates over all channels,
 fetches current stats, and records a snapshot.
 """
 
@@ -48,7 +48,6 @@ async def run_growth_tracking_cron(
 
     while True:
         try:
-
             metrics_service.track_task_start("growth_tracking")
 
             channels = await db.channels.find(not_paused_query()).to_list(length=None)

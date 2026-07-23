@@ -181,10 +181,11 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
     # Log summary per channel as requested
     from collections import defaultdict
+
     channel_counts: dict[str, int] = defaultdict(int)
     for entry in queued_entries:
         channel_counts[entry.get("channel_id", "unknown")] += 1
-    
+
     for cid, count in channel_counts.items():
         logger.info("[YouTube] Found %d videos to upload to channel %s", count, cid)
 
@@ -205,7 +206,9 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
 
         video_doc = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video_doc:
-            logger.warning("[YouTube] Video '%s' for channel '%s' not found — removing stale entry", video_id, channel_id)
+            logger.warning(
+                "[YouTube] Video '%s' for channel '%s' not found — removing stale entry", video_id, channel_id
+            )
             await db.schedule_queue.delete_one({"_id": entry["_id"]})
             continue
 
