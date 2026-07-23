@@ -104,13 +104,22 @@ _CAPABILITIES: dict[str, Any] = {
         ),
     },
     "video_statuses": {
-        "uploading": "File is being stored; analysis not yet started.",
-        "analyzing": "AI analysis (retention scoring, packaging, metadata) is running.",
-        "ready": "Analysis complete; video can be scheduled or published.",
+        "ready": "File stored; AI analysis may still be running (check packaging_status).",
         "queued": "Scheduled for publishing; awaiting the publish window.",
-        "published": "Live on the platform. Poll for platform_id here.",
-        "failed": "Analysis or publishing failed.",
+        "published": "Live on the platform.",
+        "failed": "Publishing failed.",
+        "scheduled": "Queued for a specific publish time (Instagram only).",
     },
+    "packaging_status": {
+        "analyzing": "AI analysis (retention scoring, title/description/tag suggestions) is in progress.",
+        "completed": "AI analysis finished. The video is ready to schedule or publish.",
+        "failed": "AI analysis failed. The video can still be published with its original metadata.",
+        "(absent)": "Analysis has not started yet — poll again in a moment.",
+    },
+    "analysis_polling": (
+        "After upload, poll GET /videos/{video_id} every 5-10 seconds until "
+        "packaging_status == 'completed'. That signals AI analysis is fully done."
+    ),
     "endpoints": [
         {
             "name": "capabilities",
@@ -232,7 +241,7 @@ _CAPABILITIES: dict[str, Any] = {
             "description": (
                 "Queue the video for immediate publishing. The background publisher picks it up "
                 "within minutes. Video must be in 'ready' status. "
-                "Poll GET /videos?status=published to confirm and retrieve the platform_id."
+                "Poll GET /videos/{video_id} for final status and platform_id."
             ),
             "auth_required": True,
             "request": {"body": None},
@@ -240,6 +249,35 @@ _CAPABILITIES: dict[str, Any] = {
                 "ok": "boolean",
                 "queued": "boolean",
                 "message": "string — human-readable confirmation",
+            },
+        },
+        {
+            "name": "get_video",
+            "method": "GET",
+            "path": "/api/v1/ext/{channel_id}/videos/{video_id}",
+            "description": (
+                "Fetch a single video by its video_id. Use this to poll packaging_status "
+                "after upload without fetching the full video list."
+            ),
+            "auth_required": True,
+            "request": {},
+            "response": "video object (same fields as list_videos entries)",
+        },
+        {
+            "name": "sync",
+            "method": "POST",
+            "path": "/api/v1/ext/{channel_id}/sync",
+            "description": (
+                "Pull the latest platform metrics (views, likes, comments) for this channel's "
+                "published videos from YouTube or Instagram. Runs in the background — "
+                "returns immediately with a confirmation. Wait a few seconds, then "
+                "call GET /videos to see refreshed data."
+            ),
+            "auth_required": True,
+            "request": {"body": None},
+            "response": {
+                "ok": "boolean",
+                "message": "string — confirmation that sync was queued",
             },
         },
     ],
@@ -476,5 +514,89 @@ async def publish_video(
     return {
         "ok": True,
         "queued": True,
-        "message": "Queued for immediate publishing. Poll GET /videos to confirm status == 'published' and retrieve the platform_id.",
+        "message": "Queued for immediate publishing. Poll GET /videos/{video_id} to confirm status == 'published' and retrieve the platform_id.",
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET /videos/{video_id}
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/videos/{video_id}")
+async def get_video(
+    channel_id: str,
+    video_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> dict[str, Any]:
+    """Fetch a single video by its video_id.
+
+    Use this to efficiently poll ``packaging_status`` after upload without
+    fetching the full video list. Poll every 5–10 seconds until
+    ``packaging_status == "completed"`` — that signals AI analysis is done
+    and the video is ready to schedule or publish.
+    """
+    video = await db.videos.find_one(
+        {"channel_id": channel_id, "video_id": video_id},
+        {"retention": 0, "performance": 0},
+    )
+    if not video:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Video '{video_id}' not found")
+    return _public_video(video)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /sync
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/sync")
+async def sync_channel(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> dict[str, Any]:
+    """Trigger a platform metrics sync for this channel.
+
+    Pulls the latest views, likes, and comments from YouTube or Instagram for
+    all published videos and updates the local records. Runs in the background
+    — returns immediately. Wait a few seconds, then call ``GET /videos`` to see
+    refreshed data.
+    """
+    import asyncio
+
+    import app.main as main_mod
+    from app.services.sync_analysis_cron import run_sync_analysis_for_channel
+
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Channel '{channel_id}' not found")
+
+    if not main_mod.gemini_service:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI service not available — try again shortly",
+        )
+
+    config = await db.config.find_one({"key": "sync_analysis_config"})
+    threshold = (config or {}).get("analysis_threshold", 5)
+
+    async def _run():
+        try:
+            await run_sync_analysis_for_channel(
+                channel_id=channel_id,
+                channel=channel,
+                db=db,
+                youtube_service_manager=main_mod.youtube_service_manager,
+                instagram_service_manager=main_mod.instagram_service_manager,
+                gemini_service=main_mod.gemini_service,
+                analysis_threshold=threshold,
+            )
+        except Exception as exc:
+            logger.warning("Background sync failed for channel %s: %s", channel_id, exc)
+
+    asyncio.create_task(_run())
+
+    return {
+        "ok": True,
+        "message": "Sync started in the background. Call GET /videos in a few seconds to see refreshed metrics.",
     }
