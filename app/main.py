@@ -275,6 +275,7 @@ from app.routers import (
     content_intelligence,
     discovery,
     errors,
+    external,
     growth,
     observability,
     preview_analysis,
@@ -289,6 +290,7 @@ from app.routers import (
 
 app.include_router(auth.router)
 app.include_router(channels.router)
+app.include_router(external.router)
 app.include_router(errors.router)
 app.include_router(videos.router)
 app.include_router(batch_upload.router)
