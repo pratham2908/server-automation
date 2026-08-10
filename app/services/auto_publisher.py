@@ -15,6 +15,7 @@ from typing import Any
 from app.database import is_channel_paused, update_channel_task_status
 from app.logger import get_logger
 from app.services.errors import get_error_service
+from app.services.publish_failure import build_failure_marker
 from app.services.schedule_operation import _build_instagram_caption
 from app.timezone import now_ist
 
@@ -114,7 +115,8 @@ async def _publish_one_reel(
         )
         if attempts >= _MAX_PUBLISH_ATTEMPTS:
             logger.error(
-                "[Instagram] Giving up on video '%s' for channel '%s' after %d attempts — marking failed",
+                "[Instagram] Giving up on video '%s' for channel '%s' after %d attempts — "
+                "bouncing back to ready with a failure marker",
                 video_id,
                 channel_id,
                 _MAX_PUBLISH_ATTEMPTS,
@@ -122,7 +124,19 @@ async def _publish_one_reel(
             await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
             await db.videos.update_one(
                 {"channel_id": channel_id, "video_id": video_id},
-                {"$set": {"status": "ready", "updated_at": now_ist()}},
+                {
+                    "$set": {
+                        "status": "ready",
+                        "updated_at": now_ist(),
+                        # Marks this as a bounced-back "ready" (see publish_failure).
+                        "last_failure": build_failure_marker(
+                            stage="publish",
+                            platform="instagram",
+                            attempts=attempts,
+                            exc=e,
+                        ),
+                    }
+                },
             )
         else:
             await db.schedule_queue.update_one(

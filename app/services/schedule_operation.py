@@ -112,7 +112,10 @@ async def enqueue_video_for_youtube(
                     "status": "queued",
                     "scheduled_at": scheduled_at,
                     "updated_at": now,
-                }
+                },
+                # A successful (re)schedule clears any prior bounce marker, so a
+                # video that failed before but schedules cleanly is fresh again.
+                "$unset": {"last_failure": ""},
             },
         )
 
@@ -171,7 +174,10 @@ async def schedule_single_video_instagram(
                     "status": "queued",
                     "scheduled_at": scheduled_at,
                     "updated_at": now,
-                }
+                },
+                # A successful (re)schedule clears any prior bounce marker, so a
+                # video that failed before but schedules cleanly is fresh again.
+                "$unset": {"last_failure": ""},
             },
         )
 
