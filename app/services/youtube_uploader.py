@@ -17,6 +17,7 @@ from typing import Any
 
 from app.logger import get_logger
 from app.services.errors import get_error_service
+from app.services.publish_failure import build_failure_marker
 from app.timezone import UTC, now_ist
 
 logger = get_logger(__name__)
@@ -136,6 +137,14 @@ async def _upload_one_video(
                         "status": "ready",
                         "scheduled_at": None,
                         "updated_at": now,
+                        # Distinguishes this bounced-back "ready" from a freshly
+                        # produced one so the UI can flag it for attention.
+                        "last_failure": build_failure_marker(
+                            stage="upload",
+                            platform="youtube",
+                            attempts=attempts,
+                            exc=e,
+                        ),
                     }
                 },
             )

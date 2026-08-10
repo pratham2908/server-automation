@@ -258,6 +258,19 @@ async def update_video_status(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@router.post("/{video_id}/dismiss-failure")
+async def dismiss_video_failure(
+    channel_id: str,
+    video_id: str,
+    service: VideoService = Depends(get_video_service),
+):
+    """Clear a bounced-back video's failure marker; it stays ready."""
+    try:
+        return await service.dismiss_failure(channel_id, video_id)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
 @router.patch("/{video_id}/category")
 async def change_video_category(
     channel_id: str,

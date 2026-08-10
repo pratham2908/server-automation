@@ -286,10 +286,30 @@ class VideoService:
                 )
         if new_status == "published":
             update_fields["published_at"] = now_ist()
-        await self.db.videos.update_one({"_id": video["_id"]}, {"$set": update_fields})
+        # A bounce marker only describes the current ready state; any manual move
+        # off it (or onto a fresh ready) makes the marker stale, so drop it.
+        await self.db.videos.update_one(
+            {"_id": video["_id"]},
+            {"$set": update_fields, "$unset": {"last_failure": ""}},
+        )
         if video.get("category") and (new_status == "published" or old_status == "published"):
             await recompute_category(channel_id, video["category"], self.db)
         return {"ok": True, "video_id": video_id, "status": new_status}
+
+    async def dismiss_failure(self, channel_id: str, video_id: str) -> dict[str, Any]:
+        """Clear a video's ``last_failure`` marker without changing its status.
+
+        Acknowledges a bounced-back video: it stays ``ready`` and moves out of the
+        "needs attention" group. Idempotent — a video with no marker still returns ok.
+        """
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+        if not video:
+            raise ValueError(f"Video {video_id} not found")
+        await self.db.videos.update_one(
+            {"channel_id": channel_id, "video_id": video_id},
+            {"$set": {"updated_at": now_ist()}, "$unset": {"last_failure": ""}},
+        )
+        return {"ok": True, "video_id": video_id}
 
     async def change_video_category(
         self, channel_id: str, video_id: str, old_cat_id: str, new_cat_id: str
