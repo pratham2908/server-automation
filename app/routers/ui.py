@@ -341,6 +341,33 @@ async def get_log_viewer():
             ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
             ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
+            @keyframes conn-pulse {
+                0%, 100% { opacity: 0.3; transform: scale(1); }
+                50% { opacity: 1; transform: scale(1.2); }
+            }
+            .connecting-state {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 1rem;
+                height: 100%;
+                min-height: 200px;
+                color: #64748b;
+                font-size: 0.8rem;
+            }
+            .connecting-dots {
+                display: flex;
+                gap: 6px;
+            }
+            .connecting-dots span {
+                width: 7px; height: 7px; border-radius: 50%;
+                background: #38bdf8;
+                animation: conn-pulse 1.2s ease-in-out infinite;
+            }
+            .connecting-dots span:nth-child(2) { animation-delay: 0.2s; }
+            .connecting-dots span:nth-child(3) { animation-delay: 0.4s; }
+
             .toolbar {
                 padding: 0.75rem 2rem;
                 background: rgba(30, 41, 59, 0.6);
@@ -704,7 +731,14 @@ async def get_log_viewer():
         </div>
 
         <div class="main-layout">
-            <main id="log-container"></main>
+            <main id="log-container">
+                <div class="connecting-state" id="log-connecting-state">
+                    <div class="connecting-dots">
+                        <span></span><span></span><span></span>
+                    </div>
+                    <div>Connecting to live log stream&hellip;</div>
+                </div>
+            </main>
             
             <aside id="error-queue">
                 <div class="queue-header">
@@ -1246,6 +1280,8 @@ async def get_log_viewer():
                 
                 eventSource.onmessage = (event) => {
                     const line = event.data;
+                    const connState = document.getElementById('log-connecting-state');
+                    if (connState) connState.remove();
                     const logEntry = formatLogLine(line);
                     if (logEntry) {
                         logContainer.insertAdjacentHTML('beforeend', logEntry);
@@ -1267,6 +1303,15 @@ async def get_log_viewer():
                     connectionStatus.textContent = 'Reconnecting...';
                     statusDot.className = 'status-dot error';
                     statusDot.style.opacity = '0.5';
+                    // Show connecting state again if log container is empty
+                    if (!logContainer.querySelector('.log-entry-collapsible')) {
+                        if (!document.getElementById('log-connecting-state')) {
+                            logContainer.innerHTML = `<div class="connecting-state" id="log-connecting-state">
+                                <div class="connecting-dots"><span></span><span></span><span></span></div>
+                                <div>Reconnecting to log stream&hellip;</div>
+                            </div>`;
+                        }
+                    }
                 };
             }
 
@@ -1323,7 +1368,7 @@ async def stream_logs():
                 "automation-server",
                 "-f",
                 "-n",
-                "50",
+                "20",
                 "-o",
                 "json",
                 stdout=asyncio.subprocess.PIPE,

@@ -259,6 +259,40 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
             ::-webkit-scrollbar { width: 6px; height: 6px; }
             ::-webkit-scrollbar-track { background: transparent; }
             ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+
+            @keyframes shimmer {
+                0% { background-position: 200% 0; }
+                100% { background-position: -200% 0; }
+            }
+            @keyframes pulse-glow {
+                0%, 100% { opacity: 0.35; }
+                50% { opacity: 0.7; }
+            }
+            .skel {
+                display: inline-block;
+                background: linear-gradient(90deg, rgba(255,255,255,0.06) 25%, rgba(255,255,255,0.13) 50%, rgba(255,255,255,0.06) 75%);
+                background-size: 200% 100%;
+                animation: shimmer 1.4s ease-in-out infinite;
+                border-radius: 5px;
+                height: 0.85em;
+                width: 64px;
+                vertical-align: middle;
+                color: transparent;
+            }
+            .log-connecting {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                color: var(--text-secondary);
+                font-size: 0.8rem;
+                padding: 0.5rem 0;
+            }
+            .log-connecting .dot-pulse {
+                width: 8px; height: 8px; border-radius: 50%;
+                background: var(--primary);
+                animation: pulse-glow 1s ease-in-out infinite;
+                flex-shrink: 0;
+            }
         </style>
     </head>
     <body>
@@ -283,42 +317,42 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                     <div class="stat-title">Requests</div>
                     <div class="stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg></div>
                 </div>
-                <div id="total-requests" class="stat-value" style="font-size: 1.5rem">0</div>
+                <div id="total-requests" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
             <div class="card">
                 <div class="stat-header">
                     <div class="stat-title">Srv Latency</div>
                     <div class="stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
                 </div>
-                <div id="avg-latency" class="stat-value" style="font-size: 1.5rem">0ms</div>
+                <div id="avg-latency" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
             <div class="card">
                 <div class="stat-header">
                     <div class="stat-title">Err Rate</div>
                     <div class="stat-icon" style="color: var(--error)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path></svg></div>
                 </div>
-                <div id="error-rate" class="stat-value" style="font-size: 1.5rem">0.0%</div>
+                <div id="error-rate" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
             <div class="card">
                 <div class="stat-header">
                     <div class="stat-title">AI Calls</div>
                     <div class="stat-icon" style="color: var(--ai-purple)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2Z"></path></svg></div>
                 </div>
-                <div id="ai-total-calls" class="stat-value" style="font-size: 1.5rem">0</div>
+                <div id="ai-total-calls" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
             <div class="card">
                 <div class="stat-header">
                     <div class="stat-title">AI Latency</div>
                     <div class="stat-icon" style="color: var(--ai-purple)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="12 6 12 12 16 14"></polyline></svg></div>
                 </div>
-                <div id="ai-avg-latency" class="stat-value" style="font-size: 1.5rem">0ms</div>
+                <div id="ai-avg-latency" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
             <div class="card">
                 <div class="stat-header">
                     <div class="stat-title">AI Err Rate</div>
                     <div class="stat-icon" style="color: var(--error)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></div>
                 </div>
-                <div id="ai-error-rate" class="stat-value" style="font-size: 1.5rem">0.0%</div>
+                <div id="ai-error-rate" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
 
             <!-- External Platforms -->
@@ -327,21 +361,21 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                     <div class="stat-title">Platform Calls</div>
                     <div class="stat-icon" style="color: var(--accent)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg></div>
                 </div>
-                <div id="ext-total-calls" class="stat-value" style="font-size: 1.5rem">0</div>
+                <div id="ext-total-calls" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
             <div class="card">
                 <div class="stat-header">
                     <div class="stat-title">Ext Latency</div>
                     <div class="stat-icon" style="color: var(--accent)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="12 6 12 12 16 14"></polyline></svg></div>
                 </div>
-                <div id="ext-avg-latency" class="stat-value" style="font-size: 1.5rem">0ms</div>
+                <div id="ext-avg-latency" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
             <div class="card">
                 <div class="stat-header">
                     <div class="stat-title">Ext Err Rate</div>
                     <div class="stat-icon" style="color: var(--error)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></div>
                 </div>
-                <div id="ext-error-rate" class="stat-value" style="font-size: 1.5rem">0.0%</div>
+                <div id="ext-error-rate" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
 
             <div class="card">
@@ -349,14 +383,14 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                     <div class="stat-title">Active Workers</div>
                     <div class="stat-icon" style="color: var(--success)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></div>
                 </div>
-                <div id="active-tasks" class="stat-value" style="font-size: 1.5rem">0</div>
+                <div id="active-tasks" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
             <div class="card">
                 <div class="stat-header">
                     <div class="stat-title">DB Documents</div>
                     <div class="stat-icon" style="color: var(--accent)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg></div>
                 </div>
-                <div id="total-documents" class="stat-value" style="font-size: 1.5rem">0</div>
+                <div id="total-documents" class="stat-value" style="font-size: 1.5rem"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
             </div>
 
             <!-- Resource Usage -->
@@ -451,19 +485,19 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                 <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-top: 1.5rem">
                     <div style="background: rgba(255,255,255,0.03); padding: 1.25rem; border-radius: 0.75rem; text-align: center">
                         <div style="color: var(--text-secondary); font-size: 0.7rem; text-transform: uppercase">Channels</div>
-                        <div id="count-channels" style="font-size: 1.75rem; font-weight: 800; color: var(--primary)">0</div>
+                        <div id="count-channels" style="font-size: 1.75rem; font-weight: 800; color: var(--primary)"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
                     </div>
                     <div style="background: rgba(255,255,255,0.03); padding: 1.25rem; border-radius: 0.75rem; text-align: center">
                         <div style="color: var(--text-secondary); font-size: 0.7rem; text-transform: uppercase">Videos</div>
-                        <div id="count-videos" style="font-size: 1.75rem; font-weight: 800; color: var(--success)">0</div>
+                        <div id="count-videos" style="font-size: 1.75rem; font-weight: 800; color: var(--success)"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
                     </div>
                     <div style="background: rgba(255,255,255,0.03); padding: 1.25rem; border-radius: 0.75rem; text-align: center">
                         <div style="color: var(--text-secondary); font-size: 0.7rem; text-transform: uppercase">Categories</div>
-                        <div id="count-categories" style="font-size: 1.75rem; font-weight: 800; color: var(--accent)">0</div>
+                        <div id="count-categories" style="font-size: 1.75rem; font-weight: 800; color: var(--accent)"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
                     </div>
                     <div style="background: rgba(255,255,255,0.03); padding: 1.25rem; border-radius: 0.75rem; text-align: center">
                         <div style="color: var(--text-secondary); font-size: 0.7rem; text-transform: uppercase">Analyses</div>
-                        <div id="count-history" style="font-size: 1.75rem; font-weight: 800; color: var(--warning)">0</div>
+                        <div id="count-history" style="font-size: 1.75rem; font-weight: 800; color: var(--warning)"><span class="skel">&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
                     </div>
                 </div>
             </div>
@@ -485,7 +519,9 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
         + """" style="color: var(--primary); font-size: 0.75rem; font-weight: 700; text-decoration: none">View Full Logs →</a>
                 </div>
                 <div id="log-feed" class="log-content">
-                    <div class="log-line">_ Connecting to system socket...</div>
+                    <div class="log-connecting" id="log-connecting-msg">
+                        <span class="dot-pulse"></span> Connecting to live system feed...
+                    </div>
                 </div>
             </div>
         </div>
@@ -536,7 +572,10 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
 
             function safeSet(id, value) {
                 const el = document.getElementById(id);
-                if (el) el.textContent = value;
+                if (el) {
+                    el.innerHTML = '';
+                    el.textContent = value;
+                }
             }
 
             function safeStyle(id, prop, value) {
@@ -694,7 +733,10 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                 eventSource.onmessage = (event) => {
                     const line = event.data;
                     if (line.includes('REQUEST_BOX')) return; // Skip box logs in tiny view
-                    
+
+                    const connMsg = document.getElementById('log-connecting-msg');
+                    if (connMsg) connMsg.remove();
+
                     const el = document.createElement('div');
                     el.className = 'log-line';
                     
@@ -714,7 +756,7 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
                 initChart();
                 initLogs();
                 fetchData();
-                setInterval(fetchData, 2000); // 2s refresh
+                setInterval(fetchData, 8000); // 8s refresh
             };
         </script>
     </body>
@@ -725,16 +767,19 @@ async def get_dashboard(api_key: str = Depends(verify_api_key)):
 
 
 @router.get("/api/v1/observability/metrics")
-async def get_metrics_api(api_key: str = Depends(verify_api_key)):
+async def get_metrics_api(_api_key: str = Depends(verify_api_key)):
     """Returns detailed metrics for the dashboard, including database stats."""
+    import asyncio
+
     db = get_db()
 
-    counts = {
-        "channels": await db.channels.count_documents({}),
-        "videos": await db.videos.count_documents({}),
-        "categories": await db.categories.count_documents({}),
-        "history": await db.analysis_history.count_documents({}),
-    }
+    channels, videos, categories, history = await asyncio.gather(
+        db.channels.count_documents({}),
+        db.videos.count_documents({}),
+        db.categories.count_documents({}),
+        db.analysis_history.count_documents({}),
+    )
+    counts = {"channels": channels, "videos": videos, "categories": categories, "history": history}
 
     summary = metrics_service.get_summary()
     summary["database"] = counts
