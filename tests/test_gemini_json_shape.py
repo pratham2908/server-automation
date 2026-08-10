@@ -53,3 +53,32 @@ def test_type_error_is_handled_by_call_sites():
     for bad in ("[]", "null", "42"):
         with pytest.raises((json.JSONDecodeError, TypeError)):
             _loads_json_object(bad)
+
+
+class TestLenientParsing:
+    """Regression cover for 'Failed to parse Gemini analysis response' — the
+    model wraps JSON in markdown fences or surrounding prose."""
+
+    def test_strips_json_fence(self):
+        assert _loads_json_object('```json\n{"a": 1}\n```') == {"a": 1}
+
+    def test_strips_bare_fence(self):
+        assert _loads_json_object('```\n{"a": 1}\n```') == {"a": 1}
+
+    def test_extracts_object_from_surrounding_prose(self):
+        assert _loads_json_object('Here is the analysis:\n{"a": 1}\nHope that helps') == {"a": 1}
+
+    def test_fenced_array(self):
+        assert _loads_json_array('```json\n[{"x": 2}]\n```') == [{"x": 2}]
+
+    def test_plain_json_still_parses(self):
+        assert _loads_json_object('{"a": 1}') == {"a": 1}
+
+    def test_shape_guard_survives_leniency(self):
+        # A fenced array is still not a valid object.
+        with pytest.raises(TypeError, match="expected a JSON object"):
+            _loads_json_object("```json\n[1, 2]\n```")
+
+    def test_unrecoverable_still_raises_decode_error(self):
+        with pytest.raises(json.JSONDecodeError):
+            _loads_json_object("this is not json at all")

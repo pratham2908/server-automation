@@ -6,6 +6,7 @@ Uses the ``google-genai`` SDK to interact with the Gemini API.
 """
 
 import json
+import re
 from typing import Any
 
 from google import genai
@@ -42,7 +43,7 @@ def _loads_json_object(text: str) -> dict[str, Any]:
     already handles it alongside ``json.JSONDecodeError``, so each keeps its
     own logging and error message.
     """
-    parsed = json.loads(text)
+    parsed = _lenient_json_loads(text, "{", "}")
     if not isinstance(parsed, dict):
         raise TypeError(f"expected a JSON object, got {type(parsed).__name__}")
     return parsed
@@ -55,10 +56,29 @@ def _loads_json_array(text: str) -> list[dict[str, Any]]:
     list; without it a JSON object would be iterated as bare key strings
     downstream.
     """
-    parsed = json.loads(text)
+    parsed = _lenient_json_loads(text, "[", "]")
     if not isinstance(parsed, list):
         raise TypeError(f"expected a JSON array, got {type(parsed).__name__}")
     return parsed
+
+
+def _lenient_json_loads(text: str, open_ch: str, close_ch: str):
+    """json.loads tolerant of the markdown fences and stray prose Gemini
+    sometimes adds. Parse the de-fenced text first; on failure fall back to
+    the outermost open_ch..close_ch span. Raises JSONDecodeError if neither
+    is valid, so call sites keep their existing (JSONDecodeError, TypeError)
+    handling."""
+    s = text.strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*", "", s)
+        s = re.sub(r"\s*```$", "", s).strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        start, end = s.find(open_ch), s.rfind(close_ch)
+        if start != -1 and end > start:
+            return json.loads(s[start : end + 1])
+        raise
 
 
 class GeminiService:

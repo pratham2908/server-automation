@@ -50,6 +50,26 @@ async def _publish_one_reel(
 
     tmp_path = None
     try:
+        # See youtube_uploader: a missing R2 object is permanent, so Meta's
+        # 2207076 'media upload failed' would just repeat. Fail once instead.
+        if not r2_service.file_exists(r2_key):
+            logger.error(
+                "[Instagram] R2 object '%s' missing for video '%s' — marking failed, not retrying",
+                r2_key,
+                video_id,
+            )
+            await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
+            await db.videos.update_one(
+                {"channel_id": channel_id, "video_id": video_id},
+                {"$set": {"status": "ready", "failure_reason": "source_file_missing", "updated_at": now_ist()}},
+            )
+            await get_error_service(db).log_error(
+                feature="Instagram Auto-Publisher",
+                message=f"Source file missing in R2 for '{video_doc.get('title', video_id)}' — cannot publish",
+                context={"video_id": video_id, "channel_id": channel_id, "r2_key": r2_key},
+            )
+            return False
+
         caption = _build_instagram_caption(video_doc)
 
         # Instead of downloading locally, generate a presigned URL and let Meta fetch it.

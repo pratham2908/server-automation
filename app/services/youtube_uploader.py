@@ -64,6 +64,28 @@ async def _upload_one_video(
 
     tmp_path = None
     try:
+        # A missing R2 object is permanent: retrying (and this video
+        # re-queues itself afterwards) never brings the file back.
+        # file_exists() returns False only on a definitive 404; transient
+        # R2 errors raise and fall through to the normal retry path.
+        if not r2_service.file_exists(r2_key):
+            logger.error(
+                "[YouTube] R2 object '%s' missing for video '%s' — marking failed, not retrying",
+                r2_key,
+                video_id,
+            )
+            await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
+            await db.videos.update_one(
+                {"channel_id": channel_id, "video_id": video_id},
+                {"$set": {"status": "ready", "failure_reason": "source_file_missing", "updated_at": now_ist()}},
+            )
+            await get_error_service(db).log_error(
+                feature="YouTube Uploader",
+                message=f"Source file missing in R2 for '{video_doc.get('title', video_id)}' — cannot upload",
+                context={"video_id": video_id, "channel_id": channel_id, "r2_key": r2_key},
+            )
+            return False
+
         tmp_path = r2_service.download_video(r2_key)
 
         yt_id = youtube_service.upload_video(
