@@ -33,6 +33,11 @@ DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 100
 REQUEST_TIMEOUT_S = 30.0
 
+# The import callback is idempotent, so retrying a transient failure is free. A
+# permanently missed callback risks a duplicate later, which is worth a few tries.
+NOTIFY_ATTEMPTS = 3
+NOTIFY_BACKOFF_S = 2.0
+
 # Queue of source_imports._id values awaiting transfer, drained by the import
 # worker. Mirrors the batch_upload_service pattern.
 _import_queue: asyncio.Queue[str] | None = None
@@ -169,6 +174,54 @@ class VideoSourceService:
         # The detail endpoint may return the video bare or wrapped; accept both
         # so a harmless shape difference between apps is not a hard failure.
         return data.get("video", data)  # type: ignore
+
+    async def notify_imported(
+        self,
+        source: dict[str, Any],
+        render_id: str,
+        our_video_id: str,
+    ) -> str | None:
+        """Tell the app we ingested *render_id*, closing the pull-model loop.
+
+        Without this the app still believes the render was never delivered and may
+        later push it through the external upload API, producing a second copy of
+        a video we already hold — our own dedup cannot catch that, because a push
+        carries no ``source_video_id``.
+
+        The endpoint is idempotent, so transient failures are retried. Returns None
+        on success, or a description of the failure; raising is left to the caller
+        so a bad callback never destroys an otherwise-good import.
+        """
+        path = source.get("mark_imported_path", "/api/ext/videos/{id}/imported")
+        if not path:
+            return None
+
+        url = f"{source['base_url']}{path.replace('{id}', render_id)}"
+        headers = {**auth_headers(source), "Content-Type": "application/json"}
+        payload = {"externalVideoId": our_video_id}
+
+        last_error = "unknown error"
+        for attempt in range(1, NOTIFY_ATTEMPTS + 1):
+            try:
+                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
+
+                if resp.status_code < 300:
+                    return None
+
+                # 404 means the app does not know this render and 401 means our key
+                # is wrong; neither improves by trying again.
+                if resp.status_code in (401, 403, 404):
+                    return f"HTTP {resp.status_code} — {resp.text[:150].strip()}"
+
+                last_error = f"HTTP {resp.status_code} — {resp.text[:150].strip()}"
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                last_error = describe_http_error(exc)
+
+            if attempt < NOTIFY_ATTEMPTS:
+                await asyncio.sleep(NOTIFY_BACKOFF_S * attempt)
+
+        return f"{last_error} (after {NOTIFY_ATTEMPTS} attempts)"
 
     # ------------------------------------------------------------------
     # Connection test
@@ -366,6 +419,8 @@ class VideoSourceService:
                     "status": "queued",
                     "message": "Waiting to transfer",
                     "size_bytes": None,
+                    "notified_at": None,
+                    "notify_error": None,
                     "created_at": now,
                     "started_at": None,
                     "completed_at": None,
@@ -393,7 +448,7 @@ class VideoSourceService:
             .to_list(length=limit)
         )
         for d in docs:
-            for field in ("created_at", "started_at", "completed_at"):
+            for field in ("created_at", "started_at", "completed_at", "notified_at"):
                 if d.get(field) is not None:
                     d[field] = d[field].isoformat()
         return docs

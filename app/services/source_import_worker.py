@@ -145,10 +145,41 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
             {"$set": {"status": "ready", "updated_at": now_ist()}},
         )
 
-        # ── 5. Hand off to the existing analysis pipeline ───────────────
+        # ── 5. Close the pull loop with the app ─────────────────────────
+        # Deliberately fired on ingest, not after analysis: we hold the file now,
+        # and analysis can fail or be retried for reasons that have nothing to do
+        # with delivery. Waiting for it would leave the app believing the render
+        # was never delivered, inviting a duplicate push.
+        notify_error = await service.notify_imported(source, source_video_id, video_id)
+        if notify_error:
+            # Non-fatal — the video really is here. But a missed callback means the
+            # app may push this render later and duplicate it, so make it loud.
+            logger.warning("Import callback failed for render %s: %s", source_video_id, notify_error)
+            await report_error(
+                feature="Source import callback",
+                message=(
+                    f"Ingested render '{source_video_id}' but could not notify the app: {notify_error}. "
+                    f"The app may re-deliver it and create a duplicate of video {video_id}."
+                ),
+                exception=None,
+                context={
+                    "job_id": job_id,
+                    "source_id": source_id,
+                    "source_video_id": source_video_id,
+                    "video_id": video_id,
+                },
+            )
+        await db.source_imports.update_one(
+            {"job_id": job_id},
+            {"$set": {"notified_at": None if notify_error else now_ist(), "notify_error": notify_error}},
+        )
+
+        # ── 6. Hand off to the existing analysis pipeline ───────────────
         if job.get("analyze", True):
             await _enqueue_for_analysis(db, job)
             message = "Imported — queued for AI analysis"
+            if notify_error:
+                message += " (app not notified)"
         else:
             await db.videos.update_one(
                 {"video_id": video_id},

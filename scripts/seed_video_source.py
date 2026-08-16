@@ -48,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--auth-style", default="bearer", choices=["bearer", "api_key_header"])
     p.add_argument("--list-path", default="/api/ext/videos")
     p.add_argument("--detail-path", default="/api/ext/videos/{id}")
+    p.add_argument(
+        "--mark-imported-path",
+        default="/api/ext/videos/{id}/imported",
+        help="POSTed after ingest to close the pull loop; pass '' for an app without it",
+    )
     p.add_argument("--disabled", action="store_true", help="Register but hide from the import UI")
     p.add_argument("--test", action="store_true", help="Call the app before writing")
     return p.parse_args()
@@ -93,6 +98,7 @@ async def main() -> int:
             base_url=args.base_url,
             list_path=args.list_path,
             detail_path=args.detail_path,
+            mark_imported_path=args.mark_imported_path,
             api_key=args.api_key,
             auth_style=args.auth_style,
             enabled=not args.disabled,

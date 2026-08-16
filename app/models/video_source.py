@@ -41,6 +41,13 @@ class VideoSource(BaseModel):
         "/api/ext/videos/{id}",
         description="Path for one video with a freshly minted URL; '{id}' is substituted",
     )
+    mark_imported_path: str = Field(
+        "/api/ext/videos/{id}/imported",
+        description=(
+            "Path POSTed after we ingest a render, so the app stops considering it undelivered. "
+            "'{id}' is substituted. Empty string disables the callback for apps that lack it."
+        ),
+    )
 
     api_key: str = Field(..., description="Shared secret for this app (never returned by the API)")
     auth_style: AuthStyle = Field("bearer", description="Send the secret as a Bearer token or as X-Api-Key")
@@ -68,6 +75,14 @@ class VideoSource(BaseModel):
     def _require_id_placeholder(cls, v: str) -> str:
         if "{id}" not in v:
             raise ValueError("detail_path must contain the '{id}' placeholder")
+        return v
+
+    @field_validator("mark_imported_path")
+    @classmethod
+    def _require_id_placeholder_if_set(cls, v: str) -> str:
+        # Empty means "this app has no callback"; anything else must be addressable.
+        if v and "{id}" not in v:
+            raise ValueError("mark_imported_path must contain the '{id}' placeholder, or be empty to disable")
         return v
 
 
