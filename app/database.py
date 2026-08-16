@@ -41,6 +41,13 @@ async def connect_db(
     await _db.videos.create_index("video_id", unique=True)
     await _db.videos.create_index("retention.status")
     await _db.videos.create_index("performance.analyzed_at")
+    # Backs the "already imported?" dedup check when browsing a source bucket.
+    await _db.videos.create_index([("channel_id", 1), ("source_id", 1), ("source_object_key", 1)], sparse=True)
+    await _db.video_sources.create_index("source_id", unique=True)
+    await _db.video_sources.create_index("channel_id")
+    await _db.source_imports.create_index("job_id", unique=True)
+    await _db.source_imports.create_index([("channel_id", 1), ("created_at", -1)])
+    await _db.source_imports.create_index("status")
     await _db.posting_queue.create_index(
         [("channel_id", 1), ("position", 1)],
     )

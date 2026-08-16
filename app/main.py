@@ -32,6 +32,7 @@ _sync_analysis_task = None
 _growth_tracking_task = None
 _metrics_persistence_task = None
 _batch_analysis_task = None
+_source_import_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background batch analysis worker started")
 
+    # ---- Source import worker (external S3/R2 bucket → our R2) ----
+    from app.services.source_import_worker import run_source_import_worker
+
+    global _source_import_task
+    _source_import_task = create_monitored_task(
+        run_source_import_worker(db, r2_service),
+        feature="Background: Source import worker",
+    )
+    logger.info("Background source import worker started")
+
     yield
 
     # ---- Shutdown ----
@@ -230,6 +241,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _sync_analysis_task,
         _growth_tracking_task,
         _batch_analysis_task,
+        _source_import_task,
     ):
         if task and not task.done():
             task.cancel()
@@ -291,6 +303,7 @@ from app.routers import (
     system,
     thumbnail_analysis,
     ui,
+    video_sources,
     videos,
 )
 
@@ -299,6 +312,8 @@ app.include_router(channels.router)
 app.include_router(external.router)
 app.include_router(errors.router)
 app.include_router(videos.router)
+app.include_router(video_sources.router)
+app.include_router(video_sources.imports_router)
 app.include_router(batch_upload.router)
 app.include_router(scorecard.router)
 app.include_router(categories.router)
