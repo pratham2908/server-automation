@@ -263,8 +263,8 @@ Upload → Poll for analysis → (Optional: apply metadata) → Schedule or Publ
 import requests, time
 from datetime import datetime, timezone, timedelta
 
-BASE    = "https://{your-api-host}/api/v1/ext"
-KEY     = "ckey_histriphy_A3kxF7…"
+BASE = "https://{your-api-host}/api/v1/ext"
+KEY = "ckey_histriphy_A3kxF7…"
 CHANNEL = "histriphy"
 HEADERS = {"X-Channel-Api-Key": KEY}
 
@@ -289,10 +289,7 @@ while True:
 print(f"Analysis: {v['packaging_status']}")
 
 # 3. Schedule for tomorrow 9 AM UTC
-publish_at = (
-    datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
-    + timedelta(days=1)
-)
+publish_at = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
 requests.post(
     f"{BASE}/{CHANNEL}/videos/{video_id}/schedule",
     headers=HEADERS,
