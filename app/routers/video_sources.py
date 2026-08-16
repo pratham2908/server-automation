@@ -1,8 +1,8 @@
-"""Video sources router — browse a channel's external bucket and import from it.
+"""Video sources router — read a channel app's export API and import from it.
 
 Credentials are seeded directly into the ``video_sources`` collection (see
 ``scripts/seed_video_source.py``); this router deliberately exposes no create or
-update route, so secrets never travel through the API.
+update route, so shared secrets never travel through the API.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
 from app.dependencies import verify_api_key
-from app.models.video_source import ImportRequest, SourceBrowseResponse, VideoSourcePublic
-from app.services.video_source_service import VideoSourceService
+from app.models.video_source import ImportRequest, SourceListResponse, VideoSourcePublic
+from app.services.video_source_service import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, VideoSourceService
 
 router = APIRouter(
     prefix="/api/v1/channels/{channel_id}/video-sources",
@@ -40,7 +40,7 @@ async def list_sources(
     channel_id: str,
     service: VideoSourceService = Depends(get_source_service),
 ) -> list[VideoSourcePublic]:
-    """List the channel's registered video sources (secrets redacted)."""
+    """List the channel's registered content apps (secrets redacted)."""
     return await service.list_sources(channel_id)
 
 
@@ -50,46 +50,52 @@ async def test_source(
     source_id: str,
     service: VideoSourceService = Depends(get_source_service),
 ) -> dict[str, Any]:
-    """Verify the source's credentials and record the result as health state."""
+    """Verify the app is reachable and our credentials work; records health."""
     try:
         return await service.test_connection(channel_id, source_id)
-    except ValueError as exc:
+    except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
-@router.get("/{source_id}/objects", response_model=SourceBrowseResponse)
-async def browse_source(
+@router.get("/{source_id}/videos", response_model=SourceListResponse)
+async def list_source_videos(
     channel_id: str,
     source_id: str,
-    prefix: str | None = Query(None, description="Folder to list; defaults to the source root"),
-    cursor: str | None = Query(None, description="Continuation token from a previous page"),
+    limit: int = Query(DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
+    cursor: str | None = Query(None, description="nextCursor from a previous page"),
     service: VideoSourceService = Depends(get_source_service),
-) -> SourceBrowseResponse:
-    """List video objects in the source bucket, flagging ones already imported."""
+) -> SourceListResponse:
+    """A page of the app's finished videos, flagging ones already imported."""
     try:
-        return await service.browse(channel_id, source_id, prefix, cursor)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return await service.list_videos(channel_id, source_id, limit, cursor)
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        # The app is unreachable or rejected us — that is upstream, not our caller's
+        # fault, so 502 rather than 400.
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.post("/{source_id}/import")
-async def import_objects(
+async def import_videos(
     channel_id: str,
     source_id: str,
     payload: ImportRequest,
     service: VideoSourceService = Depends(get_source_service),
 ) -> dict[str, Any]:
-    """Queue one or more source objects for server-side transfer into our R2."""
+    """Queue one or more of the app's videos for server-side transfer into our R2."""
     try:
         return await service.enqueue_import(
             channel_id,
             source_id,
-            payload.keys,
+            payload.video_ids,
             scheduled_at=payload.scheduled_at,
             analyze=payload.analyze,
         )
-    except ValueError as exc:
+    except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @imports_router.get("/")

@@ -1,12 +1,15 @@
-"""VideoSource — an external S3-compatible bucket a channel pulls videos from.
+"""VideoSource — the content app a channel pulls its finished videos from.
 
-Lets a channel register where its finished videos already live (Cloudflare R2 or
-AWS S3) so the server can transfer them straight into our own R2, instead of a
-human downloading a file and re-uploading it through the browser.
+Each channel has a corresponding application that renders its content. Rather
+than reaching into that app's storage, we call its export API, which knows which
+renders are actually finished and hands back a presigned MP4 URL per video.
 
-Credentials are stored on the document, matching how ``youtube_tokens`` and
-``instagram_tokens`` are already persisted on the channel doc. The secret is
-never returned by the API — see ``VideoSourcePublic``.
+Every app implements the same response schema; only the host, the paths, and the
+shared secret differ per channel, so all of that lives on this document.
+
+The secret is stored here the same way ``youtube_tokens`` and ``instagram_tokens``
+already live on the channel doc. It is never returned by the API — see
+:class:`VideoSourcePublic`.
 """
 
 from __future__ import annotations
@@ -14,93 +17,107 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.timezone import now_ist
 
-SourceProvider = Literal["r2", "s3"]
+AuthStyle = Literal["bearer", "api_key_header"]
 SourceHealth = Literal["unknown", "ok", "error"]
+
+# The app marks a render finished with this status; anything else is still cooking.
+COMPLETED_STATUS = "completed"
 
 
 class VideoSource(BaseModel):
-    """A registered external bucket. Persisted in the ``video_sources`` collection."""
+    """A channel's content app. Persisted in the ``video_sources`` collection."""
 
     source_id: str = Field(..., description="Internal unique identifier")
-    channel_id: str = Field(..., description="Channel this source supplies videos for")
-    name: str = Field(..., description="Human-readable label, e.g. 'Editor drop bucket'")
+    channel_id: str = Field(..., description="Channel this app supplies videos for")
+    name: str = Field(..., description="Human-readable label, e.g. 'GeoRank renderer'")
 
-    provider: SourceProvider = Field(..., description="'r2' or 's3'")
-    bucket: str = Field(..., description="Bucket name")
-    access_key_id: str = Field(..., description="Access key ID")
-    secret_access_key: str = Field(..., description="Secret access key (never returned by the API)")
-
-    endpoint_url: str | None = Field(
-        None,
-        description="Required for R2 (https://<account>.r2.cloudflarestorage.com). None for real AWS S3.",
+    base_url: str = Field(..., description="App origin, e.g. https://georank-server-xxx.run.app")
+    list_path: str = Field("/api/ext/videos", description="Path returning a page of finished videos")
+    detail_path: str = Field(
+        "/api/ext/videos/{id}",
+        description="Path for one video with a freshly minted URL; '{id}' is substituted",
     )
-    region: str = Field("auto", description="'auto' for R2, a real region (e.g. 'ap-south-1') for S3")
-    prefix: str = Field("", description="Restrict browsing to keys under this prefix")
+
+    api_key: str = Field(..., description="Shared secret for this app (never returned by the API)")
+    auth_style: AuthStyle = Field("bearer", description="Send the secret as a Bearer token or as X-Api-Key")
 
     enabled: bool = Field(True, description="Disabled sources are hidden from the import UI")
 
-    # --- Connection health, refreshed whenever the source is tested or browsed ---
-    last_checked_at: datetime | None = Field(None, description="When the connection was last verified")
+    # --- Connection health, refreshed whenever the source is tested or listed ---
+    last_checked_at: datetime | None = Field(None, description="When the app was last reached")
     last_status: SourceHealth = Field("unknown", description="Result of the last connection check")
     last_error: str | None = Field(None, description="Error message from the last failed check")
 
     created_at: datetime = Field(default_factory=now_ist)
     updated_at: datetime = Field(default_factory=now_ist)
 
-    @model_validator(mode="after")
-    def _check_endpoint(self) -> VideoSource:
-        # boto3 can derive an endpoint for AWS S3 from the region, but never for
-        # R2 — a missing endpoint there silently points the client at AWS.
-        if self.provider == "r2" and not self.endpoint_url:
-            raise ValueError("endpoint_url is required when provider is 'r2'")
-        return self
+    @field_validator("base_url")
+    @classmethod
+    def _strip_trailing_slash(cls, v: str) -> str:
+        # Paths are joined verbatim, so a trailing slash here would produce '//api'.
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("base_url must start with http:// or https://")
+        return v.rstrip("/")
+
+    @field_validator("detail_path")
+    @classmethod
+    def _require_id_placeholder(cls, v: str) -> str:
+        if "{id}" not in v:
+            raise ValueError("detail_path must contain the '{id}' placeholder")
+        return v
 
 
 class VideoSourcePublic(BaseModel):
-    """API-safe projection of a :class:`VideoSource` — no secret key."""
+    """API-safe projection of a :class:`VideoSource` — no shared secret."""
 
     source_id: str
     channel_id: str
     name: str
-    provider: SourceProvider
-    bucket: str
-    access_key_id_masked: str = Field(..., description="Access key ID with the middle redacted")
-    endpoint_url: str | None
-    region: str
-    prefix: str
+    base_url: str
+    list_path: str
+    auth_style: AuthStyle
+    api_key_masked: str = Field(..., description="Last four characters of the secret, for identification")
     enabled: bool
     last_checked_at: datetime | None
     last_status: SourceHealth
     last_error: str | None
 
 
-class SourceObject(BaseModel):
-    """One browsable object in a source bucket."""
+class SourceVideo(BaseModel):
+    """One finished video as reported by a channel's app.
 
-    key: str
-    size: int
-    last_modified: datetime | None
-    imported: bool = Field(False, description="True if this key already has a video record for the channel")
+    Field names mirror the app's JSON (camelCase) but are normalised to snake_case
+    here so the rest of the server stays in one convention.
+    """
+
+    id: str = Field(..., description="Stable render id from the app — the dedup key")
+    title: str
+    status: str = Field(..., description="Render status; only 'completed' is importable")
+    duration_ms: int | None = None
+    created_at: str | None = Field(None, description="ISO timestamp from the app")
+    thumbnail_url: str | None = None
+    content_type: str = "video/mp4"
+    already_sent_to_channel: bool = Field(False, description="The app's own view of whether it gave us this")
+
+    imported: bool = Field(False, description="True if this channel already has a video record for this id")
     video_id: str | None = Field(None, description="Our video_id, when already imported")
 
 
-class SourceBrowseResponse(BaseModel):
-    """A page of a source-bucket listing."""
+class SourceListResponse(BaseModel):
+    """A page of a channel app's finished videos."""
 
-    prefix: str
-    folders: list[str]
-    files: list[SourceObject]
+    videos: list[SourceVideo]
     next_cursor: str | None
-    is_truncated: bool
+    url_ttl_seconds: int | None = None
 
 
 class ImportRequest(BaseModel):
-    """Request to pull one or more source objects into our R2."""
+    """Request to pull one or more of the app's videos into our R2."""
 
-    keys: list[str] = Field(..., min_length=1, description="Source object keys to import")
+    video_ids: list[str] = Field(..., min_length=1, description="Source render ids to import")
     scheduled_at: str | None = Field(None, description="Optional ISO datetime to schedule the videos to")
     analyze: bool = Field(True, description="Run AI packaging/retention analysis once the transfer lands")

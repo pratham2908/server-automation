@@ -15,22 +15,18 @@ class R2Service:
 
     def __init__(
         self,
-        endpoint_url: str | None,
+        endpoint_url: str,
         access_key_id: str,
         secret_access_key: str,
         bucket_name: str,
-        region_name: str = "auto",
     ) -> None:
-        # endpoint_url is None for real AWS S3, where boto3 derives it from the
-        # region. R2 (and MinIO-likes) always need an explicit endpoint, and use
-        # the sentinel region "auto".
         self._bucket = bucket_name
         self._client = boto3.client(
             "s3",
             endpoint_url=endpoint_url,
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_access_key,
-            region_name=region_name,
+            region_name="auto",
         )
 
     # ------------------------------------------------------------------
@@ -121,63 +117,6 @@ class R2Service:
                     }
                 )
         return out
-
-    def list_objects_page(
-        self,
-        prefix: str = "",
-        delimiter: str = "/",
-        continuation_token: str | None = None,
-        max_keys: int = 500,
-    ) -> dict[str, Any]:
-        """One page of a folder-style listing under *prefix*.
-
-        Unlike :meth:`list_objects_with_prefix`, this collapses nested keys into
-        ``folders`` via *delimiter* so the caller can render a browsable tree
-        instead of pulling every key in the bucket.
-        """
-        kwargs: dict[str, Any] = {"Bucket": self._bucket, "Prefix": prefix, "MaxKeys": max_keys}
-        if delimiter:
-            kwargs["Delimiter"] = delimiter
-        if continuation_token:
-            kwargs["ContinuationToken"] = continuation_token
-
-        resp = self._client.list_objects_v2(**kwargs)
-
-        files: list[dict[str, Any]] = []
-        for obj in resp.get("Contents", []):
-            key = obj["Key"]
-            # S3 represents an explicit "folder" as a zero-byte key ending in the
-            # delimiter; it is not a real object the user can import.
-            if key == prefix or key.endswith("/"):
-                continue
-            files.append(
-                {
-                    "key": key,
-                    "size": int(obj["Size"]),
-                    "last_modified": self._normalize_utc(obj.get("LastModified")),
-                }
-            )
-
-        return {
-            "folders": [cp["Prefix"] for cp in resp.get("CommonPrefixes", [])],
-            "files": files,
-            "next_cursor": resp.get("NextContinuationToken"),
-            "is_truncated": bool(resp.get("IsTruncated", False)),
-        }
-
-    def head_object(self, key: str) -> dict[str, Any]:
-        """Return size/content-type metadata for *key* without fetching it."""
-        resp = self._client.head_object(Bucket=self._bucket, Key=key)
-        return {
-            "size": int(resp.get("ContentLength", 0)),
-            "content_type": resp.get("ContentType", ""),
-            "last_modified": self._normalize_utc(resp.get("LastModified")),
-        }
-
-    def download_to_path(self, key: str, dest_path: str) -> None:
-        """Download *key* into an existing local path (caller owns the file)."""
-        with open(dest_path, "wb") as fh:
-            self._client.download_fileobj(self._bucket, key, fh)
 
     @staticmethod
     def _normalize_utc(dt: datetime | None) -> datetime | None:
