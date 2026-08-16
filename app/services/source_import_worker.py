@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import tempfile
 from typing import Any
 
@@ -32,6 +33,11 @@ logger = get_logger(__name__)
 
 DOWNLOAD_TIMEOUT_S = 900.0
 CHUNK_BYTES = 1024 * 1024
+
+# Renders run to hundreds of MB, and the analysis worker later needs its own copy
+# of the same file. Refuse a transfer that would leave the disk this close to full
+# rather than filling it and taking unrelated writes down with us.
+DISK_HEADROOM_BYTES = 1024 * 1024 * 1024  # 1 GB
 
 
 async def run_source_import_worker(db: AsyncIOMotorDatabase, r2: R2Service) -> None:
@@ -195,6 +201,15 @@ def _stream_to_temp(url: str) -> tuple[str, int]:
         written = 0
         with httpx.stream("GET", url, timeout=DOWNLOAD_TIMEOUT_S, follow_redirects=True) as resp:
             resp.raise_for_status()
+
+            expected = int(resp.headers.get("content-length") or 0)
+            free = shutil.disk_usage(os.path.dirname(tmp_path)).free
+            if expected and free < expected + DISK_HEADROOM_BYTES:
+                raise OSError(
+                    f"Not enough disk to import this render: needs {expected / 1e6:.0f} MB "
+                    f"plus {DISK_HEADROOM_BYTES / 1e9:.0f} GB headroom, only {free / 1e6:.0f} MB free"
+                )
+
             with open(tmp_path, "wb") as fh:
                 for chunk in resp.iter_bytes(CHUNK_BYTES):
                     fh.write(chunk)
