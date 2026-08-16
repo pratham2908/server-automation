@@ -88,6 +88,7 @@ def normalise_video(raw: dict[str, Any]) -> SourceVideo:
         thumbnail_url=raw.get("thumbnailUrl"),
         content_type=raw.get("contentType") or "video/mp4",
         already_sent_to_channel=bool(raw.get("alreadySentToChannel", False)),
+        external_video_id=raw.get("externalVideoId"),
     )
 
 
@@ -217,28 +218,64 @@ class VideoSourceService:
 
         videos = [normalise_video(v) for v in data.get("videos", []) if v.get("id")]
 
-        # Flag anything this channel already pulled in, so the UI can grey it out
-        # rather than letting the same render be imported twice.
-        ids = [v.id for v in videos]
-        existing: dict[str, str] = {}
-        if ids:
-            docs = self.db.videos.find(
-                {"channel_id": channel_id, "source_id": source_id, "source_video_id": {"$in": ids}},
-                {"_id": 0, "video_id": 1, "source_video_id": 1},
-            )
-            async for doc in docs:
-                existing[doc["source_video_id"]] = doc["video_id"]
-
-        for v in videos:
-            if v.id in existing:
-                v.imported = True
-                v.video_id = existing[v.id]
+        await self._mark_already_present(channel_id, source_id, videos)
 
         return SourceListResponse(
             videos=videos,
             next_cursor=data.get("nextCursor"),
             url_ttl_seconds=data.get("urlTtlSeconds"),
         )
+
+    async def _mark_already_present(
+        self,
+        channel_id: str,
+        source_id: str,
+        videos: list[SourceVideo],
+    ) -> None:
+        """Flag renders this channel already has, from either delivery route.
+
+        Two ways a render can already be here:
+
+        * we pulled it ourselves, so it carries our ``source_video_id``; or
+        * the app pushed it through the external upload API, in which case we hold
+          no source fields at all and only the app's ``externalVideoId`` — which is
+          our own ``video_id`` — connects the two.
+
+        Checking only the first would let a pushed render be imported again as a
+        silent duplicate, so both are resolved here.
+        """
+        if not videos:
+            return
+
+        by_source_key: dict[str, str] = {}
+        docs = self.db.videos.find(
+            {"channel_id": channel_id, "source_id": source_id, "source_video_id": {"$in": [v.id for v in videos]}},
+            {"_id": 0, "video_id": 1, "source_video_id": 1},
+        )
+        async for doc in docs:
+            by_source_key[doc["source_video_id"]] = doc["video_id"]
+
+        # Only trust an externalVideoId that really resolves to a video on this
+        # channel — a stale id from another environment must not mask a render.
+        claimed = [v.external_video_id for v in videos if v.external_video_id and v.id not in by_source_key]
+        pushed: set[str] = set()
+        if claimed:
+            docs = self.db.videos.find(
+                {"channel_id": channel_id, "video_id": {"$in": claimed}},
+                {"_id": 0, "video_id": 1},
+            )
+            async for doc in docs:
+                pushed.add(doc["video_id"])
+
+        for v in videos:
+            if v.id in by_source_key:
+                v.imported = True
+                v.video_id = by_source_key[v.id]
+                v.delivered_by = "import"
+            elif v.external_video_id and v.external_video_id in pushed:
+                v.imported = True
+                v.video_id = v.external_video_id
+                v.delivered_by = "push"
 
     # ------------------------------------------------------------------
     # Import
@@ -284,7 +321,12 @@ class VideoSourceService:
                 skipped.append({"id": source_video_id, "reason": f"render status is '{meta.status}'"})
                 continue
             if meta.imported:
-                skipped.append({"id": source_video_id, "reason": "already imported"})
+                reason = (
+                    "already in the system — the app pushed it via the external API"
+                    if meta.delivered_by == "push"
+                    else "already imported"
+                )
+                skipped.append({"id": source_video_id, "reason": reason})
                 continue
 
             video_id = str(uuid.uuid4())

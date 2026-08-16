@@ -102,9 +102,17 @@ class SourceVideo(BaseModel):
     thumbnail_url: str | None = None
     content_type: str = "video/mp4"
     already_sent_to_channel: bool = Field(False, description="The app's own view of whether it gave us this")
+    external_video_id: str | None = Field(
+        None,
+        description="The video_id the app believes it already created in our system, if any",
+    )
 
-    imported: bool = Field(False, description="True if this channel already has a video record for this id")
-    video_id: str | None = Field(None, description="Our video_id, when already imported")
+    imported: bool = Field(False, description="True if this render already has a video record on this channel")
+    video_id: str | None = Field(None, description="Our video_id, when already present")
+    delivered_by: Literal["import", "push", None] = Field(
+        None,
+        description="How it got here: pulled by this importer, or pushed by the app via the external API",
+    )
 
 
 class SourceListResponse(BaseModel):
