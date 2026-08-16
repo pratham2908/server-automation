@@ -51,6 +51,9 @@ async def connect_db(
     await _db.posting_queue.create_index(
         [("channel_id", 1), ("position", 1)],
     )
+    # Retention-analysis queue: the worker claims the next job by status + position.
+    await _db.retention_analysis_queue.create_index([("status", 1), ("position", 1)])
+    await _db.retention_analysis_queue.create_index([("channel_id", 1), ("video_id", 1)])
     await _db.schedule_queue.create_index(
         [("channel_id", 1), ("position", 1)],
     )

@@ -120,26 +120,22 @@ async def trigger_retention_analysis(
             detail="Video has no R2 file — cannot run retention analysis",
         )
 
-    from app.main import gemini_service, r2_service  # type: ignore[import]
-    from app.services.error_reporting import create_monitored_task
-    from app.services.retention_analysis import run_retention_analysis
+    from app.services.retention_queue import enqueue_retention_analysis
 
-    if not r2_service or not gemini_service:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Services not initialised",
-        )
+    result = await enqueue_retention_analysis(db, channel_id, video_id)
 
-    create_monitored_task(
-        run_retention_analysis(channel_id, video_id, db, r2_service, gemini_service),
-        feature="Retention analysis (API trigger)",
-        context={"channel_id": channel_id, "video_id": video_id},
-    )
+    if result["already_queued"]:
+        message = f"Already in the retention queue (position {result['position']}) — poll GET /{{video_id}} for status"
+    else:
+        message = f"Queued for retention analysis (position {result['position']}) — poll GET /{{video_id}} for status"
 
     return {
         "ok": True,
         "video_id": video_id,
-        "message": "Retention analysis triggered — poll GET /{video_id} for status",
+        "queued": result["queued"],
+        "already_queued": result["already_queued"],
+        "position": result["position"],
+        "message": message,
     }
 
 

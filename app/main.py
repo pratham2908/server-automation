@@ -32,6 +32,7 @@ _sync_analysis_task = None
 _growth_tracking_task = None
 _metrics_persistence_task = None
 _batch_analysis_task = None
+_retention_analysis_task = None
 _source_import_task = None
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background batch analysis worker started")
 
+    # ---- Sequential retention analysis worker (manual "predict" triggers) ----
+    from app.services.retention_queue import run_retention_analysis_worker
+
+    global _retention_analysis_task
+    _retention_analysis_task = create_monitored_task(
+        run_retention_analysis_worker(db, r2_service, gemini_service),
+        feature="Background: Retention analysis worker",
+    )
+    logger.info("Background retention analysis worker started")
+
     # ---- Source import worker (external S3/R2 bucket → our R2) ----
     from app.services.source_import_worker import run_source_import_worker
 
@@ -241,6 +252,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _sync_analysis_task,
         _growth_tracking_task,
         _batch_analysis_task,
+        _retention_analysis_task,
         _source_import_task,
     ):
         if task and not task.done():

@@ -25,23 +25,23 @@
 GEMINI_PRICING = {
     # model_id → {input_per_1m, output_per_1m, input_per_1m_long?, output_per_1m_long?, context_threshold?}
     "gemini-2.5-pro": {
-        "input_per_1m":       1.25,
-        "output_per_1m":     10.00,
-        "input_per_1m_long":  2.50,   # >200k context window
-        "output_per_1m_long":15.00,
+        "input_per_1m": 1.25,
+        "output_per_1m": 10.00,
+        "input_per_1m_long": 2.50,  # >200k context window
+        "output_per_1m_long": 15.00,
         "context_threshold": 200_000,
     },
     "gemini-2.5-flash": {
-        "input_per_1m":  0.30,
+        "input_per_1m": 0.30,
         "output_per_1m": 2.50,
     },
     "gemini-2.5-flash-lite": {
-        "input_per_1m":  0.10,
+        "input_per_1m": 0.10,
         "output_per_1m": 0.40,
     },
     # Preview — no published pricing; proxy as 2.5-flash
     "gemini-3-flash-preview": {
-        "input_per_1m":  0.30,
+        "input_per_1m": 0.30,
         "output_per_1m": 2.50,
     },
 }
