@@ -73,6 +73,7 @@ ignore = [
     "N802",    # Function name should be lowercase
     "F401",    # Unused import (sometimes needed for type checking)
     "PLW0603", # Using the global statement
+    "PLR0917", # Too many positional arguments
 ]
 
 [tool.mypy]

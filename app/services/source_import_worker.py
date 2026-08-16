@@ -128,7 +128,7 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
         )
 
         # ── 3. Local temp file → our R2 ─────────────────────────────────
-        download_path: str = tmp_path
+        download_path: str = tmp_path  # type: ignore
 
         def _upload() -> None:
             with open(download_path, "rb") as fh:

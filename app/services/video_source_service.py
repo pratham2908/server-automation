@@ -125,7 +125,7 @@ class VideoSourceService:
         source = await self.db.video_sources.find_one({"channel_id": channel_id, "source_id": source_id})
         if not source:
             raise LookupError(f"Video source '{source_id}' not found for channel '{channel_id}'")
-        return source
+        return source  # type: ignore
 
     async def _record_health(self, source_id: str, ok: bool, error: str | None = None) -> None:
         await self.db.video_sources.update_one(
@@ -154,7 +154,7 @@ class VideoSourceService:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
             resp = await client.get(url, params=params, headers=auth_headers(source))
             resp.raise_for_status()
-            return resp.json()
+            return resp.json()  # type: ignore
 
     async def fetch_download_url(self, source: dict[str, Any], video_id: str) -> dict[str, Any]:
         """GET one video from the app, with a freshly minted ``downloadUrl``."""
@@ -168,7 +168,7 @@ class VideoSourceService:
 
         # The detail endpoint may return the video bare or wrapped; accept both
         # so a harmless shape difference between apps is not a hard failure.
-        return data.get("video", data)
+        return data.get("video", data)  # type: ignore
 
     # ------------------------------------------------------------------
     # Connection test
