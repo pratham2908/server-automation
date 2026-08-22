@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from app.logger import get_logger
 from app.models.video_source import (
     COMPLETED_STATUS,
+    SourceCreateRequest,
     SourceListResponse,
     SourceVideo,
     VideoSource,
@@ -109,6 +110,51 @@ class VideoSourceService:
                 # that has other, working ones.
                 logger.error("Skipping unreadable video source %s: %s", doc.get("source_id"), exc)
         return sources
+
+    async def create_source(self, channel_id: str, payload: SourceCreateRequest) -> VideoSourcePublic:
+        """Register a content app for a channel, after proving it answers.
+
+        The app is called before anything is written. A source whose credentials
+        are wrong is worse than no source: it looks configured, fails on every
+        browse, and the only way to correct it from here would be another write.
+        Refusing to store one means the form is always the place to fix a typo.
+        """
+        channel = await self.db.channels.find_one({"channel_id": channel_id}, {"_id": 1})
+        if not channel:
+            raise LookupError(f"No channel '{channel_id}' exists")
+
+        clash = await self.db.video_sources.find_one({"channel_id": channel_id, "name": payload.name})
+        if clash:
+            raise FileExistsError(f"This channel already has a source named '{payload.name}'")
+
+        source = VideoSource(
+            source_id=str(uuid.uuid4()),
+            channel_id=channel_id,
+            name=payload.name,
+            base_url=payload.base_url,
+            config=payload.config,
+        )
+
+        try:
+            await adapter_for(source).probe(source)
+        except Exception as exc:
+            raise ConnectionError(describe_http_error(exc)) from exc
+
+        doc = source.model_dump()
+        doc["last_checked_at"] = now_ist()
+        doc["last_status"] = "ok"
+        await self.db.video_sources.insert_one(doc)
+
+        logger.info(
+            "Registered %s source '%s' (%s) for channel %s",
+            source.kind,
+            source.name,
+            source.source_id,
+            channel_id,
+        )
+        # Reloaded through the same projection every other read uses, so there is
+        # one path to the wire and it cannot carry a credential.
+        return to_public(source)
 
     async def load_source(self, source_id: str) -> VideoSource:
         """Look a source up by id alone — for the worker, which holds a job."""

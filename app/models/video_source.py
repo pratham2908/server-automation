@@ -120,6 +120,13 @@ class VidForgeConfig(BaseModel):
 SourceConfig = Annotated[GeoRankConfig | VidForgeConfig, Field(discriminator="kind")]
 
 
+def _normalise_base_url(v: str) -> str:
+    # Paths are joined verbatim, so a trailing slash here would produce '//api'.
+    if not v.startswith(("http://", "https://")):
+        raise ValueError("base_url must start with http:// or https://")
+    return v.rstrip("/")
+
+
 class VideoSource(BaseModel):
     """A channel's content app. Persisted in the ``video_sources`` collection."""
 
@@ -147,10 +154,7 @@ class VideoSource(BaseModel):
     @field_validator("base_url")
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:
-        # Paths are joined verbatim, so a trailing slash here would produce '//api'.
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("base_url must start with http:// or https://")
-        return v.rstrip("/")
+        return _normalise_base_url(v)
 
 
 class VideoSourcePublic(BaseModel):
@@ -172,6 +176,23 @@ class VideoSourcePublic(BaseModel):
     last_checked_at: datetime | None
     last_status: SourceHealth
     last_error: str | None
+
+
+class SourceCreateRequest(BaseModel):
+    """Register a channel's content app from the UI.
+
+    Carries credentials, so it is the one request in this module that must never
+    be logged or echoed back — the response is a :class:`VideoSourcePublic`.
+    """
+
+    name: str = Field(..., min_length=1, max_length=80, description="Display label, e.g. 'VidForge clips'")
+    base_url: str = Field(..., description="App origin, e.g. https://xyz.run.app")
+    config: SourceConfig = Field(..., description="Settings and credentials for the chosen kind")
+
+    @field_validator("base_url")
+    @classmethod
+    def _strip_trailing_slash(cls, v: str) -> str:
+        return _normalise_base_url(v)
 
 
 class SourceVideo(BaseModel):

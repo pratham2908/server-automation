@@ -1,8 +1,10 @@
 """Video sources router — read a channel app's export API and import from it.
 
-Credentials are seeded directly into the ``video_sources`` collection (see
-``scripts/seed_video_source.py``); this router deliberately exposes no create or
-update route, so shared secrets never travel through the API.
+Registering a source accepts credentials, so that one route requires a signed-in
+profile on top of the API key the rest of the router uses, and nothing ever sends
+a credential back: every response is a :class:`VideoSourcePublic`, which has no
+field capable of carrying one. ``scripts/seed_video_source.py`` remains the way to
+seed a source without a browser.
 """
 
 from __future__ import annotations
@@ -13,9 +15,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
-from app.dependencies import verify_api_key
-from app.models.video_source import ImportRequest, SourceListResponse, VideoSourcePublic
+from app.dependencies import get_current_profile, verify_api_key
+from app.models.profile import ProfileInDB
+from app.models.video_source import (
+    ImportRequest,
+    SourceCreateRequest,
+    SourceListResponse,
+    VideoSourcePublic,
+)
 from app.services.video_source_service import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, VideoSourceService
+from app.services.video_sources.schema import SourceKindInfo, describe_kinds
 
 router = APIRouter(
     prefix="/api/v1/channels/{channel_id}/video-sources",
@@ -31,8 +40,26 @@ imports_router = APIRouter(
 )
 
 
+# No channel in the path: the kinds the server can talk to are the same everywhere.
+kinds_router = APIRouter(
+    prefix="/api/v1/video-source-kinds",
+    tags=["video-sources"],
+    dependencies=[Depends(verify_api_key)],
+)
+
+
 def get_source_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> VideoSourceService:
     return VideoSourceService(db)
+
+
+@kinds_router.get("/", response_model=list[SourceKindInfo])
+async def list_source_kinds() -> list[SourceKindInfo]:
+    """The content app kinds this server supports, and the form each one needs.
+
+    Derived from the config models themselves, so a newly added kind appears here
+    — and in the UI — without a frontend change.
+    """
+    return describe_kinds()
 
 
 @router.get("/", response_model=list[VideoSourcePublic])
@@ -42,6 +69,30 @@ async def list_sources(
 ) -> list[VideoSourcePublic]:
     """List the channel's registered content apps (secrets redacted)."""
     return await service.list_sources(channel_id)
+
+
+@router.post("/", response_model=VideoSourcePublic, status_code=status.HTTP_201_CREATED)
+async def create_source(
+    channel_id: str,
+    payload: SourceCreateRequest,
+    service: VideoSourceService = Depends(get_source_service),
+    current_profile: ProfileInDB = Depends(get_current_profile),
+) -> VideoSourcePublic:
+    """Register a content app for this channel.
+
+    Accepts credentials, hence the signed-in profile. The app is called before
+    anything is stored, so a source that cannot answer is never created.
+    """
+    try:
+        return await service.create_source(channel_id, payload)
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        # The credentials or the URL are wrong, or the app is down. Either way we
+        # stored nothing, so the form is still the place to fix it.
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.post("/{source_id}/test")
