@@ -55,6 +55,8 @@ async def test_source(
         return await service.test_connection(channel_id, source_id)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.get("/{source_id}/videos", response_model=SourceListResponse)
@@ -70,6 +72,8 @@ async def list_source_videos(
         return await service.list_videos(channel_id, source_id, limit, cursor)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     except ConnectionError as exc:
         # The app is unreachable or rejected us — that is upstream, not our caller's
         # fault, so 502 rather than 400.
@@ -94,6 +98,8 @@ async def import_videos(
         )
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     except ConnectionError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
