@@ -205,3 +205,55 @@ def test_changing_credentials_invalidates_the_cached_token():
 
     # The app key selects the library too, so it is part of the account identity.
     assert _cache_key(vidforge_source()) != _cache_key(vidforge_source(app_key="shorts"))
+
+
+# ---------------------------------------------------------------- marking by hand
+
+
+class _Response:
+    def __init__(self, status_code: int = 200, payload: dict | None = None):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = ""
+
+    def json(self) -> dict:
+        return self._payload
+
+    def raise_for_status(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_georank_omits_the_video_id_when_marking_by_hand(monkeypatch):
+    """An operator retiring a video has no local video to name.
+
+    Sending ``externalVideoId: null`` would assert a link that does not exist, so
+    the optional body is omitted entirely instead.
+    """
+    captured: dict = {}
+
+    async def fake_post(self, url, json=None, headers=None):
+        captured["url"] = url
+        captured["json"] = json
+        return _Response(200)
+
+    monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+
+    source = georank_source()
+    assert await GeoRankAdapter().mark_imported(source, "r1", None) is None
+    assert captured["json"] == {}
+    assert captured["url"].endswith("/api/ext/videos/r1/imported")
+
+
+@pytest.mark.asyncio
+async def test_georank_sends_the_video_id_when_we_have_one(monkeypatch):
+    captured: dict = {}
+
+    async def fake_post(self, url, json=None, headers=None):
+        captured["json"] = json
+        return _Response(200)
+
+    monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+
+    await GeoRankAdapter().mark_imported(georank_source(), "r1", "our-uuid")
+    assert captured["json"] == {"externalVideoId": "our-uuid"}
