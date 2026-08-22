@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from app.models.video_source import SourceVideo, VideoSource
+from app.models.video_source import SourceKind, SourceVideo, VideoSource
 
 REQUEST_TIMEOUT_S = 30.0
 
@@ -41,7 +41,9 @@ class SourceUnavailableError(Exception):
 class SourceAdapter(abc.ABC):
     """Talks to one kind of content app."""
 
-    kind: str
+    # Always one of the config discriminator values — an adapter with no matching
+    # config could never be reached, since a source's kind is what selects it.
+    kind: SourceKind
 
     # Whether this app can also push videos to us through the external upload API.
     # It decides how badly a failed delivery callback matters: for an app that
