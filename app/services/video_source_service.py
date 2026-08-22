@@ -1,12 +1,10 @@
-"""Video source service — read a channel app's export API and queue imports.
+"""Video source service — browse a channel's content app and queue imports.
 
-Every channel app implements the same contract::
-
-    GET {base_url}{list_path}?limit=&cursor=   -> {videos: [...], nextCursor, urlTtlSeconds}
-    GET {base_url}{detail_path with {id}}      -> one video, freshly minted downloadUrl
-
-so a single client covers all of them; only host, paths, and secret vary per
-channel and all three live on the source document.
+Apps do not share a contract: one is cursor-paginated behind a static secret,
+another is page-numbered behind an account login. All of that lives in the
+per-kind adapters under :mod:`app.services.video_sources`; this module holds the
+part that is the same whatever the app is — dedup, job records, the queue, and
+health tracking — and never branches on kind.
 """
 
 from __future__ import annotations
@@ -15,30 +13,30 @@ import asyncio
 import uuid
 from typing import Any
 
-import httpx
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import ValidationError
 
 from app.logger import get_logger
 from app.models.video_source import (
     COMPLETED_STATUS,
     SourceListResponse,
     SourceVideo,
+    VideoSource,
     VideoSourcePublic,
 )
+from app.services.video_sources import adapter_for, describe_http_error
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
 DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 100
-REQUEST_TIMEOUT_S = 30.0
 
-# The import callback is idempotent, so retrying a transient failure is free. A
-# permanently missed callback risks a duplicate later, which is worth a few tries.
-NOTIFY_ATTEMPTS = 3
-NOTIFY_BACKOFF_S = 2.0
+# Bounded catalogue walk when resolving ids to import: enough to cover any
+# realistic selection without letting one request page an app forever.
+MAX_CATALOGUE_PAGES = 10
 
-# Queue of source_imports._id values awaiting transfer, drained by the import
+# Queue of source_imports job ids awaiting transfer, drained by the import
 # worker. Mirrors the batch_upload_service pattern.
 _import_queue: asyncio.Queue[str] | None = None
 
@@ -50,68 +48,46 @@ def get_import_queue() -> asyncio.Queue[str]:
     return _import_queue
 
 
-def mask_secret(secret: str) -> str:
-    """Show only enough of the shared secret to tell two of them apart."""
-    if len(secret) <= 4:
-        return "****"
-    return f"****{secret[-4:]}"
+def parse_source(doc: dict[str, Any]) -> VideoSource:
+    """Validate a stored source document into its typed model.
+
+    Sources written before kinds existed have their settings flat on the document
+    instead of under ``config``. Those fail loudly here rather than being coerced,
+    because guessing a kind for a document that never declared one is exactly how
+    one channel's credentials end up being sent to another channel's app.
+    """
+    try:
+        return VideoSource(**doc)
+    except ValidationError as exc:
+        if "config" in doc:
+            raise
+        raise ValueError(
+            f"Source '{doc.get('source_id')}' predates typed configs and has no 'config' — "
+            "run scripts/migrate_video_sources.py to convert it"
+        ) from exc
 
 
-def auth_headers(source: dict[str, Any]) -> dict[str, str]:
-    """Build the auth header this app expects."""
-    secret = source["api_key"]
-    if source.get("auth_style") == "api_key_header":
-        return {"X-Api-Key": secret}
-    return {"Authorization": f"Bearer {secret}"}
+def to_public(source: VideoSource) -> VideoSourcePublic:
+    """Project a source into its API-safe form.
 
-
-def to_public(source: dict[str, Any]) -> VideoSourcePublic:
-    """Project a stored source into its API-safe form."""
+    Credentials are asked of the adapter as a redacted hint; the raw config never
+    reaches this object, so no serialisation path can leak one.
+    """
+    adapter = adapter_for(source)
     return VideoSourcePublic(
-        source_id=source["source_id"],
-        channel_id=source["channel_id"],
-        name=source["name"],
-        base_url=source["base_url"],
-        list_path=source.get("list_path", "/api/ext/videos"),
-        auth_style=source.get("auth_style", "bearer"),
-        api_key_masked=mask_secret(source.get("api_key", "")),
-        enabled=source.get("enabled", True),
-        last_checked_at=source.get("last_checked_at"),
-        last_status=source.get("last_status", "unknown"),
-        last_error=source.get("last_error"),
+        source_id=source.source_id,
+        channel_id=source.channel_id,
+        name=source.name,
+        kind=source.kind,
+        base_url=source.base_url,
+        list_path=source.config.list_path,
+        credential_hint=adapter.credential_hint(source),
+        supports_mark_imported=adapter.supports_mark_imported(source),
+        enabled=source.enabled,
+        last_checked_at=source.last_checked_at,
+        last_status=source.last_status,
+        last_error=source.last_error,
     )
-
-
-def normalise_video(raw: dict[str, Any]) -> SourceVideo:
-    """Map one app-shaped video object onto our snake_case model."""
-    return SourceVideo(
-        id=str(raw["id"]),
-        title=raw.get("title") or "Untitled",
-        status=raw.get("status") or "unknown",
-        duration_ms=raw.get("durationMs"),
-        created_at=raw.get("createdAt"),
-        thumbnail_url=raw.get("thumbnailUrl"),
-        content_type=raw.get("contentType") or "video/mp4",
-        already_sent_to_channel=bool(raw.get("alreadySentToChannel", False)),
-        external_video_id=raw.get("externalVideoId"),
-    )
-
-
-def describe_http_error(exc: Exception) -> str:
-    """Turn a transport or status failure into something worth reading in the UI."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        code = exc.response.status_code
-        if code in (401, 403):
-            return f"HTTP {code} — the app rejected our credentials"
-        if code == 404:
-            return f"HTTP {code} — endpoint not found (check the configured path)"
-        body = exc.response.text[:200].strip()
-        return f"HTTP {code}{f' — {body}' if body else ''}"
-    if isinstance(exc, httpx.TimeoutException):
-        return f"Timed out after {REQUEST_TIMEOUT_S:.0f}s"
-    if isinstance(exc, httpx.RequestError):
-        return f"Could not reach the app: {exc}"
-    return f"{type(exc).__name__}: {exc}"
 
 
 class VideoSourceService:
@@ -124,13 +100,28 @@ class VideoSourceService:
 
     async def list_sources(self, channel_id: str) -> list[VideoSourcePublic]:
         docs = await self.db.video_sources.find({"channel_id": channel_id}).sort("created_at", 1).to_list(length=None)
-        return [to_public(d) for d in docs]
+        sources: list[VideoSourcePublic] = []
+        for doc in docs:
+            try:
+                sources.append(to_public(parse_source(doc)))
+            except (ValidationError, ValueError) as exc:
+                # One malformed source must not blank the whole panel for a channel
+                # that has other, working ones.
+                logger.error("Skipping unreadable video source %s: %s", doc.get("source_id"), exc)
+        return sources
 
-    async def _require_source(self, channel_id: str, source_id: str) -> dict[str, Any]:
-        source = await self.db.video_sources.find_one({"channel_id": channel_id, "source_id": source_id})
-        if not source:
+    async def load_source(self, source_id: str) -> VideoSource:
+        """Look a source up by id alone — for the worker, which holds a job."""
+        doc = await self.db.video_sources.find_one({"source_id": source_id})
+        if not doc:
+            raise LookupError(f"Video source '{source_id}' not found")
+        return parse_source(doc)
+
+    async def _require_source(self, channel_id: str, source_id: str) -> VideoSource:
+        doc = await self.db.video_sources.find_one({"channel_id": channel_id, "source_id": source_id})
+        if not doc:
             raise LookupError(f"Video source '{source_id}' not found for channel '{channel_id}'")
-        return source  # type: ignore
+        return parse_source(doc)
 
     async def _record_health(self, source_id: str, ok: bool, error: str | None = None) -> None:
         await self.db.video_sources.update_one(
@@ -146,105 +137,42 @@ class VideoSourceService:
         )
 
     # ------------------------------------------------------------------
-    # App calls
-    # ------------------------------------------------------------------
-
-    async def _fetch_page(self, source: dict[str, Any], limit: int, cursor: str | None) -> dict[str, Any]:
-        """GET one page from the app's list endpoint."""
-        url = f"{source['base_url']}{source.get('list_path', '/api/ext/videos')}"
-        params: dict[str, Any] = {"limit": min(limit, MAX_PAGE_LIMIT)}
-        if cursor:
-            params["cursor"] = cursor
-
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
-            resp = await client.get(url, params=params, headers=auth_headers(source))
-            resp.raise_for_status()
-            return resp.json()  # type: ignore
-
-    async def fetch_download_url(self, source: dict[str, Any], video_id: str) -> dict[str, Any]:
-        """GET one video from the app, with a freshly minted ``downloadUrl``."""
-        path = source.get("detail_path", "/api/ext/videos/{id}").replace("{id}", video_id)
-        url = f"{source['base_url']}{path}"
-
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
-            resp = await client.get(url, headers=auth_headers(source))
-            resp.raise_for_status()
-            data = resp.json()
-
-        # The detail endpoint may return the video bare or wrapped; accept both
-        # so a harmless shape difference between apps is not a hard failure.
-        return data.get("video", data)  # type: ignore
-
-    async def notify_imported(
-        self,
-        source: dict[str, Any],
-        render_id: str,
-        our_video_id: str,
-    ) -> str | None:
-        """Tell the app we ingested *render_id*, closing the pull-model loop.
-
-        Without this the app still believes the render was never delivered and may
-        later push it through the external upload API, producing a second copy of
-        a video we already hold — our own dedup cannot catch that, because a push
-        carries no ``source_video_id``.
-
-        The endpoint is idempotent, so transient failures are retried. Returns None
-        on success, or a description of the failure; raising is left to the caller
-        so a bad callback never destroys an otherwise-good import.
-        """
-        path = source.get("mark_imported_path", "/api/ext/videos/{id}/imported")
-        if not path:
-            return None
-
-        url = f"{source['base_url']}{path.replace('{id}', render_id)}"
-        headers = {**auth_headers(source), "Content-Type": "application/json"}
-        payload = {"externalVideoId": our_video_id}
-
-        last_error = "unknown error"
-        for attempt in range(1, NOTIFY_ATTEMPTS + 1):
-            try:
-                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
-                    resp = await client.post(url, json=payload, headers=headers)
-
-                if resp.status_code < 300:
-                    return None
-
-                # 404 means the app does not know this render and 401 means our key
-                # is wrong; neither improves by trying again.
-                if resp.status_code in (401, 403, 404):
-                    return f"HTTP {resp.status_code} — {resp.text[:150].strip()}"
-
-                last_error = f"HTTP {resp.status_code} — {resp.text[:150].strip()}"
-            except (httpx.TimeoutException, httpx.RequestError) as exc:
-                last_error = describe_http_error(exc)
-
-            if attempt < NOTIFY_ATTEMPTS:
-                await asyncio.sleep(NOTIFY_BACKOFF_S * attempt)
-
-        return f"{last_error} (after {NOTIFY_ATTEMPTS} attempts)"
-
-    # ------------------------------------------------------------------
-    # Connection test
+    # App calls — all delegated to the source's adapter
     # ------------------------------------------------------------------
 
     async def test_connection(self, channel_id: str, source_id: str) -> dict[str, Any]:
         """Verify credentials by asking the app for a single video."""
         source = await self._require_source(channel_id, source_id)
         try:
-            data = await self._fetch_page(source, limit=1, cursor=None)
+            result = await adapter_for(source).probe(source)
         except Exception as exc:
             message = describe_http_error(exc)
             await self._record_health(source_id, ok=False, error=message)
             logger.warning("Video source %s connection failed: %s", source_id, message)
-            return {"ok": False, "error": message}
+            return {"ok": False, "kind": source.kind, "error": message}
 
         await self._record_health(source_id, ok=True)
-        return {
-            "ok": True,
-            "base_url": source["base_url"],
-            "has_content": bool(data.get("videos")),
-            "url_ttl_seconds": data.get("urlTtlSeconds"),
-        }
+        return {"kind": source.kind, **result}
+
+    async def download_url(self, source: VideoSource, source_video_id: str) -> str:
+        """A freshly minted download URL, for the worker at transfer time."""
+        return await adapter_for(source).fetch_download_url(source, source_video_id)
+
+    async def notify_imported(self, source: VideoSource, source_video_id: str, our_video_id: str) -> str | None:
+        """Tell the app we ingested a video, closing the pull-model loop.
+
+        Without this the app still believes the video was never delivered and may
+        later push it through the external upload API, producing a second copy of
+        something we already hold — our dedup cannot catch that, because a push
+        carries no ``source_video_id``.
+
+        Returns None on success or a description of the failure; it never raises,
+        so a bad callback cannot destroy an otherwise-good import.
+        """
+        try:
+            return await adapter_for(source).mark_imported(source, source_video_id, our_video_id)
+        except Exception as exc:
+            return describe_http_error(exc)
 
     # ------------------------------------------------------------------
     # Listing
@@ -257,26 +185,23 @@ class VideoSourceService:
         limit: int = DEFAULT_PAGE_LIMIT,
         cursor: str | None = None,
     ) -> SourceListResponse:
-        """One page of the app's finished videos, flagging ones already imported."""
+        """One page of the app's finished videos, flagging ones already here."""
         source = await self._require_source(channel_id, source_id)
 
         try:
-            data = await self._fetch_page(source, limit, cursor)
+            page = await adapter_for(source).fetch_page(source, limit, cursor)
         except Exception as exc:
             message = describe_http_error(exc)
             await self._record_health(source_id, ok=False, error=message)
             raise ConnectionError(message) from exc
 
         await self._record_health(source_id, ok=True)
-
-        videos = [normalise_video(v) for v in data.get("videos", []) if v.get("id")]
-
-        await self._mark_already_present(channel_id, source_id, videos)
+        await self._mark_already_present(channel_id, source_id, page.videos)
 
         return SourceListResponse(
-            videos=videos,
-            next_cursor=data.get("nextCursor"),
-            url_ttl_seconds=data.get("urlTtlSeconds"),
+            videos=page.videos,
+            next_cursor=page.next_cursor,
+            url_ttl_seconds=page.url_ttl_seconds,
         )
 
     async def _mark_already_present(
@@ -285,17 +210,19 @@ class VideoSourceService:
         source_id: str,
         videos: list[SourceVideo],
     ) -> None:
-        """Flag renders this channel already has, from either delivery route.
+        """Flag videos this channel already has, from either delivery route.
 
-        Two ways a render can already be here:
+        Two ways a video can already be here:
 
         * we pulled it ourselves, so it carries our ``source_video_id``; or
         * the app pushed it through the external upload API, in which case we hold
           no source fields at all and only the app's ``externalVideoId`` — which is
           our own ``video_id`` — connects the two.
 
-        Checking only the first would let a pushed render be imported again as a
-        silent duplicate, so both are resolved here.
+        Checking only the first would let a pushed video be imported again as a
+        silent duplicate, so both are resolved here. An app that reports no
+        ``externalVideoId`` simply gets the first check, which is still correct —
+        it just cannot detect its own pushes.
         """
         if not videos:
             return
@@ -309,7 +236,7 @@ class VideoSourceService:
             by_source_key[doc["source_video_id"]] = doc["video_id"]
 
         # Only trust an externalVideoId that really resolves to a video on this
-        # channel — a stale id from another environment must not mask a render.
+        # channel — a stale id from another environment must not mask a video.
         claimed = [v.external_video_id for v in videos if v.external_video_id and v.id not in by_source_key]
         pushed: set[str] = set()
         if claimed:
@@ -344,17 +271,17 @@ class VideoSourceService:
     ) -> dict[str, Any]:
         """Create video + import-job records for *video_ids* and queue the transfers.
 
-        The presigned URL is deliberately *not* resolved here — the worker mints a
+        The download URL is deliberately *not* resolved here — the worker mints a
         fresh one at transfer time, so a backed-up queue can never outlive it.
         """
         source = await self._require_source(channel_id, source_id)
         now = now_ist()
 
-        # One list call gives titles and statuses for everything being imported,
-        # so the video records start out with the app's real metadata.
+        # Walking the listing gives titles and statuses for everything being
+        # imported, so the video records start out with the app's real metadata.
         catalogue: dict[str, SourceVideo] = {}
         cursor: str | None = None
-        for _ in range(10):  # bounded: 10 pages x 100 = 1000 most recent renders
+        for _ in range(MAX_CATALOGUE_PAGES):
             page = await self.list_videos(channel_id, source_id, MAX_PAGE_LIMIT, cursor)
             for v in page.videos:
                 catalogue[v.id] = v
@@ -418,7 +345,7 @@ class VideoSourceService:
                     "analyze": analyze,
                     "status": "queued",
                     "message": "Waiting to transfer",
-                    "size_bytes": None,
+                    "size_bytes": meta.size_bytes,
                     "notified_at": None,
                     "notify_error": None,
                     "created_at": now,
@@ -431,10 +358,11 @@ class VideoSourceService:
             queued.append({"job_id": job_id, "source_video_id": source_video_id, "video_id": video_id})
 
         logger.info(
-            "Queued %d import(s) from %s (%s), skipped %d",
+            "Queued %d import(s) from %s (%s, kind=%s), skipped %d",
             len(queued),
-            source["name"],
+            source.name,
             source_id,
+            source.kind,
             len(skipped),
         )
         return {"ok": True, "queued": queued, "skipped": skipped}

@@ -22,11 +22,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.logger import get_logger
 from app.services.error_reporting import report_error
 from app.services.r2 import R2Service
-from app.services.video_source_service import (
-    VideoSourceService,
-    describe_http_error,
-    get_import_queue,
-)
+from app.services.video_source_service import VideoSourceService, get_import_queue
+from app.services.video_sources import adapter_for, describe_http_error
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -102,18 +99,14 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
 
     tmp_path: str | None = None
     try:
-        source = await db.video_sources.find_one({"source_id": source_id})
-        if not source:
-            raise ValueError(f"Video source '{source_id}' no longer exists")
-
-        # ── 1. Mint a fresh presigned URL ───────────────────────────────
-        # Always fetched here rather than at browse time: the app's URLs expire,
-        # and a backed-up queue or a retry can easily outlive one minted earlier.
         service = VideoSourceService(db)
-        detail = await service.fetch_download_url(source, source_video_id)
-        download_url = detail.get("downloadUrl")
-        if not download_url:
-            raise ValueError(f"App returned no downloadUrl for render '{source_video_id}'")
+        source = await service.load_source(source_id)
+
+        # ── 1. Mint a fresh download URL ────────────────────────────────
+        # Always fetched here rather than at browse time: these URLs expire, and a
+        # backed-up queue or a retry can easily outlive one minted earlier. How it
+        # is minted is the adapter's problem, not ours.
+        download_url = await service.download_url(source, source_video_id)
 
         # ── 2. Stream the app's URL to a local temp file ────────────────
         await db.source_imports.update_one(
@@ -152,23 +145,27 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
         # was never delivered, inviting a duplicate push.
         notify_error = await service.notify_imported(source, source_video_id, video_id)
         if notify_error:
-            # Non-fatal — the video really is here. But a missed callback means the
-            # app may push this render later and duplicate it, so make it loud.
-            logger.warning("Import callback failed for render %s: %s", source_video_id, notify_error)
-            await report_error(
-                feature="Source import callback",
-                message=(
-                    f"Ingested render '{source_video_id}' but could not notify the app: {notify_error}. "
-                    f"The app may re-deliver it and create a duplicate of video {video_id}."
-                ),
-                exception=None,
-                context={
-                    "job_id": job_id,
-                    "source_id": source_id,
-                    "source_video_id": source_video_id,
-                    "video_id": video_id,
-                },
-            )
+            # Non-fatal either way — the video really is here, and the job records
+            # the reason. It only reaches the error queue for an app that can push
+            # to us, where a missed callback really can produce a duplicate our
+            # dedup cannot see. For a pull-only app it would just be noise on every
+            # import until the app ships the field.
+            logger.warning("Import callback failed for video %s: %s", source_video_id, notify_error)
+            if adapter_for(source).pushes_to_us:
+                await report_error(
+                    feature="Source import callback",
+                    message=(
+                        f"Ingested '{source_video_id}' but could not notify the app: {notify_error}. "
+                        f"The app may re-deliver it and create a duplicate of video {video_id}."
+                    ),
+                    exception=None,
+                    context={
+                        "job_id": job_id,
+                        "source_id": source_id,
+                        "source_video_id": source_video_id,
+                        "video_id": video_id,
+                    },
+                )
         await db.source_imports.update_one(
             {"job_id": job_id},
             {"$set": {"notified_at": None if notify_error else now_ist(), "notify_error": notify_error}},
