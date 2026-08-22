@@ -33,12 +33,13 @@ def georank_source() -> VideoSource:
 
 
 def vidforge_source(**overrides) -> VideoSource:
+    config = {"email": "a@b.com", "password": PASSWORD, **overrides}
     return VideoSource(
         source_id="s-vf",
         channel_id="ch",
         name="Studio",
         base_url="https://vf.example.com",
-        config=VidForgeConfig(email="a@b.com", password=PASSWORD, **overrides),
+        config=VidForgeConfig(**config),
     )
 
 
@@ -184,3 +185,23 @@ def test_only_apps_that_push_carry_duplicate_risk():
     """Decides whether a missed callback reaches the error queue or just the job."""
     assert adapter_for(georank_source()).pushes_to_us is True
     assert adapter_for(vidforge_source()).pushes_to_us is False
+
+
+# ---------------------------------------------------------------- token cache
+
+
+def test_changing_credentials_invalidates_the_cached_token():
+    """A credential change must not keep reading the previous account's library.
+
+    The cache lives for the token's lifetime, so keying it on the source alone
+    would serve the old account for minutes after the config already named a new
+    one — silently listing the wrong videos for a channel.
+    """
+    from app.services.video_sources.vidforge import _cache_key
+
+    before = _cache_key(vidforge_source())
+    after = _cache_key(vidforge_source(email="someone.else@example.com"))
+    assert before != after
+
+    # The app key selects the library too, so it is part of the account identity.
+    assert _cache_key(vidforge_source()) != _cache_key(vidforge_source(app_key="shorts"))

@@ -44,18 +44,31 @@ _tokens: dict[str, tuple[str, float]] = {}
 _token_locks: dict[str, asyncio.Lock] = {}
 
 
-def _lock_for(source_id: str) -> asyncio.Lock:
-    """One lock per source so concurrent calls single-flight their login."""
-    lock = _token_locks.get(source_id)
+def _cache_key(source: VideoSource) -> str:
+    """Identifies the *account*, not just the source.
+
+    Keying on source_id alone would let a credential change keep serving the
+    previous account's token until it expired — reading one profile's library
+    while the config says another. Including the account makes the change take
+    effect on the next call.
+    """
+    cfg = source.config
+    assert isinstance(cfg, VidForgeConfig)
+    return f"{source.source_id}|{cfg.email}|{cfg.app_key}"
+
+
+def _lock_for(key: str) -> asyncio.Lock:
+    """One lock per account so concurrent calls single-flight their login."""
+    lock = _token_locks.get(key)
     if lock is None:
         lock = asyncio.Lock()
-        _token_locks[source_id] = lock
+        _token_locks[key] = lock
     return lock
 
 
-def forget_token(source_id: str) -> None:
+def forget_token(key: str) -> None:
     """Drop a cached token, e.g. after the app rejects it."""
-    _tokens.pop(source_id, None)
+    _tokens.pop(key, None)
 
 
 class VidForgeAdapter(SourceAdapter):
@@ -107,19 +120,19 @@ class VidForgeAdapter(SourceAdapter):
 
     async def _token(self, source: VideoSource, *, force: bool = False) -> str:
         """A valid access token, logging in only when the cached one is stale."""
-        sid = source.source_id
+        key = _cache_key(source)
         if not force:
-            cached = _tokens.get(sid)
+            cached = _tokens.get(key)
             if cached and cached[1] > time.monotonic():
                 return cached[0]
 
-        async with _lock_for(sid):
+        async with _lock_for(key):
             # Another caller may have refreshed while we waited for the lock.
-            cached = _tokens.get(sid)
+            cached = _tokens.get(key)
             if not force and cached and cached[1] > time.monotonic():
                 return cached[0]
             token = await self._login(source)
-            _tokens[sid] = (token, time.monotonic() + TOKEN_TTL_S - TOKEN_SAFETY_MARGIN_S)
+            _tokens[key] = (token, time.monotonic() + TOKEN_TTL_S - TOKEN_SAFETY_MARGIN_S)
             return token
 
     async def _request(
@@ -145,7 +158,7 @@ class VidForgeAdapter(SourceAdapter):
             if resp.status_code != 401:
                 resp.raise_for_status()
                 return resp
-            forget_token(source.source_id)
+            forget_token(_cache_key(source))
         raise SourceUnavailableError("The app rejected our credentials twice — check the email and password")
 
     # ------------------------------------------------------------------
