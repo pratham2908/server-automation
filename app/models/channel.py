@@ -129,7 +129,12 @@ class Channel(BaseModel):
     # --- Platform profile metadata, refreshed on sync ---
     description: str | None = Field(None, description="Channel description from the platform")
     custom_url: str | None = Field(None, description="YouTube custom URL, e.g. '@handle'")
-    handle: str | None = Field(None, description="Platform handle")
+    handle: str | None = Field(
+        None,
+        description="Unique platform handle, normalised to '@name' for both YouTube and Instagram",
+    )
+    instagram_username: str | None = Field(None, description="Raw Instagram username, e.g. 'geo_ranking'")
+    thumbnail_url: str | None = Field(None, description="Profile picture URL from the platform")
     subscriber_count: int | None = Field(None, description="Subscribers (YouTube) / followers (Instagram)")
     video_count: int | None = Field(None, description="Videos published on the platform")
     view_count: int | None = Field(None, description="Lifetime views reported by the platform")

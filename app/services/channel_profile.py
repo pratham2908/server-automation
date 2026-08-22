@@ -19,6 +19,27 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.timezone import now_ist
 
 
+def normalise_handle(raw: str) -> str:
+    """Return a platform handle in one shape: '@name'.
+
+    YouTube's ``custom_url`` already carries the '@'; Instagram returns a bare
+    username. Normalising here means the UI renders one field for both platforms
+    instead of branching on platform at every call site.
+    """
+    handle = raw.strip().lstrip("@")
+    return f"@{handle}" if handle else ""
+
+
+def _set_if_present(update: dict[str, Any], key: str, value: str | None) -> None:
+    """Add *key* only when the platform actually returned something.
+
+    A transient empty avatar or handle in a response must not overwrite a good
+    stored value with "" — absent means "unknown", not "cleared".
+    """
+    if value:
+        update[key] = value
+
+
 def build_profile_update(
     platform: str,
     info: dict[str, Any],
@@ -34,26 +55,34 @@ def build_profile_update(
     set no display name return an empty string, so username is the fallback.
     """
     if platform == "instagram":
-        name = info.get("name") or info.get("username") or current_name
-        return {
-            "name": name,
+        username = info.get("username") or ""
+        update = {
+            "name": info.get("name") or username or current_name,
             "description": info.get("biography", ""),
-            "thumbnail_url": info.get("profile_picture_url", ""),
             "subscriber_count": info.get("followers_count", 0),
             "video_count": info.get("media_count", 0),
             "updated_at": now_ist(),
         }
+        if username:
+            update["handle"] = normalise_handle(username)
+            update["instagram_username"] = username
+        _set_if_present(update, "thumbnail_url", info.get("profile_picture_url"))
+        return update
 
-    return {
+    update = {
         "name": info.get("name") or current_name,
         "description": info.get("description", ""),
-        "custom_url": info.get("custom_url", ""),
-        "thumbnail_url": info.get("thumbnail_url", ""),
         "subscriber_count": info.get("subscriber_count", 0),
         "video_count": info.get("video_count", 0),
         "view_count": info.get("view_count", 0),
         "updated_at": now_ist(),
     }
+    custom_url = info.get("custom_url") or ""
+    if custom_url:
+        update["custom_url"] = custom_url
+        update["handle"] = normalise_handle(custom_url)
+    _set_if_present(update, "thumbnail_url", info.get("thumbnail_url"))
+    return update
 
 
 def name_changed(update: dict[str, Any], current_name: str) -> bool:
