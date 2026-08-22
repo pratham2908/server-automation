@@ -14,6 +14,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import not_paused_query, update_channel_task_status
 from app.logger import get_logger
+from app.services.channel_profile import build_profile_update, name_changed, persist_profile_update
 from app.services.error_reporting import report_error
 from app.services.growth_tracking import GrowthTrackingService
 from app.services.metrics import metrics_service
@@ -61,7 +62,8 @@ async def run_growth_tracking_cron(
 
                 try:
                     subs, views = 0, 0
-                    metadata = {}
+                    metadata: dict[str, Any] = {}
+                    info: dict[str, Any] | None = None
 
                     if platform == "youtube":
                         yt_service = await youtube_service_manager.get_service(channel_id)
@@ -81,8 +83,34 @@ async def run_growth_tracking_cron(
                             views = 0
                             metadata = {"media_count": info.get("media_count", 0)}
 
+                    if info is None:
+                        # No usable platform credential. Recording a zero snapshot here
+                        # would put a fake collapse to 0 followers into the growth chart,
+                        # so skip the channel entirely rather than invent a data point.
+                        logger.warning(
+                            "Growth tracking: skipping '%s' — no %s credential available",
+                            channel_id,
+                            platform,
+                        )
+                        continue
+
                     # Record the snapshot
                     await growth_service.record_snapshot(channel_id, platform, subs, views, metadata)
+
+                    # The payload we just fetched already carries the display name,
+                    # avatar, and description, so refreshing the cached profile costs
+                    # no extra API call — it is the same response, previously discarded.
+                    current_name = channel.get("name", "")
+                    profile = build_profile_update(platform, info, current_name)
+                    await persist_profile_update(db, channel_id, profile)
+                    if name_changed(profile, current_name):
+                        logger.success(
+                            "Channel '%s' renamed on %s: %r -> %r",
+                            channel_id,
+                            platform,
+                            current_name,
+                            profile["name"],
+                        )
 
                     # Update channel status
                     await update_channel_task_status(db, channel_id, "growth_tracking")

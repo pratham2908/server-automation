@@ -17,6 +17,7 @@ from app.dependencies import (
 )
 from app.logger import get_logger
 from app.models.profile import ProfileInDB
+from app.services.channel_profile import build_profile_update, persist_profile_update
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -373,17 +374,8 @@ async def refresh_channel(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-    update = {
-        "name": yt_data["name"],
-        "description": yt_data.get("description", ""),
-        "custom_url": yt_data.get("custom_url", ""),
-        "thumbnail_url": yt_data.get("thumbnail_url", ""),
-        "subscriber_count": yt_data.get("subscriber_count", 0),
-        "video_count": yt_data.get("video_count", 0),
-        "view_count": yt_data.get("view_count", 0),
-        "updated_at": now_ist(),
-    }
-    await db.channels.update_one({"channel_id": channel_id}, {"$set": update})
+    update = build_profile_update("youtube", yt_data, doc.get("name", ""))
+    await persist_profile_update(db, channel_id, update)
     return {"ok": True, "channel_id": channel_id, "updated": update}
 
 
@@ -413,15 +405,8 @@ async def _refresh_instagram_channel(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
 
-    update = {
-        "name": ig_data.get("name") or ig_data.get("username", doc.get("name", "")),
-        "description": ig_data.get("biography", ""),
-        "thumbnail_url": ig_data.get("profile_picture_url", ""),
-        "subscriber_count": ig_data.get("followers_count", 0),
-        "video_count": ig_data.get("media_count", 0),
-        "updated_at": now_ist(),
-    }
-    await db.channels.update_one({"channel_id": channel_id}, {"$set": update})
+    update = build_profile_update("instagram", ig_data, doc.get("name", ""))
+    await persist_profile_update(db, channel_id, update)
     return {"ok": True, "channel_id": channel_id, "updated": update}
 
 
