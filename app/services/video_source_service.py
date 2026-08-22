@@ -158,7 +158,39 @@ class VideoSourceService:
         """A freshly minted download URL, for the worker at transfer time."""
         return await adapter_for(source).fetch_download_url(source, source_video_id)
 
-    async def notify_imported(self, source: VideoSource, source_video_id: str, our_video_id: str) -> str | None:
+    async def mark_sent(self, channel_id: str, source_id: str, source_video_id: str) -> dict[str, Any]:
+        """Tell the app it has already delivered a video, on an operator's say-so.
+
+        The reason this exists: an app can only report delivery for videos it
+        pushed to us. Anything the channel published another way still looks
+        unsent, so it keeps being offered for import — and importing it would
+        republish something already live. Marking retires it at the source, where
+        every future listing will see it, rather than in a local ignore-list only
+        this system would know about.
+
+        If we happen to hold the video, its id goes along so the app can link the
+        two; when we do not, the mark stands on its own.
+        """
+        source = await self._require_source(channel_id, source_id)
+        adapter = adapter_for(source)
+        if not adapter.supports_mark_imported(source):
+            return {"ok": False, "error": f"'{source.name}' has no endpoint for marking a delivery"}
+
+        existing = await self.db.videos.find_one(
+            {"channel_id": channel_id, "source_id": source_id, "source_video_id": source_video_id},
+            {"_id": 0, "video_id": 1},
+        )
+        our_video_id = existing["video_id"] if existing else None
+
+        error = await self.notify_imported(source, source_video_id, our_video_id)
+        if error:
+            logger.warning("Manual mark-sent failed for %s on %s: %s", source_video_id, source_id, error)
+            return {"ok": False, "error": error}
+
+        logger.info("Marked %s as already sent on %s (%s)", source_video_id, source.name, source_id)
+        return {"ok": True, "video_id": our_video_id}
+
+    async def notify_imported(self, source: VideoSource, source_video_id: str, our_video_id: str | None) -> str | None:
         """Tell the app we ingested a video, closing the pull-model loop.
 
         Without this the app still believes the video was never delivered and may

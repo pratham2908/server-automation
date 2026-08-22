@@ -227,7 +227,7 @@ class VidForgeAdapter(SourceAdapter):
     # Marking
     # ------------------------------------------------------------------
 
-    async def mark_imported(self, source: VideoSource, video_id: str, our_video_id: str) -> str | None:
+    async def mark_imported(self, source: VideoSource, video_id: str, our_video_id: str | None) -> str | None:
         """PATCH the delivery flag, then read it back to prove it stuck.
 
         This endpoint accepts unknown fields and answers 200 for them, so a

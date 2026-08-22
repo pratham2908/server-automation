@@ -112,14 +112,16 @@ class GeoRankAdapter(SourceAdapter):
             raise ValueError(f"App returned no downloadUrl for video '{video_id}'")
         return str(url)
 
-    async def mark_imported(self, source: VideoSource, video_id: str, our_video_id: str) -> str | None:
+    async def mark_imported(self, source: VideoSource, video_id: str, our_video_id: str | None) -> str | None:
         cfg = self._cfg(source)
         if not cfg.mark_imported_path:
             return None
 
         url = f"{source.base_url}{cfg.mark_imported_path.replace('{id}', video_id)}"
         headers = {**self._headers(source), "Content-Type": "application/json"}
-        payload = {"externalVideoId": our_video_id}
+        # The body is optional in the contract, so a hand-marked video sends none
+        # rather than claiming a video id that does not exist.
+        payload = {"externalVideoId": our_video_id} if our_video_id else {}
 
         last_error = "unknown error"
         for attempt in range(1, NOTIFY_ATTEMPTS + 1):

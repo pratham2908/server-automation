@@ -80,6 +80,26 @@ async def list_source_videos(
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
+@router.post("/{source_id}/videos/{video_id}/mark-sent")
+async def mark_video_sent(
+    channel_id: str,
+    source_id: str,
+    video_id: str,
+    service: VideoSourceService = Depends(get_source_service),
+) -> dict[str, Any]:
+    """Tell the app it has already delivered this video, so it stops offering it.
+
+    For retiring something the channel published through another route, which the
+    app has no way to know about and would otherwise keep listing as unsent.
+    """
+    try:
+        return await service.mark_sent(channel_id, source_id, video_id)
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
 @router.post("/{source_id}/import")
 async def import_videos(
     channel_id: str,

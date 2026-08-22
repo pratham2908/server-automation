@@ -65,8 +65,12 @@ class SourceAdapter(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def mark_imported(self, source: VideoSource, video_id: str, our_video_id: str) -> str | None:
-        """Tell the app we ingested a video. Returns None on success, else why not.
+    async def mark_imported(self, source: VideoSource, video_id: str, our_video_id: str | None) -> str | None:
+        """Tell the app we have this video. Returns None on success, else why not.
+
+        ``our_video_id`` is None when an operator marks a video by hand, which is
+        how they retire something the channel already published through another
+        route — there is no local video record to point at.
 
         Never raises: a failed callback must not destroy an otherwise-good import.
         Adapters for apps without the capability return None immediately.
