@@ -34,6 +34,7 @@ _metrics_persistence_task = None
 _batch_analysis_task = None
 _retention_analysis_task = None
 _source_import_task = None
+_auto_scheduler_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background source import worker started")
 
+    # ---- Daily auto-scheduler cron ----
+    from app.services.auto_scheduler_cron import run_auto_scheduler
+
+    global _auto_scheduler_task
+    _auto_scheduler_task = create_monitored_task(
+        run_auto_scheduler(db),
+        feature="Background: Auto-scheduler cron",
+    )
+    logger.info("Background auto-scheduler cron started")
+
     yield
 
     # ---- Shutdown ----
@@ -254,6 +265,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _batch_analysis_task,
         _retention_analysis_task,
         _source_import_task,
+        _auto_scheduler_task,
     ):
         if task and not task.done():
             task.cancel()
