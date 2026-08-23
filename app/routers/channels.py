@@ -1171,8 +1171,12 @@ async def get_instagram_oauth_config_endpoint(
 class InstagramTokenStore(BaseModel):
     """Payload for storing an Instagram long-lived token from the frontend."""
 
-    access_token: str = Field(..., description="Long-lived Facebook user access token")
+    access_token: str = Field(..., description="Long-lived Instagram/Facebook access token")
     expires_at: str | None = Field(None, description="ISO 8601 expiry datetime")
+    provider: str = Field(
+        "facebook",
+        description="Auth source: 'facebook' (Facebook Login) or 'instagram' (Instagram Login).",
+    )
 
 
 @router.post("/{channel_id}/instagram-token")
@@ -1189,10 +1193,12 @@ async def store_instagram_token(
             detail=f"Channel '{channel_id}' not found",
         )
 
+    provider = body.provider if body.provider in ("facebook", "instagram") else "facebook"
     token_doc = {
         "access_token": body.access_token.strip(),
         "token_type": "bearer",
         "expires_at": body.expires_at,
+        "provider": provider,
     }
 
     await db.channels.update_one(
@@ -1291,15 +1297,17 @@ async def get_instagram_token_status(
 
     token = tokens["access_token"]
     stored_expires_at = tokens.get("expires_at")
+    provider = tokens.get("provider", "facebook")
 
     # App credentials let us build a proper app access token; without them we
     # self-debug (still authoritative for valid/expired). Both may be absent.
+    # For the instagram provider these are ignored (validated via /me).
     settings = get_settings()
     cfg = await get_instagram_oauth_config(db)
     app_id = (cfg or {}).get("app_id") or settings.INSTAGRAM_APP_ID
     app_secret = (cfg or {}).get("app_secret") or settings.INSTAGRAM_APP_SECRET
 
-    check = await asyncio.to_thread(introspect_token, token, app_id, app_secret)
+    check = await asyncio.to_thread(introspect_token, token, app_id, app_secret, provider)
 
     # If Graph was unreachable, don't flip a working channel to disconnected on a
     # transient blip — report the token exists but mark the status unknown.
@@ -1312,20 +1320,25 @@ async def get_instagram_token_status(
             "checked": False,
         }
 
-    # Normalise the real expiry: 0 (or missing) means the token never expires.
+    # Whether we learned an authoritative expiry. debug_token (facebook) returns an
+    # int — 0 meaning "never"; /me (instagram) returns nothing, so we keep the
+    # stored date. Only an authoritative value is normalised and written back.
+    has_real_expiry = check.valid and check.expires_at is not None
     real_expires_at: str | None = None
-    if check.expires_at:
+    if has_real_expiry and check.expires_at:  # non-zero => an actual timestamp
         real_expires_at = datetime.fromtimestamp(check.expires_at, tz=timezone.utc).isoformat()
+
+    resolved_expires_at = real_expires_at if has_real_expiry else stored_expires_at
 
     # Correct the stored expiry so the DB and other consumers stop trusting a stale
     # date. Best-effort: a write failure must never break the status response.
-    if check.valid and real_expires_at != stored_expires_at:
+    if has_real_expiry and resolved_expires_at != stored_expires_at:
         try:
             await db.channels.update_one(
                 {"channel_id": channel_id},
                 {
                     "$set": {
-                        "instagram_tokens.expires_at": real_expires_at,
+                        "instagram_tokens.expires_at": resolved_expires_at,
                         "instagram_tokens.last_checked": now_ist().isoformat(),
                     }
                 },
@@ -1337,8 +1350,9 @@ async def get_instagram_token_status(
         "channel_id": channel_id,
         "connected": check.valid,
         "status": "active" if check.valid else "expired",
-        "expires_at": real_expires_at if check.valid else stored_expires_at,
+        "expires_at": resolved_expires_at,
         "checked": True,
+        "provider": provider,
     }
 
 

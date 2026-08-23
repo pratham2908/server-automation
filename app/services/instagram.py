@@ -21,7 +21,21 @@ from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
-_GRAPH_BASE = "https://graph.facebook.com/v25.0"
+# Two integrations run in parallel during the migration:
+#   facebook  – Instagram Graph API via Facebook Login (graph.facebook.com)
+#   instagram – Instagram API with Instagram Login   (graph.instagram.com)
+PROVIDER_FACEBOOK = "facebook"
+PROVIDER_INSTAGRAM = "instagram"
+
+_FB_GRAPH_BASE = "https://graph.facebook.com/v25.0"
+_IG_GRAPH_BASE = "https://graph.instagram.com/v23.0"
+
+# Back-compat alias — Facebook host used by debug_token (a Facebook-only endpoint).
+_GRAPH_BASE = _FB_GRAPH_BASE
+
+
+def _base_for(provider: str) -> str:
+    return _IG_GRAPH_BASE if provider == PROVIDER_INSTAGRAM else _FB_GRAPH_BASE
 
 
 class TokenCheck(BaseModel):
@@ -33,16 +47,53 @@ class TokenCheck(BaseModel):
     error: str | None = None
 
 
-def introspect_token(token: str, app_id: str | None = None, app_secret: str | None = None) -> TokenCheck:
-    """Introspect *token* via Graph ``debug_token`` to learn its real validity/expiry.
+def _introspect_instagram_login(token: str) -> TokenCheck:
+    """Validate an Instagram-Login token via ``graph.instagram.com/me``.
 
-    Uses the app access token (``app_id|app_secret``) when both are available;
-    otherwise self-debugs with the token itself. Self-debug still reports validity:
-    a live token returns its ``data`` block, while an expired one comes back as a
-    top-level ``OAuthException`` (code 190) which we read as invalid.
+    ``debug_token`` is a Facebook-only endpoint, so Instagram-Login tokens are
+    checked by a lightweight ``/me`` call: an ``id`` means valid; an ``error``
+    (code 190) means expired/invalid. ``/me`` returns no expiry, so ``expires_at``
+    stays ``None`` and callers keep the stored value.
+    """
+    try:
+        resp = requests.get(
+            f"{_IG_GRAPH_BASE}/me",
+            params={"fields": "id,username", "access_token": token},
+            timeout=15,
+        )
+        body = resp.json()
+    except Exception as e:  # network / non-JSON — cannot determine validity
+        logger.warning("Instagram Login /me unreachable: %s", e)
+        return TokenCheck(reachable=False, valid=False, error=str(e))
+
+    if body.get("id"):
+        return TokenCheck(reachable=True, valid=True, expires_at=None)
+    err = body.get("error") or {}
+    if err.get("code") == 190:
+        return TokenCheck(reachable=True, valid=False, error=err.get("message"))
+    logger.warning("Instagram Login /me inconclusive: %s", err or body)
+    return TokenCheck(reachable=False, valid=False, error=err.get("message") or "inconclusive")
+
+
+def introspect_token(
+    token: str,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+    provider: str = PROVIDER_FACEBOOK,
+) -> TokenCheck:
+    """Introspect *token* to learn its real validity/expiry.
+
+    ``instagram`` provider tokens are validated via ``graph.instagram.com/me``.
+    ``facebook`` provider tokens use Graph ``debug_token`` — with the app access
+    token (``app_id|app_secret``) when available, else self-debugged with the
+    token itself (a live token returns ``data``; an expired one a top-level
+    ``OAuthException`` code 190).
 
     Blocking I/O (``requests``) — call via ``asyncio.to_thread`` from async code.
     """
+    if provider == PROVIDER_INSTAGRAM:
+        return _introspect_instagram_login(token)
+
     verifier = f"{app_id}|{app_secret}" if app_id and app_secret else token
     try:
         resp = requests.get(
@@ -82,12 +133,15 @@ class InstagramService:
         self,
         access_token: str,
         *,
+        provider: str = PROVIDER_FACEBOOK,
         db: Any = None,
         channel_id: str | None = None,
     ) -> None:
         # Strip whitespace/newlines — a pasted token with a trailing "\n" produces
         # an "Invalid header value" (Bearer <token>\n) and fails every Graph call.
         self._token = access_token.strip()
+        self._provider = provider
+        self._base = _base_for(provider)
         self._db = db
         self._channel_id = channel_id
 
@@ -97,7 +151,7 @@ class InstagramService:
         start_time = time.time()
         try:
             resp = requests.get(
-                f"{_GRAPH_BASE}/{endpoint}",
+                f"{self._base}/{endpoint}",
                 params=params,
                 headers=headers,
                 timeout=30,
@@ -142,12 +196,22 @@ class InstagramService:
             "biography": data.get("biography", ""),
         }
 
+    def _require_business_discovery(self) -> None:
+        """business_discovery is a Facebook-Login-only feature — it does not exist on
+        the Instagram Login API. Fail loudly instead of 400-ing graph.instagram.com."""
+        if self._provider == PROVIDER_INSTAGRAM:
+            raise ValueError(
+                "business_discovery (competitor lookup) is not available on the Instagram "
+                "Login API; competitor intel requires a Facebook-Login token."
+            )
+
     def discover_business_account(self, own_ig_user_id: str, target_username: str) -> dict[str, Any]:
         """Fetch metadata for *any* Business/Creator account using Business Discovery.
 
         Requires an authenticated business account (own_ig_user_id) to perform
         the search.  Returns a dict with basic metadata.
         """
+        self._require_business_discovery()
         query = f"business_discovery.username({target_username}){{id,username,name,profile_picture_url,followers_count,media_count,biography}}"
         data = self._get(own_ig_user_id, {"fields": query})
 
@@ -169,6 +233,7 @@ class InstagramService:
 
         Note: The Business Discovery API has strict limitations on pagination depth.
         """
+        self._require_business_discovery()
         fields = (
             f"business_discovery.username({target_username})"
             f"{{media{{id,caption,media_type,media_url,timestamp,permalink,like_count,comments_count}}}}"
@@ -226,7 +291,7 @@ class InstagramService:
                 # but our _get helper prepends _GRAPH_BASE.
                 # So we strip the base if it's there, or just use requests.get directly for paging.
                 params = {}
-                url = next_url.replace(f"{_GRAPH_BASE}/", "")
+                url = next_url.replace(f"{self._base}/", "")
             else:
                 url = None
 
@@ -279,7 +344,7 @@ class InstagramService:
             next_url = paging.get("next")
             if next_url:
                 params = {}
-                url = next_url.replace(f"{_GRAPH_BASE}/", "")
+                url = next_url.replace(f"{self._base}/", "")
             else:
                 url = None
 
@@ -364,7 +429,7 @@ class InstagramService:
         start_time = time.time()
         try:
             resp = requests.post(
-                f"{_GRAPH_BASE}/{endpoint}",
+                f"{self._base}/{endpoint}",
                 data=payload,
                 headers=headers,
                 timeout=60,
@@ -603,16 +668,24 @@ class InstagramService:
         Returns the new token string, or ``None`` on failure.
         """
         try:
-            resp = requests.get(
-                f"{_GRAPH_BASE}/oauth/access_token",
-                params={
-                    "grant_type": "fb_exchange_token",
-                    "client_id": app_id,
-                    "client_secret": app_secret,
-                    "fb_exchange_token": self._token,
-                },
-                timeout=30,
-            )
+            if self._provider == PROVIDER_INSTAGRAM:
+                # Instagram Login: refresh a long-lived IG token (no app secret needed).
+                resp = requests.get(
+                    f"{_IG_GRAPH_BASE}/refresh_access_token",
+                    params={"grant_type": "ig_refresh_token", "access_token": self._token},
+                    timeout=30,
+                )
+            else:
+                resp = requests.get(
+                    f"{_FB_GRAPH_BASE}/oauth/access_token",
+                    params={
+                        "grant_type": "fb_exchange_token",
+                        "client_id": app_id,
+                        "client_secret": app_secret,
+                        "fb_exchange_token": self._token,
+                    },
+                    timeout=30,
+                )
             resp.raise_for_status()
             data = resp.json()
             new_token = data.get("access_token")
@@ -678,8 +751,10 @@ class InstagramServiceManager:
             return None
 
         try:
+            tokens = channel["instagram_tokens"]
             service = InstagramService(
-                access_token=channel["instagram_tokens"]["access_token"],
+                access_token=tokens["access_token"],
+                provider=tokens.get("provider", PROVIDER_FACEBOOK),
                 db=self._db,
                 channel_id=channel_id,
             )
