@@ -48,6 +48,9 @@ async def connect_db(
     await _db.source_imports.create_index("job_id", unique=True)
     await _db.source_imports.create_index([("channel_id", 1), ("created_at", -1)])
     await _db.source_imports.create_index("status")
+    # Auto-scheduler: one run doc per (day, channel); one summary latch per day.
+    await _db.auto_scheduler_runs.create_index([("date", 1), ("channel_id", 1)], unique=True)
+    await _db.auto_scheduler_summaries.create_index("date", unique=True)
     await _db.posting_queue.create_index(
         [("channel_id", 1), ("position", 1)],
     )

@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     # Scheduling
     TIMEZONE: str = "Asia/Kolkata"
 
+    # Email (SMTP) — optional. When unset, summary emails are logged and skipped
+    # rather than sent, so the auto-scheduler still runs without mail configured.
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM: str | None = None
+    SMTP_USE_TLS: bool = True
+    # Where the daily auto-scheduler summary is sent. Falls back to the profile
+    # owner's email when unset.
+    SUMMARY_EMAIL_TO: str | None = None
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

@@ -95,10 +95,26 @@ class VelocityBoosterConfig(BaseModel):
     schedule_delay_minutes: int = Field(15, description="How many minutes from now to schedule the boosted video")
 
 
+class AutoSchedulerConfig(BaseModel):
+    """Per-channel daily auto-scheduler settings.
+
+    Off by default. The number of ``schedule_times`` is the number of videos
+    posted per day — one video per slot. Each slot's cron pass runs one hour
+    before the slot time and schedules a video for that time.
+    """
+
+    enabled: bool = Field(False, description="Whether the daily auto-scheduler runs for this channel")
+    schedule_times: list[str] = Field(
+        default_factory=lambda: ["19:00"],
+        description="IST HH:MM slots; one video is scheduled per slot per day",
+    )
+
+
 class AutomationConfig(BaseModel):
     """Aggregate for all channel-level automation settings."""
 
     velocity_booster: VelocityBoosterConfig = Field(default_factory=VelocityBoosterConfig)
+    auto_scheduler: AutoSchedulerConfig = Field(default_factory=AutoSchedulerConfig)
 
 
 class Channel(BaseModel):
