@@ -2,8 +2,9 @@
 
 Implements the three-step direct-to-R2 upload flow:
 
-1. batch_init   — generate presigned PUT URLs, create video records in "uploading" status
-2. batch_confirm — mark uploads done, enqueue for sequential AI analysis
+1. batch_init   — generate presigned PUT URLs, create video records in "processing" status
+2. batch_confirm — mark uploads done, enqueue for sequential AI analysis (the video
+   stays "processing" until analysis writes its packaging, then becomes "ready")
 3. get_batch_status — poll progress
 
 Plus a long-running singleton worker (run_batch_analysis_worker) that processes
@@ -105,7 +106,10 @@ class BatchUploadService:
                     "description": "",
                     "tags": [],
                     "category": "Uncategorized",
-                    "status": "uploading",
+                    # Not postable yet: AI packaging writes the title/description/
+                    # tags, so the video stays "processing" until analysis completes
+                    # (promoted to "ready" in run_retention_analysis).
+                    "status": "processing",
                     "r2_object_key": r2_key,
                     "multi_channel_group_id": file_id,  # file_id acts as group for this file
                     "packaging_status": "pending",
@@ -189,11 +193,14 @@ class BatchUploadService:
                 },
             )
             if result:
-                # Update video records to "ready" (upload done, waiting for analysis)
+                # Upload done, analysis queued. The file is in R2 but not yet
+                # postable — packaging still has to write the title/description/
+                # tags — so it stays "processing" (run_retention_analysis promotes
+                # it to "ready" on success).
                 for cv in result.get("channel_video_ids", []):
                     await self.db.videos.update_one(
                         {"video_id": cv["video_id"]},
-                        {"$set": {"status": "ready", "packaging_status": "pending", "updated_at": now}},
+                        {"$set": {"status": "processing", "packaging_status": "pending", "updated_at": now}},
                     )
                 # Signal the worker
                 get_analysis_queue().put_nowait(file_id)

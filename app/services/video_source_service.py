@@ -400,7 +400,10 @@ class VideoSourceService:
                     "description": "",
                     "tags": [],
                     "category": "Uncategorized",
-                    "status": "uploading",
+                    # Transferring, then analysing: not postable until packaging
+                    # writes the title/description/tags. The import worker keeps it
+                    # "processing" and analysis promotes it to "ready".
+                    "status": "processing",
                     "r2_object_key": r2_key,
                     "packaging_status": "pending",
                     # Provenance — also the dedup key for re-import checks.

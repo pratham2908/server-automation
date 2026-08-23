@@ -51,6 +51,37 @@ def extract_thumbnail(video_path: str, timestamp: float, output_path: str) -> bo
         return False
 
 
+async def promote_processing_to_ready(
+    db: AsyncIOMotorDatabase,
+    channel_id: str,
+    video_id: str,
+) -> None:
+    """After a successful analysis, mark a video that was waiting on packaging
+    as postable.
+
+    Imported/batch-uploaded videos sit in ``processing`` until AI packaging has
+    written their title/description/tags. Once analysis succeeds they become
+    ``ready`` — along with any multi-channel siblings sharing this file.
+
+    The ``status == "processing"`` guard is essential: re-analysing an already
+    live/scheduled/ready video (e.g. a manual "predict") must never rewind its
+    status. Direct uploads that were created ``ready`` are untouched for the same
+    reason.
+    """
+    now = now_ist()
+    await db.videos.update_one(
+        {"channel_id": channel_id, "video_id": video_id, "status": "processing"},
+        {"$set": {"status": "ready", "updated_at": now}},
+    )
+    primary = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id}, {"multi_channel_group_id": 1})
+    group = (primary or {}).get("multi_channel_group_id")
+    if group:
+        await db.videos.update_many(
+            {"multi_channel_group_id": group, "status": "processing"},
+            {"$set": {"status": "ready", "updated_at": now}},
+        )
+
+
 async def run_retention_analysis(
     channel_id: str,
     video_id: str,
@@ -275,6 +306,10 @@ async def run_retention_analysis(
                             {"channel_id": sib_channel_id, "video_id": sib_video_id},
                             {"$set": {"packaging_status": "failed", "updated_at": now}},
                         )
+
+        # Analysis succeeded — promote the video (and multi-channel siblings) from
+        # "processing" to "ready" now that its packaging metadata exists.
+        await promote_processing_to_ready(db, channel_id, video_id)
 
         logger.success(
             "Retention analysis complete for '%s' — predicted retention: %s%%",
