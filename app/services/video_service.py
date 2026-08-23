@@ -24,7 +24,7 @@ from app.services.downloader import (
 )
 from app.services.error_reporting import create_monitored_task, report_error
 from app.services.r2 import R2Service
-from app.services.retention_analysis import run_retention_analysis
+from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
 from app.services.schedule_operation import (
     enqueue_video_for_youtube,
     schedule_single_video_instagram,
@@ -647,6 +647,14 @@ class VideoService:
                 feature="Retention analysis (scheduled from VideoService)",
                 context={"channel_id": channel_id, "video_id": video_id},
             )
+        else:
+            # Uploads are created "processing" and only become postable once
+            # analysis writes their packaging. If it cannot run, the video would
+            # sit stranded — never silently: surface it so it can be re-triggered.
+            logger.warning(
+                "Retention analysis skipped for video %s (r2/gemini unavailable) — it will remain 'processing'",
+                video_id,
+            )
 
     def trigger_repost_download(
         self,
@@ -818,7 +826,11 @@ class VideoService:
             assert self.r2 is not None
             self.r2.upload_video(f, key)
         now = now_ist()
-        status = "scheduled" if (sch_at and platform == "instagram") else "ready"
+        # AI packaging is the source of truth for a video's metadata, so a fresh
+        # upload is not postable until analysis completes: it starts "processing"
+        # and promote_processing_to_ready flips it to "ready" (or its Instagram
+        # schedule) afterward. No posting/schedule-queue entry is made here — a
+        # processing video is not postable; promotion enqueues it when it is.
         doc = {
             "channel_id": channel_id,
             "video_id": vid_id,
@@ -826,40 +838,18 @@ class VideoService:
             "description": description,
             "tags": parsed_tags,
             "category": category or "Uncategorized",
-            "status": status,
+            "status": "processing",
             "r2_object_key": key,
             "content_params": params,
             "verification_status": "verified" if (category and params) else "unverified",
-            "scheduled_at": sch_at if status == "scheduled" else None,
+            # An Instagram upload-time schedule is kept as the intent; promotion honours it.
+            "scheduled_at": sch_at if (sch_at and platform == "instagram") else None,
+            "packaging_status": "pending",
             "created_at": now,
             "updated_at": now,
         }
         await self.db.videos.insert_one(doc)
-        if status == "scheduled":
-            last = await self.db.schedule_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
-            await self.db.schedule_queue.insert_one(
-                {
-                    "channel_id": channel_id,
-                    "video_id": vid_id,
-                    "position": (last["position"] + 1) if last else 1,
-                    "scheduled_at": sch_at,
-                    "added_at": now,
-                }
-            )
-        else:
-            last = await self.db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
-            await self.db.posting_queue.insert_one(
-                {
-                    "channel_id": channel_id,
-                    "video_id": vid_id,
-                    "position": (last["position"] + 1) if last else 1,
-                    "added_at": now,
-                }
-            )
-        if status in ("ready", "scheduled"):
-            self.trigger_retention_analysis(channel_id, vid_id, local_video_path=tpath)
-        elif os.path.exists(tpath):
-            os.unlink(tpath)
+        self.trigger_retention_analysis(channel_id, vid_id, local_video_path=tpath)
         doc.pop("_id", None)
         return {"ok": True, "video": doc}
 
@@ -921,8 +911,8 @@ class VideoService:
             platform = get_channel_platform(ch)
             new_vid_id = str(uuid.uuid4())
 
-            # Create the DB record first (packaging_status = analyzing)
-            status = "scheduled" if (sch_at and platform == "instagram") else "ready"
+            # Created "processing" — packaged just below, then promoted. Not postable
+            # (and not queued) until its packaging is written.
             doc: dict[str, Any] = {
                 "channel_id": cid,
                 "video_id": new_vid_id,
@@ -930,37 +920,16 @@ class VideoService:
                 "description": video.get("description", ""),
                 "tags": video.get("tags", []),
                 "category": video.get("category", "Uncategorized"),
-                "status": status,
+                "status": "processing",
                 "r2_object_key": r2_key,
                 "multi_channel_group_id": group_id,
                 "packaging_status": "analyzing",
-                "scheduled_at": sch_at if status == "scheduled" else None,
+                # An Instagram upload-time schedule is kept as the intent; promotion honours it.
+                "scheduled_at": sch_at if (sch_at and platform == "instagram") else None,
                 "created_at": now,
                 "updated_at": now,
             }
             await self.db.videos.insert_one(doc)
-
-            if status == "scheduled":
-                last = await self.db.schedule_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
-                await self.db.schedule_queue.insert_one(
-                    {
-                        "channel_id": cid,
-                        "video_id": new_vid_id,
-                        "position": (last["position"] + 1) if last else 1,
-                        "scheduled_at": sch_at,
-                        "added_at": now,
-                    }
-                )
-            else:
-                last = await self.db.posting_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
-                await self.db.posting_queue.insert_one(
-                    {
-                        "channel_id": cid,
-                        "video_id": new_vid_id,
-                        "position": (last["position"] + 1) if last else 1,
-                        "added_at": now,
-                    }
-                )
 
             # Generate platform-specific packaging using existing analysis
             packaging: dict | None = None
@@ -997,6 +966,9 @@ class VideoService:
                     )
 
             await self.db.videos.update_one({"video_id": new_vid_id}, {"$set": pkg_updates})
+            # Packaging done — promote to "ready" (or its Instagram schedule). A
+            # channel whose packaging failed stays "processing" (guarded inside).
+            await promote_processing_to_ready(self.db, cid, new_vid_id)
 
             channel_videos.append(
                 {
@@ -1101,8 +1073,9 @@ class VideoService:
                         exc,
                     )
 
-            status = "scheduled" if (sch_at and platform == "instagram") else "ready"
-
+            # Created "processing", not postable until AI packaging is written.
+            # run_retention_analysis packages every sibling and promotes each to
+            # "ready" (or its Instagram schedule); no queue entry is made here.
             doc = {
                 "channel_id": cid,
                 "video_id": vid_id,
@@ -1110,13 +1083,15 @@ class VideoService:
                 "description": ch_cfg.get("description", ""),
                 "tags": parsed_tags,
                 "category": ch_cfg.get("category") or "Uncategorized",
-                "status": status,
+                "status": "processing",
                 "r2_object_key": r2_key,  # shared across all channel records
                 "content_params": ch_cfg.get("content_params"),
                 "verification_status": (
                     "verified" if (ch_cfg.get("category") and ch_cfg.get("content_params")) else "unverified"
                 ),
-                "scheduled_at": sch_at if status == "scheduled" else None,
+                # An Instagram upload-time schedule is kept as the intent; promotion honours it.
+                "scheduled_at": sch_at if (sch_at and platform == "instagram") else None,
+                "packaging_status": "pending",
                 "multi_channel_group_id": group_id,
                 "created_at": now,
                 "updated_at": now,
@@ -1126,29 +1101,6 @@ class VideoService:
 
             if is_primary:
                 primary_doc = dict(doc)
-
-            # Add to queues
-            if status == "scheduled":
-                last = await self.db.schedule_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
-                await self.db.schedule_queue.insert_one(
-                    {
-                        "channel_id": cid,
-                        "video_id": vid_id,
-                        "position": (last["position"] + 1) if last else 1,
-                        "scheduled_at": sch_at,
-                        "added_at": now,
-                    }
-                )
-            else:
-                last = await self.db.posting_queue.find_one({"channel_id": cid}, sort=[("position", -1)])
-                await self.db.posting_queue.insert_one(
-                    {
-                        "channel_id": cid,
-                        "video_id": vid_id,
-                        "position": (last["position"] + 1) if last else 1,
-                        "added_at": now,
-                    }
-                )
 
         if not primary_doc:
             raise ValueError("Primary channel config missing from channels list")

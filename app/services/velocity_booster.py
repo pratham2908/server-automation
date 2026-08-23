@@ -152,6 +152,16 @@ async def process_velocity_booster_for_channel(
         logger.error("Velocity Booster: queue entry refers to missing video %s", video_id)
         return
 
+    # Only boost a video that is actually ready. Videos become postable only after
+    # AI packaging completes; a "processing" entry in the queue has no metadata yet.
+    if video_doc.get("status") != "ready":
+        logger.info(
+            "Velocity Booster: next-up video '%s' is '%s', not 'ready' — skipping this cycle",
+            video_id,
+            video_doc.get("status"),
+        )
+        return
+
     # 4. Schedule for immediate release
     scheduled_at = now + timedelta(minutes=delay_min)
 

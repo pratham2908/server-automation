@@ -9,16 +9,20 @@ from __future__ import annotations
 
 import os
 import subprocess
+from datetime import datetime
 from typing import Any
 
+from dateutil.parser import isoparse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.database import get_channel_platform
 from app.logger import get_logger
 from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
 from app.services.pacing_templates import PacingTemplateService
 from app.services.r2 import R2Service
-from app.timezone import now_ist
+from app.services.schedule_operation import schedule_single_video_instagram
+from app.timezone import IST, now_ist
 
 logger = get_logger(__name__)
 
@@ -56,30 +60,66 @@ async def promote_processing_to_ready(
     channel_id: str,
     video_id: str,
 ) -> None:
-    """After a successful analysis, mark a video that was waiting on packaging
-    as postable.
+    """Make a single fully-analysed video postable.
 
-    Imported/batch-uploaded videos sit in ``processing`` until AI packaging has
-    written their title/description/tags. Once analysis succeeds they become
-    ``ready`` — along with any multi-channel siblings sharing this file.
+    Every upload path now creates a video as ``processing`` and leaves it there
+    until AI packaging has written its title/description/tags — that packaging is
+    the source of truth for a video's metadata, so it is not postable before it
+    exists. Once packaging has *completed*, this promotes the video:
 
-    The ``status == "processing"`` guard is essential: re-analysing an already
-    live/scheduled/ready video (e.g. a manual "predict") must never rewind its
-    status. Direct uploads that were created ``ready`` are untouched for the same
-    reason.
+    * to ``ready`` (and onto the posting queue), or
+    * for an Instagram video carrying a future ``scheduled_at`` (a schedule set at
+      upload time), straight into the schedule queue via the normal scheduling
+      path — exactly what a manual schedule of a ready video would do.
+
+    Two guards make it safe to call unconditionally after any analysis:
+
+    * ``status == "processing"`` — never rewind a live/scheduled/published video,
+      e.g. a manual "predict" re-analysing an existing upload.
+    * ``packaging_status == "completed"`` — a video whose analysis produced no
+      packaging stays ``processing`` rather than being posted without metadata.
+
+    It acts on one video; callers invoke it for each record (primary and each
+    multi-channel sibling) once that record's packaging is done.
     """
+    video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+    if not video or video.get("status") != "processing" or video.get("packaging_status") != "completed":
+        return
+
     now = now_ist()
+    scheduled_at = video.get("scheduled_at")
+    if isinstance(scheduled_at, str):
+        try:
+            scheduled_at = isoparse(scheduled_at)
+        except (ValueError, TypeError):
+            scheduled_at = None
+    if isinstance(scheduled_at, datetime) and scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=IST)
+
+    is_scheduled = isinstance(scheduled_at, datetime) and scheduled_at > now
+    if is_scheduled:
+        channel = await db.channels.find_one({"channel_id": channel_id})
+        # Only Instagram honours an upload-time schedule (as the create paths did);
+        # a YouTube schedule falls through to "ready" and is set via the scheduler.
+        if get_channel_platform(channel or {}) == "instagram":
+            await schedule_single_video_instagram(
+                db=db, channel_id=channel_id, video_doc=video, scheduled_at=scheduled_at
+            )
+            return
+
     await db.videos.update_one(
         {"channel_id": channel_id, "video_id": video_id, "status": "processing"},
         {"$set": {"status": "ready", "updated_at": now}},
     )
-    primary = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id}, {"multi_channel_group_id": 1})
-    group = (primary or {}).get("multi_channel_group_id")
-    if group:
-        await db.videos.update_many(
-            {"multi_channel_group_id": group, "status": "processing"},
-            {"$set": {"status": "ready", "updated_at": now}},
-        )
+    last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
+    await db.posting_queue.insert_one(
+        {
+            "channel_id": channel_id,
+            "video_id": video_id,
+            "position": (last["position"] + 1) if last else 1,
+            "added_at": now,
+        }
+    )
 
 
 async def run_retention_analysis(
@@ -241,6 +281,8 @@ async def run_retention_analysis(
                         os.unlink(local_thumb_path)
 
             await db.videos.update_one({"channel_id": channel_id, "video_id": video_id}, {"$set": updates})
+            # Packaging is now written for the primary — it can become postable.
+            await promote_processing_to_ready(db, channel_id, video_id)
 
             # --- MULTI-CHANNEL SIBLING PROPAGATION ---
             # If this video belongs to a multi-channel group, generate
@@ -299,6 +341,7 @@ async def run_retention_analysis(
                             {"channel_id": sib_channel_id, "video_id": sib_video_id},
                             {"$set": sib_updates},
                         )
+                        await promote_processing_to_ready(db, sib_channel_id, sib_video_id)
                         logger.info("Propagated packaging to sibling %s (%s)", sib_video_id, sib_platform)
                     except Exception as e:
                         logger.error("Failed to generate packaging for sibling %s: %s", sib_video_id, e)
@@ -307,9 +350,18 @@ async def run_retention_analysis(
                             {"$set": {"packaging_status": "failed", "updated_at": now}},
                         )
 
-        # Analysis succeeded — promote the video (and multi-channel siblings) from
-        # "processing" to "ready" now that its packaging metadata exists.
-        await promote_processing_to_ready(db, channel_id, video_id)
+        else:
+            # The retention pass succeeded but returned no packaging, so no
+            # title/description/tags were generated. The video has no metadata to
+            # post with, so it must not become "ready": mark packaging failed
+            # (rather than leaving it stuck "analyzing") and leave it "processing"
+            # for a retry. Promotion is gated on packaging_status == "completed",
+            # so it is correctly skipped here.
+            logger.warning("Analysis for video %s returned no packaging — marking packaging failed", video_id)
+            await db.videos.update_one(
+                {"channel_id": channel_id, "video_id": video_id},
+                {"$set": {"packaging_status": "failed", "updated_at": now}},
+            )
 
         logger.success(
             "Retention analysis complete for '%s' — predicted retention: %s%%",
