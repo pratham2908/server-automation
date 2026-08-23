@@ -98,6 +98,9 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
     title = job.get("title") or source_video_id
 
     tmp_path: str | None = None
+    # Tracks whether the file reached our R2. Once it has, a later failure (e.g.
+    # enqueuing analysis) must not delete the record — the video really exists.
+    file_landed = False
     try:
         service = VideoSourceService(db)
         source = await service.load_source(source_id)
@@ -131,12 +134,19 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
 
         os.unlink(download_path)
         tmp_path = None
+        file_landed = True
 
-        # ── 4. File is in the system — the video is now usable ──────────
-        await db.videos.update_one(
-            {"video_id": video_id},
-            {"$set": {"status": "ready", "updated_at": now_ist()}},
-        )
+        # ── 4. File is in the system ────────────────────────────────────
+        # The file is in R2, but not yet postable: AI packaging writes the
+        # title/description/tags. So it stays "processing" while analysis runs
+        # (run_retention_analysis promotes it to "ready" on success). When
+        # analysis is skipped there is nothing more to wait for, so it is ready now.
+        will_analyze = job.get("analyze", True)
+        if not will_analyze:
+            await db.videos.update_one(
+                {"video_id": video_id},
+                {"$set": {"status": "ready", "updated_at": now_ist()}},
+            )
 
         # ── 5. Close the pull loop with the app ─────────────────────────
         # Deliberately fired on ingest, not after analysis: we hold the file now,
@@ -172,7 +182,7 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
         )
 
         # ── 6. Hand off to the existing analysis pipeline ───────────────
-        if job.get("analyze", True):
+        if will_analyze:
             await _enqueue_for_analysis(db, job)
             message = "Imported — queued for AI analysis"
             if notify_error:
@@ -205,9 +215,10 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
         )
         # Remove the placeholder video record — a half-imported video with no file
         # behind it is worse than no record, and it would otherwise block a retry
-        # via the already-imported dedup check. Only matches while still
-        # "uploading", so a video whose file already landed is left alone.
-        await db.videos.delete_one({"video_id": video_id, "status": "uploading"})
+        # via the already-imported dedup check. Only when the file never landed, so
+        # a video already transferred (and merely awaiting analysis) is left alone.
+        if not file_landed:
+            await db.videos.delete_one({"video_id": video_id})
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
