@@ -281,7 +281,7 @@ async def _create_instagram_channel(
             detail=f"Channel '{channel_id}' already exists",
         )
 
-    token_doc = {"access_token": body.access_token}
+    token_doc = {"access_token": body.access_token.strip()}
     if body.expires_at:
         token_doc["expires_at"] = body.expires_at
 
@@ -1190,7 +1190,7 @@ async def store_instagram_token(
         )
 
     token_doc = {
-        "access_token": body.access_token,
+        "access_token": body.access_token.strip(),
         "token_type": "bearer",
         "expires_at": body.expires_at,
     }

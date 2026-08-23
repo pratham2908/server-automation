@@ -11,7 +11,20 @@ from __future__ import annotations
 import pytest
 
 from app.services import instagram
-from app.services.instagram import introspect_token
+from app.services.instagram import InstagramService, introspect_token
+
+
+class TestTokenSanitization:
+    """A pasted token with a trailing newline must not reach the Bearer header —
+    ``Authorization: Bearer <token>\\n`` raises 'Invalid header value' and fails
+    every Graph call (observed on Dream Scenic Ai: sync 400 + 5 failed publishes).
+    """
+
+    def test_strips_trailing_newline(self):
+        assert InstagramService("EAAtoken\n")._token == "EAAtoken"
+
+    def test_strips_surrounding_whitespace(self):
+        assert InstagramService("  EAAtoken \n")._token == "EAAtoken"
 
 
 class _FakeResp:

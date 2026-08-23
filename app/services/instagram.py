@@ -85,7 +85,9 @@ class InstagramService:
         db: Any = None,
         channel_id: str | None = None,
     ) -> None:
-        self._token = access_token
+        # Strip whitespace/newlines — a pasted token with a trailing "\n" produces
+        # an "Invalid header value" (Bearer <token>\n) and fails every Graph call.
+        self._token = access_token.strip()
         self._db = db
         self._channel_id = channel_id
 
