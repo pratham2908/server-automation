@@ -3,11 +3,15 @@
 On registration, channel metadata is automatically fetched from YouTube.
 """
 
+import asyncio
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
-from app.database import get_channel_platform, get_db
+from app.config import get_settings
+from app.database import get_channel_platform, get_db, get_instagram_oauth_config
 from app.dependencies import (
     CHANNEL_API_KEY_PREFIX_LENGTH,
     generate_channel_api_key,
@@ -18,6 +22,7 @@ from app.dependencies import (
 from app.logger import get_logger
 from app.models.profile import ProfileInDB
 from app.services.channel_profile import build_profile_update, persist_profile_update
+from app.services.instagram import introspect_token
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -1284,23 +1289,56 @@ async def get_instagram_token_status(
     if not tokens:
         return {"channel_id": channel_id, "connected": False, "status": "disconnected"}
 
-    expires_at = tokens.get("expires_at")
-    is_expired = False
-    if expires_at:
-        from datetime import datetime as dt
-        from datetime import timezone as tz
+    token = tokens["access_token"]
+    stored_expires_at = tokens.get("expires_at")
 
+    # App credentials let us build a proper app access token; without them we
+    # self-debug (still authoritative for valid/expired). Both may be absent.
+    settings = get_settings()
+    cfg = await get_instagram_oauth_config(db)
+    app_id = (cfg or {}).get("app_id") or settings.INSTAGRAM_APP_ID
+    app_secret = (cfg or {}).get("app_secret") or settings.INSTAGRAM_APP_SECRET
+
+    check = await asyncio.to_thread(introspect_token, token, app_id, app_secret)
+
+    # If Graph was unreachable, don't flip a working channel to disconnected on a
+    # transient blip — report the token exists but mark the status unknown.
+    if not check.reachable:
+        return {
+            "channel_id": channel_id,
+            "connected": True,
+            "status": "unknown",
+            "expires_at": stored_expires_at,
+            "checked": False,
+        }
+
+    # Normalise the real expiry: 0 (or missing) means the token never expires.
+    real_expires_at: str | None = None
+    if check.expires_at:
+        real_expires_at = datetime.fromtimestamp(check.expires_at, tz=timezone.utc).isoformat()
+
+    # Correct the stored expiry so the DB and other consumers stop trusting a stale
+    # date. Best-effort: a write failure must never break the status response.
+    if check.valid and real_expires_at != stored_expires_at:
         try:
-            exp = dt.fromisoformat(expires_at.replace("Z", "+00:00"))
-            is_expired = exp <= dt.now(tz.utc)
-        except (ValueError, TypeError):
-            is_expired = True
+            await db.channels.update_one(
+                {"channel_id": channel_id},
+                {
+                    "$set": {
+                        "instagram_tokens.expires_at": real_expires_at,
+                        "instagram_tokens.last_checked": now_ist().isoformat(),
+                    }
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — persistence here is best-effort
+            logger.warning("Could not persist corrected IG expiry for '%s': %s", channel_id, exc)
 
     return {
         "channel_id": channel_id,
-        "connected": True,
-        "status": "expired" if is_expired else "active",
-        "expires_at": expires_at,
+        "connected": check.valid,
+        "status": "active" if check.valid else "expired",
+        "expires_at": real_expires_at if check.valid else stored_expires_at,
+        "checked": True,
     }
 
 

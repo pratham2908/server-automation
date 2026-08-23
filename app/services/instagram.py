@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 import requests
+from pydantic import BaseModel
 
 from app.logger import get_logger
 from app.services.metrics import metrics_service
@@ -21,6 +22,57 @@ from app.timezone import now_ist
 logger = get_logger(__name__)
 
 _GRAPH_BASE = "https://graph.facebook.com/v25.0"
+
+
+class TokenCheck(BaseModel):
+    """Result of a live Graph introspection of an Instagram/Facebook token."""
+
+    reachable: bool  # did the Graph call complete (vs a network/other failure)?
+    valid: bool  # is the token currently usable right now?
+    expires_at: int | None = None  # unix seconds; 0 means "never expires"; None = unknown
+    error: str | None = None
+
+
+def introspect_token(token: str, app_id: str | None = None, app_secret: str | None = None) -> TokenCheck:
+    """Introspect *token* via Graph ``debug_token`` to learn its real validity/expiry.
+
+    Uses the app access token (``app_id|app_secret``) when both are available;
+    otherwise self-debugs with the token itself. Self-debug still reports validity:
+    a live token returns its ``data`` block, while an expired one comes back as a
+    top-level ``OAuthException`` (code 190) which we read as invalid.
+
+    Blocking I/O (``requests``) — call via ``asyncio.to_thread`` from async code.
+    """
+    verifier = f"{app_id}|{app_secret}" if app_id and app_secret else token
+    try:
+        resp = requests.get(
+            f"{_GRAPH_BASE}/debug_token",
+            params={"input_token": token, "access_token": verifier},
+            timeout=15,
+        )
+        body = resp.json()
+    except Exception as e:  # network error / non-JSON — cannot determine validity
+        logger.warning("Instagram debug_token unreachable: %s", e)
+        return TokenCheck(reachable=False, valid=False, error=str(e))
+
+    data = body.get("data")
+    if isinstance(data, dict):
+        # App-token debug of an expired token also lands here with is_valid=False.
+        inner_err = data.get("error")
+        return TokenCheck(
+            reachable=True,
+            valid=bool(data.get("is_valid")),
+            expires_at=data.get("expires_at"),
+            error=inner_err.get("message") if isinstance(inner_err, dict) else None,
+        )
+
+    err = body.get("error") or {}
+    if err.get("code") == 190:  # self-debug of an expired/invalid token
+        return TokenCheck(reachable=True, valid=False, error=err.get("message"))
+
+    # Anything else (rate limit, app-token required, etc.) — inconclusive, not authoritative.
+    logger.warning("Instagram debug_token inconclusive: %s", err or body)
+    return TokenCheck(reachable=False, valid=False, error=err.get("message") or "inconclusive")
 
 
 class InstagramService:
