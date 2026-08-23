@@ -182,10 +182,19 @@ class InstagramService:
     # Account info
     # ------------------------------------------------------------------
 
+    def _user_node(self, ig_user_id: str) -> str:
+        """Path segment for user-node endpoints (account / media / publish).
+
+        Instagram-Login tokens are scoped to their own account, whose id lives in
+        a different namespace than the stored Facebook business id — so address it
+        as ``me``. Facebook Login keeps using the passed IG business id.
+        """
+        return "me" if self._provider == PROVIDER_INSTAGRAM else ig_user_id
+
     def get_account_info(self, ig_user_id: str) -> dict[str, Any]:
         """Fetch Instagram Business/Creator account metadata."""
         fields = "id,username,name,profile_picture_url,followers_count,media_count,biography"
-        data = self._get(ig_user_id, {"fields": fields})
+        data = self._get(self._user_node(ig_user_id), {"fields": fields})
         return {
             "instagram_user_id": data.get("id", ig_user_id),
             "username": data.get("username", ""),
@@ -276,7 +285,7 @@ class InstagramService:
         """
         fields = "id,caption,media_type,media_url,thumbnail_url,timestamp,permalink,like_count,comments_count"
         reels: list[dict[str, Any]] = []
-        url: str | None = f"{ig_user_id}/media"
+        url: str | None = f"{self._user_node(ig_user_id)}/media"
         params: dict = {"fields": fields, "limit": "100"}
 
         while url:
@@ -476,7 +485,7 @@ class InstagramService:
         if thumb_offset is not None:
             params["thumb_offset"] = str(thumb_offset)
 
-        data = self._post(f"{ig_user_id}/media", params)
+        data = self._post(f"{self._user_node(ig_user_id)}/media", params)
         container_id = data.get("id", "")
         upload_uri = data.get("uri", "")
         logger.info(
@@ -563,7 +572,7 @@ class InstagramService:
         Returns the published ``media_id``.
         """
         data = self._post(
-            f"{ig_user_id}/media_publish",
+            f"{self._user_node(ig_user_id)}/media_publish",
             {"creation_id": container_id},
         )
         media_id = data.get("id", "")
@@ -630,7 +639,7 @@ class InstagramService:
         if thumb_offset is not None:
             params["thumb_offset"] = str(thumb_offset)
 
-        data = self._post(f"{ig_user_id}/media", params)
+        data = self._post(f"{self._user_node(ig_user_id)}/media", params)
         cid = data.get("id", "")
         if not cid:
             raise RuntimeError(f"Failed to create media container: {data}")
