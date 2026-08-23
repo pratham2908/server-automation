@@ -16,6 +16,7 @@ different key returns a different, isolated library.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any
 
@@ -71,10 +72,24 @@ def forget_token(key: str) -> None:
     _tokens.pop(key, None)
 
 
+# An export is named after the clip it came from, with that clip's id appended:
+# "Why Birds Don't Fry on Power Lines (6a85f6aec7ac28f0e2efbd12)". The id makes
+# every take of one episode read as a different title, so it comes off the label.
+_RENDER_SUFFIX = re.compile(r"\s*\([0-9a-f]{24}\)\s*$")
+
+
+def episode_label(name: str) -> str:
+    """The episode's title, as carried by any one of its exports."""
+    return _RENDER_SUFFIX.sub("", name).strip() or name
+
+
 class VidForgeAdapter(SourceAdapter):
     kind = "vidforge"
     # Pull-only: the studio has no route into our external upload API.
     pushes_to_us = False
+    # Exports descend from an episode, and an episode is usually rendered several
+    # times before one is chosen — so the takes belong together.
+    group_noun = "Episode"
 
     @staticmethod
     def _cfg(source: VideoSource) -> VidForgeConfig:
@@ -173,9 +188,11 @@ class VidForgeAdapter(SourceAdapter):
         is converted rather than passed through — otherwise every clip renders 0:00.
         """
         duration_s = raw.get("duration")
+        name = raw.get("name") or "Untitled"
+        episode_id = raw.get("sourceEpisodeId")
         return SourceVideo(
             id=str(raw["_id"]),
-            title=raw.get("name") or "Untitled",
+            title=name,
             status=raw.get("status") or "unknown",
             duration_ms=int(duration_s * 1000) if isinstance(duration_s, (int, float)) else None,
             created_at=raw.get("createdAt"),
@@ -186,6 +203,11 @@ class VidForgeAdapter(SourceAdapter):
             # VidForge stores no link back to the video it created here, so a push
             # it performed cannot be detected the way the feed contract allows.
             external_video_id=None,
+            group_id=str(episode_id) if episode_id else None,
+            # Derived per video rather than from the set, so every take of an
+            # episode arrives with the same label even when they land on
+            # different pages.
+            group_label=episode_label(name) if episode_id else None,
         )
 
     async def fetch_page(self, source: VideoSource, limit: int, cursor: str | None) -> SourcePage:

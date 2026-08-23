@@ -266,8 +266,9 @@ class VideoSourceService:
         """One page of the app's finished videos, flagging ones already here."""
         source = await self._require_source(channel_id, source_id)
 
+        adapter = adapter_for(source)
         try:
-            page = await adapter_for(source).fetch_page(source, limit, cursor)
+            page = await adapter.fetch_page(source, limit, cursor)
         except Exception as exc:
             message = describe_http_error(exc)
             await self._record_health(source_id, ok=False, error=message)
@@ -280,6 +281,7 @@ class VideoSourceService:
             videos=page.videos,
             next_cursor=page.next_cursor,
             url_ttl_seconds=page.url_ttl_seconds,
+            group_noun=adapter.group_noun,
         )
 
     async def _mark_already_present(

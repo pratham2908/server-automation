@@ -257,3 +257,55 @@ async def test_georank_sends_the_video_id_when_we_have_one(monkeypatch):
 
     await GeoRankAdapter().mark_imported(georank_source(), "r1", "our-uuid")
     assert captured["json"] == {"externalVideoId": "our-uuid"}
+
+
+# ---------------------------------------------------------------- grouping
+
+
+def test_only_apps_that_bundle_their_output_name_a_group():
+    """The noun drives whether the UI groups at all, so an app without one is flat."""
+    assert adapter_for(vidforge_source()).group_noun == "Episode"
+    assert adapter_for(georank_source()).group_noun is None
+
+
+def test_takes_of_one_episode_share_a_group_and_a_label():
+    """Each export is named after its clip, with the clip id appended.
+
+    Left in, the id makes every take read as a different title, so three renders
+    of one episode would look like three unrelated videos.
+    """
+    from app.services.video_sources.vidforge import episode_label
+
+    raw = [
+        {"_id": "a", "name": "Why Birds Don't Fry (6a85f6aec7ac28f0e2efbd12)", "sourceEpisodeId": "ep1"},
+        {"_id": "b", "name": "Why Birds Don't Fry (6a85f6aec7ac28f0e2efbd99)", "sourceEpisodeId": "ep1"},
+    ]
+    videos = [VidForgeAdapter.normalise(r, "sent") for r in raw]
+
+    assert {v.group_id for v in videos} == {"ep1"}
+    assert {v.group_label for v in videos} == {"Why Birds Don't Fry"}
+    # The full name stays on the video — the label is for the bundle, not the take.
+    assert videos[0].title != videos[1].title
+    assert episode_label("Why Birds Don't Fry (6a85f6aec7ac28f0e2efbd12)") == "Why Birds Don't Fry"
+
+
+def test_a_video_in_no_episode_is_ungrouped():
+    v = VidForgeAdapter.normalise({"_id": "x", "name": "how egg is made"}, "sent")
+    assert v.group_id is None
+    assert v.group_label is None
+
+
+def test_a_name_that_is_only_an_id_keeps_its_name():
+    """Stripping must never leave a video with a blank label."""
+    v = VidForgeAdapter.normalise(
+        {"_id": "x", "name": "(6a85f6aec7ac28f0e2efbd12)", "sourceEpisodeId": "ep1"}, "sent"
+    )
+    assert v.group_label == "(6a85f6aec7ac28f0e2efbd12)"
+
+
+def test_a_title_with_its_own_parentheses_is_left_alone():
+    """Only a trailing 24-hex id is a render suffix; real titles keep their brackets."""
+    v = VidForgeAdapter.normalise(
+        {"_id": "x", "name": "How Planes Fly (The Real Reason)", "sourceEpisodeId": "ep1"}, "sent"
+    )
+    assert v.group_label == "How Planes Fly (The Real Reason)"

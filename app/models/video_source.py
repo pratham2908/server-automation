@@ -209,6 +209,12 @@ class SourceVideo(BaseModel):
     already_sent_to_channel: bool = Field(False, description="The app's own view of whether it gave us this")
     external_video_id: str | None = Field(None, description="The video_id the app thinks it created here")
 
+    # Apps that organise their output — an episode, a series, a project — say so
+    # here. What a group *means* is the app's business; the importer only needs to
+    # know which videos belong together and what to call the bundle.
+    group_id: str | None = Field(None, description="Videos sharing this belong together; None means ungrouped")
+    group_label: str | None = Field(None, description="Human name for the group, when the app implies one")
+
     imported: bool = Field(False, description="True if this channel already has a video record for it")
     video_id: str | None = Field(None, description="Our video_id, when already present")
     delivered_by: Literal["import", "push", None] = Field(
@@ -223,6 +229,10 @@ class SourceListResponse(BaseModel):
     videos: list[SourceVideo]
     next_cursor: str | None
     url_ttl_seconds: int | None = None
+    group_noun: str | None = Field(
+        None,
+        description="What this app calls a group, e.g. 'Episode'. None when it does not group at all",
+    )
 
 
 class ImportRequest(BaseModel):

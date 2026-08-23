@@ -52,6 +52,11 @@ class SourceAdapter(abc.ABC):
     # source_video_id dedup already covers it and the callback is bookkeeping.
     pushes_to_us: bool = False
 
+    # What this app calls a bundle of related videos, if it bundles them at all.
+    # Naming it here keeps the word out of the UI, which only knows that some
+    # videos share a group and that the group has a noun.
+    group_noun: str | None = None
+
     @abc.abstractmethod
     async def fetch_page(self, source: VideoSource, limit: int, cursor: str | None) -> SourcePage:
         """Return one page of finished videos, newest first."""
