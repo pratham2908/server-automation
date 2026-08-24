@@ -1295,6 +1295,9 @@ class VideoService:
                 {"youtube_video_id": 1},
             )
         }
+        fetched_ids = {v["youtube_video_id"] for v in yt_vids}
+        missing = await self._flag_missing_youtube_videos(channel_id, yt, fetched_ids)
+
         new_vids = [v for v in yt_vids if v["youtube_video_id"] not in db_ids]
         for v in [v for v in yt_vids if v["youtube_video_id"] in db_ids]:
             # Determine status based on privacy
@@ -1332,7 +1335,7 @@ class VideoService:
             )
 
         if not new_vids:
-            return {"ok": True, "synced": 0}
+            return {"ok": True, "synced": 0, "missing": missing}
         schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
         cats = [
             {"name": c["name"], "description": c.get("description", "")}
@@ -1388,7 +1391,7 @@ class VideoService:
                     }
                 )
                 inserted += 1
-        return {"ok": True, "synced": inserted}
+        return {"ok": True, "synced": inserted, "missing": missing}
 
     async def _sync_instagram_videos(self, channel_id: str, channel: dict, instructions: str | None) -> dict[str, Any]:
         ig = await self._get_instagram_service(channel_id)
@@ -1531,6 +1534,77 @@ class VideoService:
             return json.loads(res)
         except Exception:
             return []
+
+    def _resolve_existing_youtube_ids(self, yt, video_ids: list[str]) -> set[str]:
+        """Which of *video_ids* YouTube still resolves. Blocking; call in a thread."""
+        alive: set[str] = set()
+        for i in range(0, len(video_ids), 50):
+            resp = yt._youtube.videos().list(part="id", id=",".join(video_ids[i : i + 50])).execute()
+            alive.update(item["id"] for item in resp.get("items", []))
+        return alive
+
+    async def _flag_missing_youtube_videos(self, channel_id: str, yt, fetched_ids: set[str]) -> int:
+        """Mark stored videos whose YouTube video no longer exists, and unmark ones that returned.
+
+        Absence from the uploads playlist is only a hint, never a verdict: a live
+        public video can simply not be in it. On officialgeoranking, OTFaRWx_e9c
+        is public and absent right now. Flagging on that alone would brand a
+        perfectly good video as deleted, so every candidate is confirmed with a
+        direct lookup and only ids YouTube itself cannot resolve are flagged.
+
+        The flag is a timestamp, not a deletion. A sync that quietly removed
+        records would turn one bad API response into permanent data loss, and the
+        decision to delete belongs to whoever can tell an unlisted video from a
+        deleted one.
+        """
+        # An empty fetch is indistinguishable from a failed one, so reconciling on
+        # it would flag the entire channel. Nothing is safe to conclude here.
+        if not fetched_ids:
+            return 0
+
+        stored: set[str] = {
+            doc["youtube_video_id"]
+            async for doc in self.db.videos.find(
+                {"channel_id": channel_id, "youtube_video_id": {"$ne": None}},
+                {"youtube_video_id": 1},
+            )
+        }
+
+        candidates = sorted(stored - fetched_ids)
+        alive = (
+            await asyncio.to_thread(self._resolve_existing_youtube_ids, yt, candidates) if candidates else set()
+        )
+        gone = [vid for vid in candidates if vid not in alive]
+
+        if gone:
+            logger.warning(
+                "Sync: %d video(s) on %s no longer exist on YouTube: %s",
+                len(gone),
+                channel_id,
+                ", ".join(gone),
+            )
+            await self.db.videos.update_many(
+                {
+                    "channel_id": channel_id,
+                    "youtube_video_id": {"$in": gone},
+                    # Keep the first sighting rather than refreshing it on every
+                    # sync, so "missing since" answers when it actually vanished.
+                    "platform_missing_since": None,
+                },
+                {"$set": {"platform_missing_since": now_ist(), "updated_at": now_ist()}},
+            )
+
+        # A video that reappears — restored, or absent from one bad response —
+        # must lose the flag, otherwise a transient blip is permanent.
+        await self.db.videos.update_many(
+            {
+                "channel_id": channel_id,
+                "youtube_video_id": {"$in": sorted(fetched_ids | alive)},
+                "platform_missing_since": {"$ne": None},
+            },
+            {"$set": {"platform_missing_since": None, "updated_at": now_ist()}},
+        )
+        return len(gone)
 
     def _fetch_all_youtube_videos(self, yt, youtube_channel_id: str):
         uploads_playlist_id = "UU" + youtube_channel_id[2:]
