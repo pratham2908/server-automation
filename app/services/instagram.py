@@ -465,6 +465,58 @@ class InstagramService:
                 metrics_service.record_external_call("instagram", duration, False)
             raise e
 
+    def _delete(self, endpoint: str, params: dict | None = None) -> dict:
+        import time
+
+        from app.services.metrics import metrics_service
+
+        headers = {"Authorization": f"Bearer {self._token}"}
+        start_time = time.time()
+        try:
+            resp = requests.delete(
+                f"{self._base}/{endpoint}",
+                params=params,
+                headers=headers,
+                timeout=30,
+            )
+            duration = (time.time() - start_time) * 1000
+
+            if not resp.ok:
+                metrics_service.record_external_call("instagram", duration, False)
+                try:
+                    logger.error("Instagram API DELETE failed (%d): %s", resp.status_code, resp.json())
+                except Exception:
+                    logger.error("Instagram API DELETE failed (%d): %s", resp.status_code, resp.text)
+            else:
+                metrics_service.record_external_call("instagram", duration, True)
+
+            resp.raise_for_status()
+            from typing import cast
+
+            return cast(dict, resp.json())
+        except Exception as e:
+            if not isinstance(e, requests.HTTPError):
+                duration = (time.time() - start_time) * 1000
+                metrics_service.record_external_call("instagram", duration, False)
+            raise e
+
+    def delete_media(self, media_id: str) -> None:
+        """Delete a published post/reel from Instagram.
+
+        Uses ``DELETE /{ig-media-id}`` (Instagram Graph API), which needs the
+        ``instagram_manage_contents`` permission. Meta only supports deletion on
+        the Facebook-Login path; an Instagram-Login token cannot delete, so that
+        case raises ``ValueError`` for the caller to report rather than failing
+        opaquely at the API.
+        """
+        if self._provider == PROVIDER_INSTAGRAM:
+            raise ValueError(
+                "Instagram media deletion is only supported for channels connected via "
+                "Facebook Login, not the Instagram Login path."
+            )
+        self._delete(media_id)
+        logger.info("Deleted Instagram media %s", media_id)
+
     def create_reel_container(
         self,
         ig_user_id: str,

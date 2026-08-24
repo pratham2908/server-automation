@@ -347,12 +347,14 @@ class VideoService:
         R2 file, the ``videos`` record, and any posting/schedule-queue entries —
         exactly as it always has. The live YouTube/Instagram post is untouched.
 
-        With ``delete_on_platform=True`` a published YouTube video is also deleted
-        on YouTube *first*; only if that succeeds do we remove our copy, so a
-        failure leaves the record (and its ``youtube_video_id``) intact for a
-        retry. Instagram deletion is not supported by the Graph API, and a video
-        that was never published has nothing to delete on the platform — in both
-        cases the local delete still proceeds and ``platform_error`` explains why.
+        With ``delete_on_platform=True`` the published post is also deleted on the
+        platform *first* — YouTube via the Data API, Instagram via the Graph API
+        (Facebook-Login channels only; it needs ``instagram_manage_contents``).
+        Only if that succeeds do we remove our copy, so a transient failure leaves
+        the record (and its platform id) intact for a retry. A video that was never
+        published, or an Instagram-Login channel that cannot delete, has nothing we
+        can remove there — the local delete still proceeds and ``platform_error``
+        explains why the live post (if any) remains.
         """
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
@@ -367,7 +369,26 @@ class VideoService:
             youtube_video_id = video.get("youtube_video_id")
 
             if platform == "instagram":
-                platform_error = "Instagram media deletion is not supported by the Graph API"
+                instagram_media_id = video.get("instagram_media_id")
+                if not instagram_media_id:
+                    platform_error = "Video is not published on Instagram — nothing to delete there"
+                else:
+                    ig = await self._get_instagram_service(channel_id)
+                    if not ig:
+                        raise RuntimeError("Cannot delete on Instagram: channel has no valid Instagram token")
+                    try:
+                        await asyncio.to_thread(ig.delete_media, instagram_media_id)
+                        platform_deleted = True
+                    except ValueError as exc:
+                        # A permanent limitation (e.g. the Instagram-Login path cannot
+                        # delete), not a transient failure — proceed with the local
+                        # delete and report why the live post remains.
+                        platform_error = str(exc)
+                    except Exception as exc:
+                        # Transient/permission failure — keep our record for a retry
+                        # (e.g. after re-auth granting instagram_manage_contents).
+                        logger.exception("Platform delete failed for Instagram media %s", instagram_media_id)
+                        raise RuntimeError(f"Failed to delete media on Instagram: {exc}") from exc
             elif not youtube_video_id:
                 platform_error = "Video is not published on YouTube — nothing to delete there"
             else:

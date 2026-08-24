@@ -61,6 +61,28 @@ class FakeYTManager:
         return self.service
 
 
+class FakeInstagram:
+    def __init__(self, fail=None):
+        # fail: None (ok) | "value" (provider not supported) | "http" (api error)
+        self.fail = fail
+        self.deleted = []
+
+    def delete_media(self, media_id):
+        if self.fail == "value":
+            raise ValueError("Instagram media deletion is only supported for Facebook Login")
+        if self.fail == "http":
+            raise RuntimeError("graph api error")
+        self.deleted.append(media_id)
+
+
+class FakeIGManager:
+    def __init__(self, service):
+        self.service = service
+
+    async def get_service(self, channel_id):
+        return self.service
+
+
 def _video(**over):
     doc = {
         "_id": "m1",
@@ -73,8 +95,13 @@ def _video(**over):
     return doc
 
 
-def _service(db, yt=None):
-    return VideoService(db=db, r2_service=FakeR2(), youtube_manager=FakeYTManager(yt) if yt else None)
+def _service(db, yt=None, ig=None):
+    return VideoService(
+        db=db,
+        r2_service=FakeR2(),
+        youtube_manager=FakeYTManager(yt) if yt else None,
+        instagram_manager=FakeIGManager(ig) if ig else None,
+    )
 
 
 @pytest.mark.asyncio
@@ -142,12 +169,61 @@ async def test_unpublished_video_deletes_locally_with_a_note():
 
 
 @pytest.mark.asyncio
-async def test_instagram_is_reported_unsupported_but_still_removed_locally():
-    db = FakeDB(_video(youtube_video_id=None), {"channel_id": "c1", "platform": "instagram"})
-    svc = _service(db, FakeYouTube())
+async def test_opt_in_deletes_the_instagram_media_then_the_record():
+    ig = FakeInstagram()
+    db = FakeDB(
+        _video(youtube_video_id=None, instagram_media_id="ig1"),
+        {"channel_id": "c1", "platform": "instagram"},
+    )
+    svc = _service(db, ig=ig)
+
+    result = await svc.delete_video("c1", "v1", delete_on_platform=True)
+
+    assert ig.deleted == ["ig1"]
+    assert result["platform_deleted"] is True
+    assert db.videos.docs == []
+
+
+@pytest.mark.asyncio
+async def test_instagram_login_channel_cannot_delete_but_removed_locally():
+    ig = FakeInstagram(fail="value")  # provider-not-supported → ValueError
+    db = FakeDB(
+        _video(youtube_video_id=None, instagram_media_id="ig1"),
+        {"channel_id": "c1", "platform": "instagram"},
+    )
+    svc = _service(db, ig=ig)
 
     result = await svc.delete_video("c1", "v1", delete_on_platform=True)
 
     assert result["platform_deleted"] is False
-    assert "instagram" in result["platform_error"].lower()
+    assert "facebook login" in result["platform_error"].lower()
+    assert db.videos.docs == []  # local delete still proceeds
+
+
+@pytest.mark.asyncio
+async def test_instagram_api_failure_aborts_and_keeps_the_record():
+    ig = FakeInstagram(fail="http")
+    db = FakeDB(
+        _video(youtube_video_id=None, instagram_media_id="ig1"),
+        {"channel_id": "c1", "platform": "instagram"},
+    )
+    svc = _service(db, ig=ig)
+
+    with pytest.raises(RuntimeError):
+        await svc.delete_video("c1", "v1", delete_on_platform=True)
+    assert len(db.videos.docs) == 1  # kept for retry
+
+
+@pytest.mark.asyncio
+async def test_unpublished_instagram_video_deletes_locally_with_a_note():
+    db = FakeDB(
+        _video(youtube_video_id=None),  # no instagram_media_id
+        {"channel_id": "c1", "platform": "instagram"},
+    )
+    svc = _service(db, ig=FakeInstagram())
+
+    result = await svc.delete_video("c1", "v1", delete_on_platform=True)
+
+    assert result["platform_deleted"] is False
+    assert "not published" in result["platform_error"].lower()
     assert db.videos.docs == []
