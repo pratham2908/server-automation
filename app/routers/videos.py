@@ -289,13 +289,23 @@ async def change_video_category(
 async def delete_video(
     channel_id: str,
     video_id: str,
+    delete_on_platform: bool = False,
     service: VideoService = Depends(get_video_service),
 ):
-    """Completely remove a video and its metadata."""
+    """Remove a video from the library.
+
+    By default only our copy is removed (R2 + DB + queues). Pass
+    ``?delete_on_platform=true`` to also delete a published YouTube video on
+    YouTube first (Instagram is not supported). The response reports
+    ``platform_deleted`` and ``platform_error``.
+    """
     try:
-        return await service.delete_video(channel_id, video_id)
+        return await service.delete_video(channel_id, video_id, delete_on_platform=delete_on_platform)
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e))
+    except RuntimeError as e:
+        # Platform deletion failed — our copy was deliberately kept for a retry.
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(e))
 
 
 @router.post("/{video_id}/extract-params")
