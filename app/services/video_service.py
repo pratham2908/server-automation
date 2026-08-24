@@ -1528,6 +1528,15 @@ class VideoService:
             next_page = response.get("nextPageToken")
             if not next_page:
                 break
+
+        # The uploads playlist is paginated live, so an item can be returned on
+        # two consecutive pages when the playlist shifts between requests — most
+        # often the one straddling a page boundary. Left in, that id lands in two
+        # different 50-id detail batches, comes back as two identical videos, and
+        # the caller inserts the same YouTube video twice under different
+        # video_ids. Order is preserved so the newest-first sequence still holds.
+        video_ids = list(dict.fromkeys(video_ids))
+
         videos = []
         for i in range(0, len(video_ids), 50):
             batch = video_ids[i : i + 50]
