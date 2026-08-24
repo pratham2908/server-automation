@@ -654,6 +654,22 @@ class YouTubeService:
         )
         return cast(str, response["id"])
 
+    def delete_video(self, youtube_video_id: str) -> None:
+        """Delete a video from the channel's YouTube account.
+
+        Requires the ``youtube.force-ssl`` scope, which this app already requests.
+        Idempotent: a 404 (the video is already gone on YouTube) is treated as a
+        successful delete, so retrying after a partial failure still resolves.
+        """
+        try:
+            self._execute(self._youtube.videos().delete(id=youtube_video_id))
+            logger.info("Deleted YouTube video %s", youtube_video_id)
+        except HttpError as e:
+            if getattr(e, "resp", None) is not None and e.resp.status == 404:
+                logger.warning("YouTube video %s already absent — treating delete as complete", youtube_video_id)
+                return
+            raise
+
 
 class YouTubeServiceManager:
     """Manages per-channel YouTubeService instances.

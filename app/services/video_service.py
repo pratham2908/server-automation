@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import re
@@ -339,16 +340,62 @@ class VideoService:
             "new_category": new_name,
         }
 
-    async def delete_video(self, channel_id: str, video_id: str) -> dict[str, Any]:
+    async def delete_video(self, channel_id: str, video_id: str, delete_on_platform: bool = False) -> dict[str, Any]:
+        """Remove a video from our library, and optionally from the live platform.
+
+        By default (``delete_on_platform=False``) this removes only our copy — the
+        R2 file, the ``videos`` record, and any posting/schedule-queue entries —
+        exactly as it always has. The live YouTube/Instagram post is untouched.
+
+        With ``delete_on_platform=True`` a published YouTube video is also deleted
+        on YouTube *first*; only if that succeeds do we remove our copy, so a
+        failure leaves the record (and its ``youtube_video_id``) intact for a
+        retry. Instagram deletion is not supported by the Graph API, and a video
+        that was never published has nothing to delete on the platform — in both
+        cases the local delete still proceeds and ``platform_error`` explains why.
+        """
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
             raise ValueError("Video not found")
+
+        platform_deleted = False
+        platform_error: str | None = None
+
+        if delete_on_platform:
+            channel = await self.db.channels.find_one({"channel_id": channel_id})
+            platform = get_channel_platform(channel or {})
+            youtube_video_id = video.get("youtube_video_id")
+
+            if platform == "instagram":
+                platform_error = "Instagram media deletion is not supported by the Graph API"
+            elif not youtube_video_id:
+                platform_error = "Video is not published on YouTube — nothing to delete there"
+            else:
+                yt = await self._get_youtube_service(channel_id)
+                if not yt:
+                    # No token means we cannot act on the platform. Abort rather
+                    # than delete our copy and silently orphan the live video.
+                    raise RuntimeError("Cannot delete on YouTube: channel has no valid YouTube token")
+                try:
+                    await asyncio.to_thread(yt.delete_video, youtube_video_id)
+                    platform_deleted = True
+                except Exception as exc:
+                    # Keep our record (and youtube_video_id) so the user can retry.
+                    logger.exception("Platform delete failed for YouTube video %s", youtube_video_id)
+                    raise RuntimeError(f"Failed to delete video on YouTube: {exc}") from exc
+
         if video.get("r2_object_key"):
             await self._safe_delete_r2(video["r2_object_key"])
         await self.db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
         await self.db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
         await self.db.videos.delete_one({"_id": video["_id"]})
-        return {"ok": True, "video_id": video_id, "deleted": True}
+        return {
+            "ok": True,
+            "video_id": video_id,
+            "deleted": True,
+            "platform_deleted": platform_deleted,
+            "platform_error": platform_error,
+        }
 
     async def upload_video(self, channel_id: str, video_id: str, file: Any) -> dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
