@@ -142,6 +142,14 @@ class Channel(BaseModel):
         ),
     )
 
+    starred: bool = Field(
+        False,
+        description=(
+            "Admin favourite. Purely a UI hint: starred channels are the default working "
+            "set in the profile-wide admin views. Has no effect on background behaviour."
+        ),
+    )
+
     # --- Platform profile metadata, refreshed on sync ---
     description: str | None = Field(None, description="Channel description from the platform")
     custom_url: str | None = Field(None, description="YouTube custom URL, e.g. '@handle'")

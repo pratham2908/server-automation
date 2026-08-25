@@ -90,6 +90,11 @@ class ChannelUpdate(BaseModel):
     default_description: str | None = None
     default_tags: list[str] | None = None
     automation_config: dict | None = None
+    # Undeclared fields are dropped by model_dump, so these must be listed for a
+    # PATCH to persist them. `paused` was previously missing, which silently
+    # no-op'd the pause toggle; `starred` backs the admin-view favourites.
+    paused: bool | None = None
+    starred: bool | None = None
 
 
 # ------------------------------------------------------------------
