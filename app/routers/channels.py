@@ -4,6 +4,7 @@ On registration, channel metadata is automatically fetched from YouTube.
 """
 
 import asyncio
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -77,6 +78,9 @@ class ChannelCreate(BaseModel):
     access_token: str | None = Field(None, description="Long-lived Instagram access token (required for instagram)")
     expires_at: str | None = Field(None, description="ISO 8601 token expiry datetime (optional, for instagram)")
     channel_id: str | None = Field(None, description="Custom internal slug. Auto-generated if omitted.")
+    register_password: str | None = Field(
+        None, description="App-level password required to register a channel. Not persisted."
+    )
 
 
 class ChannelUpdate(BaseModel):
@@ -137,6 +141,26 @@ async def get_channel(
 # ------------------------------------------------------------------
 
 
+def _verify_register_password(provided: str | None) -> None:
+    """Gate channel registration behind an app-level password.
+
+    Fails closed: if ``CHANNEL_REGISTER_PASSWORD`` isn't configured, registration
+    is disabled for everyone rather than silently open. Raises 403 (not 401) so a
+    wrong password doesn't read as an API-key failure or log the caller out.
+    """
+    expected = get_settings().CHANNEL_REGISTER_PASSWORD
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Channel registration is disabled: set CHANNEL_REGISTER_PASSWORD on the server.",
+        )
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid registration password.",
+        )
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_channel(
     body: ChannelCreate,
@@ -148,6 +172,8 @@ async def create_channel(
     For YouTube: provide ``youtube_channel_id``.
     For Instagram: provide ``instagram_user_id``.
     """
+    _verify_register_password(body.register_password)
+
     platform = body.platform.lower()
     if platform not in ("youtube", "instagram"):
         raise HTTPException(

@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    # App-level password gating channel registration. When unset, registration
+    # is disabled entirely (fail closed) — set this to enable the feature.
+    CHANNEL_REGISTER_PASSWORD: str | None = None
+
     # MongoDB
     MONGODB_URI: str
     MONGODB_DB_NAME: str = "youtube_automation"
