@@ -14,6 +14,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+import uuid
 from typing import Any
 
 import httpx
@@ -266,6 +267,61 @@ def _stream_to_temp(url: str) -> tuple[str, int]:
     return tmp_path, written
 
 
+async def _sibling_videos(db: AsyncIOMotorDatabase, job: dict[str, Any], group_id: str) -> list[dict[str, str]]:
+    """Create a video record on each channel linked to the one we imported into.
+
+    They share the imported file rather than copying it — one R2 object, one
+    transfer — and share a ``multi_channel_group_id``, which is how the existing
+    analysis worker already propagates packaging to siblings. So a linked channel
+    costs one text-only packaging call, not another download or upload.
+
+    Created "processing": AI packaging writes the title and description, so a
+    sibling is not postable until that lands.
+    """
+    from app.services.channel_group_service import ChannelGroupService
+
+    targets = await ChannelGroupService(db).expansion_targets(job["channel_id"])
+    if not targets:
+        return []
+
+    now = now_ist()
+    siblings: list[dict[str, str]] = []
+    for cid in targets:
+        if not await db.channels.find_one({"channel_id": cid}, {"_id": 1}):
+            logger.warning("Linked channel %s no longer exists — skipping expansion", cid)
+            continue
+        sibling_id = str(uuid.uuid4())
+        await db.videos.insert_one(
+            {
+                "channel_id": cid,
+                "video_id": sibling_id,
+                "title": job.get("title") or "",
+                "description": "",
+                "tags": [],
+                "category": "Uncategorized",
+                "status": "processing",
+                # Deliberately the same object: the file is identical, and copying
+                # it would double storage for no gain.
+                "r2_object_key": job["r2_key"],
+                "multi_channel_group_id": group_id,
+                "packaging_status": "pending",
+                "source_id": job["source_id"],
+                "source_video_id": job["source_video_id"],
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        siblings.append({"channel_id": cid, "video_id": sibling_id})
+
+    if siblings:
+        logger.info(
+            "Import %s expanded to linked channel(s): %s",
+            job["job_id"],
+            ", ".join(s["channel_id"] for s in siblings),
+        )
+    return siblings
+
+
 async def _enqueue_for_analysis(db: AsyncIOMotorDatabase, job: dict[str, Any]) -> None:
     """Push a completed import onto the shared batch analysis queue."""
     from app.services.batch_upload_service import get_analysis_queue
@@ -279,6 +335,15 @@ async def _enqueue_for_analysis(db: AsyncIOMotorDatabase, job: dict[str, Any]) -
     )
     position = (last_queued["position"] if last_queued else 0) + 1
 
+    # The imported video and its linked siblings share one group id, which is what
+    # the analysis worker uses to package every channel from a single analysis.
+    await db.videos.update_one(
+        {"video_id": job["video_id"]},
+        {"$set": {"multi_channel_group_id": file_id, "updated_at": now}},
+    )
+    channel_videos = [{"channel_id": job["channel_id"], "video_id": job["video_id"]}]
+    channel_videos.extend(await _sibling_videos(db, job, file_id))
+
     await db.batch_analysis_queue.insert_one(
         {
             "batch_id": f"import:{job['source_id']}",
@@ -286,7 +351,7 @@ async def _enqueue_for_analysis(db: AsyncIOMotorDatabase, job: dict[str, Any]) -
             "filename": job.get("title") or job["source_video_id"],
             "r2_key": job["r2_key"],
             "primary_channel_id": job["channel_id"],
-            "channel_video_ids": [{"channel_id": job["channel_id"], "video_id": job["video_id"]}],
+            "channel_video_ids": channel_videos,
             "scheduled_at": job.get("scheduled_at"),
             "status": "queued",
             "position": position,

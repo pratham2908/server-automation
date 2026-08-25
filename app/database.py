@@ -43,6 +43,10 @@ async def connect_db(
     await _db.videos.create_index("performance.analyzed_at")
     # Backs the "already imported?" dedup check when listing a channel app's videos.
     await _db.videos.create_index([("channel_id", 1), ("source_id", 1), ("source_video_id", 1)], sparse=True)
+    # A channel belongs to at most one group, so "who else gets this video" has a
+    # single answer. The index makes the lookup by member cheap on every publish.
+    await _db.channel_groups.create_index("group_id", unique=True)
+    await _db.channel_groups.create_index("channel_ids")
     await _db.video_sources.create_index("source_id", unique=True)
     await _db.video_sources.create_index("channel_id")
     await _db.source_imports.create_index("job_id", unique=True)
