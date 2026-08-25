@@ -18,13 +18,27 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 
-def build_message(sender: str, recipient: str, subject: str, body: str) -> EmailMessage:
-    """Build a plain-text email message. Pure — no network."""
+def build_message(
+    sender: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    html_body: str | None = None,
+) -> EmailMessage:
+    """Build an email message. Pure — no network.
+
+    With *html_body* the result is multipart/alternative: the plain text stays
+    the message body and the HTML is added as the richer alternative, so a client
+    that will not render HTML still shows the full summary rather than nothing.
+    Order matters — the last part added is the one preferred.
+    """
     msg = EmailMessage()
     msg["From"] = sender
     msg["To"] = recipient
     msg["Subject"] = subject
     msg.set_content(body)
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
     return msg
 
 
@@ -43,7 +57,13 @@ def _send_sync(settings: Settings, msg: EmailMessage) -> None:
         smtp.send_message(msg)
 
 
-async def send_email(settings: Settings, recipient: str | None, subject: str, body: str) -> bool:
+async def send_email(
+    settings: Settings,
+    recipient: str | None,
+    subject: str,
+    body: str,
+    html_body: str | None = None,
+) -> bool:
     """Send an email, returning whether it was actually sent.
 
     Returns ``False`` (without raising) when SMTP is unconfigured, when there is
@@ -57,7 +77,7 @@ async def send_email(settings: Settings, recipient: str | None, subject: str, bo
         return False
 
     # SMTP_FROM is non-None here by _is_configured.
-    msg = build_message(str(settings.SMTP_FROM), recipient, subject, body)
+    msg = build_message(str(settings.SMTP_FROM), recipient, subject, body, html_body)
     try:
         await asyncio.to_thread(_send_sync, settings, msg)
         logger.info("Sent email '%s' to %s", subject, recipient)

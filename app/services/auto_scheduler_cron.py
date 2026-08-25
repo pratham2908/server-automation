@@ -406,6 +406,42 @@ def _assemble_summary(day: date, run_docs: dict[str, dict[str, Any]]) -> dict[st
     return {"date": _day_key(day), "scheduled": scheduled, "skipped": skipped}
 
 
+async def _enrich_summary(db: AsyncIOMotorDatabase, summary: dict[str, Any]) -> dict[str, Any]:
+    """Add the things a person actually reads: the channel's picture and the title.
+
+    The run docs carry ids, which is right for the machine and useless in an
+    inbox — nobody gains anything from a uuid. This resolves each one to a title,
+    and each channel to its avatar, in two queries rather than one per row.
+    """
+    entries = [*summary.get("scheduled", []), *summary.get("skipped", [])]
+    if not entries:
+        return summary
+
+    channel_ids = {e.get("channel_id") for e in entries if e.get("channel_id")}
+    thumbnails = {
+        doc["channel_id"]: doc.get("thumbnail_url")
+        for doc in await db.channels.find(
+            {"channel_id": {"$in": sorted(channel_ids)}}, {"_id": 0, "channel_id": 1, "thumbnail_url": 1}
+        ).to_list(None)
+    }
+
+    video_ids = {e.get("video_id") for e in entries if e.get("video_id")}
+    titles = {
+        doc["video_id"]: doc.get("title")
+        for doc in await db.videos.find(
+            {"video_id": {"$in": sorted(video_ids)}}, {"_id": 0, "video_id": 1, "title": 1}
+        ).to_list(None)
+    }
+
+    for entry in entries:
+        entry["channel_thumbnail"] = thumbnails.get(entry.get("channel_id"))
+        if entry.get("video_id"):
+            # A video deleted between scheduling and the summary leaves no title;
+            # the formatter shows "Untitled" rather than falling back to the id.
+            entry["video_title"] = titles.get(entry["video_id"])
+    return summary
+
+
 async def _resolve_recipient(db: AsyncIOMotorDatabase, settings: Settings) -> str | None:
     if settings.SUMMARY_EMAIL_TO:
         return settings.SUMMARY_EMAIL_TO
@@ -448,15 +484,15 @@ async def _maybe_send_summary(
     if won is None:
         return  # already latched and sent by an earlier tick
 
-    summary = _assemble_summary(day, run_docs)
-    subject, body = format_summary_email(summary)
+    summary = await _enrich_summary(db, _assemble_summary(day, run_docs))
+    email = format_summary_email(summary)
     recipient = await _resolve_recipient(db, settings)
     logger.info(
         "Auto-scheduler day complete: %d scheduled, %d skipped",
         len(summary["scheduled"]),
         len(summary["skipped"]),
     )
-    await send_email(settings, recipient, subject, body)
+    await send_email(settings, recipient, email.subject, email.text, email.html)
 
 
 # ------------------------------------------------------------------

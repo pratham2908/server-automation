@@ -47,12 +47,39 @@ class FakeRuns:
                 cur[parts[-1]] = val
 
 
+class _IdCursor:
+    """Answers an ``{"field": {"$in": [...]}}`` find, which is all the summary needs."""
+
+    def __init__(self, docs):
+        self._docs = docs
+
+    async def to_list(self, _length):
+        return list(self._docs)
+
+
 class FakeVideos:
     def __init__(self, by_id=None):
         self.by_id = by_id or {}
 
     async def find_one(self, q):
         return self.by_id.get(q.get("video_id"))
+
+    def find(self, q, _projection=None):
+        wanted = q.get("video_id", {}).get("$in", [])
+        return _IdCursor(
+            [{"video_id": vid, **self.by_id[vid]} for vid in wanted if vid in self.by_id]
+        )
+
+
+class FakeChannels:
+    def __init__(self, by_id=None):
+        self.by_id = by_id or {}
+
+    def find(self, q, _projection=None):
+        wanted = q.get("channel_id", {}).get("$in", [])
+        return _IdCursor(
+            [{"channel_id": cid, **self.by_id[cid]} for cid in wanted if cid in self.by_id]
+        )
 
 
 class FakeSummaries:
@@ -82,9 +109,10 @@ class FakeSingleDoc:
 
 
 class FakeDB:
-    def __init__(self, runs=None, videos=None, summaries=None, config_doc=None, profile=None):
+    def __init__(self, runs=None, videos=None, summaries=None, config_doc=None, profile=None, channels=None):
         self.auto_scheduler_runs = runs or FakeRuns()
         self.videos = videos or FakeVideos()
+        self.channels = channels or FakeChannels()
         self.auto_scheduler_summaries = summaries or FakeSummaries()
         self.config = FakeSingleDoc(config_doc)
         self.profiles = FakeSingleDoc(profile)
@@ -367,7 +395,7 @@ async def test_summary_is_sent_exactly_once(monkeypatch):
     db = FakeDB(runs=runs, profile={"email": "owner@example.com"})
     sends = []
 
-    async def fake_send(settings, recipient, subject, body):
+    async def fake_send(settings, recipient, subject, body, html_body=None):
         sends.append(recipient)
         return True
 
@@ -395,7 +423,7 @@ async def test_summary_prefers_configured_recipient(monkeypatch):
     db = FakeDB(runs=runs, profile={"email": "owner@example.com"})
     sends = []
 
-    async def fake_send(settings, recipient, subject, body):
+    async def fake_send(settings, recipient, subject, body, html_body=None):
         sends.append(recipient)
         return True
 
