@@ -10,7 +10,7 @@ Two-step pipeline:
           analysis, best combinations), stored in ``analysis``.
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -22,6 +22,38 @@ from app.services.youtube import YouTubeService
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
+
+
+
+def build_actual_retention_updates(
+    stats: dict[str, Any],
+    ai_insight: dict[str, Any] | None,
+    curve: dict[Any, float] | None,
+    now: datetime,
+) -> dict[str, Any]:
+    """Build the ``$set`` that backfills a video's real-world retention numbers.
+
+    Pure so the one rule that matters here is testable: the curve field is
+    written only when there are points. Writing ``{}`` left the field
+    present-but-empty, and a present field reads as "the curve arrived" — which
+    is how videos with no curve data ended up claiming to have one.
+    """
+    updates: dict[str, Any] = {
+        "retention.actual_avg_percentage_viewed": stats.get("avg_percentage_viewed"),
+        "retention.actual_engagement_rate": stats.get("engagement_rate"),
+        "retention.actual_views": stats.get("views"),
+        "retention.actual_like_rate": stats.get("like_rate"),
+        "retention.actual_comment_rate": stats.get("comment_rate"),
+        "retention.actual_views_per_subscriber": stats.get("views_per_subscriber"),
+        "retention.actual_performance_rating": (ai_insight or {}).get("performance_rating"),
+        "retention.actual_stats_snapshot": stats,
+        "retention.actuals_populated_at": now,
+        "retention.updated_at": now,
+    }
+    curve_points = {str(k): value for k, value in (curve or {}).items()}
+    if curve_points:
+        updates["retention.actual_retention_curve"] = curve_points
+    return updates
 
 
 async def run_analysis(
@@ -263,21 +295,7 @@ async def run_analysis(
         if v.get("retention") and not v["retention"].get("actuals_populated_at"):
             await db.videos.update_one(
                 {"channel_id": channel_id, "video_id": v["video_id"]},
-                {
-                    "$set": {
-                        "retention.actual_avg_percentage_viewed": stats.get("avg_percentage_viewed"),
-                        "retention.actual_engagement_rate": stats.get("engagement_rate"),
-                        "retention.actual_views": stats.get("views"),
-                        "retention.actual_like_rate": stats.get("like_rate"),
-                        "retention.actual_comment_rate": stats.get("comment_rate"),
-                        "retention.actual_views_per_subscriber": stats.get("views_per_subscriber"),
-                        "retention.actual_performance_rating": (ai_insight or {}).get("performance_rating"),
-                        "retention.actual_stats_snapshot": stats,
-                        "retention.actual_retention_curve": {str(k): v_curve for k, v_curve in (curve or {}).items()},
-                        "retention.actuals_populated_at": now_ist(),
-                        "retention.updated_at": now_ist(),
-                    }
-                },
+                {"$set": build_actual_retention_updates(stats, ai_insight, curve, now_ist())},
             )
             logger.info(
                 "Backfilled actual metrics into retention for '%s'",
