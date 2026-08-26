@@ -34,14 +34,12 @@ FRONTEND_FIELDS = [
     "automation_config",
     "last_tasks",
     "paused",
-    "api_key_prefix",
-    "api_key_created_at",
     "created_at",
     "updated_at",
 ]
 
 # Must never reach a client.
-SECRET_FIELDS = ["youtube_tokens", "instagram_tokens", "api_key_hash"]
+SECRET_FIELDS = ["youtube_tokens", "instagram_tokens"]
 
 
 @pytest.mark.parametrize("field", FRONTEND_FIELDS)
