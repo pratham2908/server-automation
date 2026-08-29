@@ -1349,7 +1349,7 @@ class VideoService:
             )
         }
         fetched_ids = {v["youtube_video_id"] for v in yt_vids}
-        missing = await self._flag_missing_youtube_videos(channel_id, yt, fetched_ids)
+        missing = await self._archive_missing_youtube_videos(channel_id, yt, fetched_ids)
 
         new_vids = [v for v in yt_vids if v["youtube_video_id"] not in db_ids]
         for v in [v for v in yt_vids if v["youtube_video_id"] in db_ids]:
@@ -1383,9 +1383,11 @@ class VideoService:
                 upd["thumbnail_url"] = v["thumbnail_url"]
 
             await self.db.videos.update_one(
-                # Never refresh an archived record — overwriting its status would
-                # resurrect a soft-deleted video that is still live on YouTube.
-                {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"], "status": {"$ne": "archived"}},
+                # No archived guard: a video present in this fetch is live on the
+                # platform, so if it had been archived it should come back to
+                # published. "Archived" tracks platform presence — this is how a
+                # still-live (or reappeared) video self-heals out of the archive.
+                {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]},
                 {"$set": upd},
             )
 
@@ -1525,9 +1527,10 @@ class VideoService:
                 if thumb and not self._has_thumbnail_url(existing):
                     set_doc["thumbnail_url"] = thumb
                 await self.db.videos.update_one(
-                    # Skip archived records — see the YouTube path; a refresh would
-                    # un-archive a soft-deleted reel that is still live on Instagram.
-                    {"channel_id": channel_id, "instagram_media_id": mid, "status": {"$ne": "archived"}},
+                    # No archived guard (see the YouTube path): a reel present in
+                    # this fetch is live, so a previously-archived one returns to
+                    # published — archive state follows platform presence.
+                    {"channel_id": channel_id, "instagram_media_id": mid},
                     {"$set": set_doc},
                 )
 
@@ -1600,30 +1603,32 @@ class VideoService:
             alive.update(item["id"] for item in resp.get("items", []))
         return alive
 
-    async def _flag_missing_youtube_videos(self, channel_id: str, yt, fetched_ids: set[str]) -> int:
-        """Mark stored videos whose YouTube video no longer exists, and unmark ones that returned.
+    async def _archive_missing_youtube_videos(self, channel_id: str, yt, fetched_ids: set[str]) -> int:
+        """Archive stored videos whose YouTube video no longer exists.
 
         Absence from the uploads playlist is only a hint, never a verdict: a live
         public video can simply not be in it. On officialgeoranking, OTFaRWx_e9c
-        is public and absent right now. Flagging on that alone would brand a
-        perfectly good video as deleted, so every candidate is confirmed with a
-        direct lookup and only ids YouTube itself cannot resolve are flagged.
+        is public and absent right now. Acting on that alone would brand a
+        perfectly good video as gone, so every candidate is confirmed with a
+        direct lookup and only ids YouTube itself cannot resolve are archived.
 
-        The flag is a timestamp, not a deletion. A sync that quietly removed
-        records would turn one bad API response into permanent data loss, and the
-        decision to delete belongs to whoever can tell an unlisted video from a
-        deleted one.
+        "Archived" means "no longer on the platform", so a video that has truly
+        vanished belongs there. This is safe precisely because it is a soft
+        delete: the record and its metadata survive, and if the video ever comes
+        back on the platform the normal metadata refresh restores it to
+        published — so a one-off bad response self-heals on the next good sync
+        rather than causing permanent loss.
         """
         # An empty fetch is indistinguishable from a failed one, so reconciling on
-        # it would flag the entire channel. Nothing is safe to conclude here.
+        # it would archive the entire channel. Nothing is safe to conclude here.
         if not fetched_ids:
             return 0
 
         stored: set[str] = {
             doc["youtube_video_id"]
             async for doc in self.db.videos.find(
-                # Archived videos are already deleted from our side; don't flag
-                # them "gone from platform" (they may well be, on purpose).
+                # Already-archived videos are already off the platform on our
+                # side; no need to reconsider them.
                 {"channel_id": channel_id, "youtube_video_id": {"$ne": None}, "status": {"$ne": "archived"}},
                 {"youtube_video_id": 1},
             )
@@ -1637,32 +1642,24 @@ class VideoService:
 
         if gone:
             logger.warning(
-                "Sync: %d video(s) on %s no longer exist on YouTube: %s",
+                "Sync: archiving %d video(s) on %s that no longer exist on YouTube: %s",
                 len(gone),
                 channel_id,
                 ", ".join(gone),
             )
             await self.db.videos.update_many(
+                {"channel_id": channel_id, "youtube_video_id": {"$in": gone}, "status": {"$ne": "archived"}},
                 {
-                    "channel_id": channel_id,
-                    "youtube_video_id": {"$in": gone},
-                    # Keep the first sighting rather than refreshing it on every
-                    # sync, so "missing since" answers when it actually vanished.
-                    "platform_missing_since": None,
+                    "$set": {
+                        "status": "archived",
+                        "archived_at": now_ist(),
+                        # It is gone from the platform, so the platform copy is
+                        # effectively deleted (whether by us earlier or externally).
+                        "platform_deleted": True,
+                        "updated_at": now_ist(),
+                    }
                 },
-                {"$set": {"platform_missing_since": now_ist(), "updated_at": now_ist()}},
             )
-
-        # A video that reappears — restored, or absent from one bad response —
-        # must lose the flag, otherwise a transient blip is permanent.
-        await self.db.videos.update_many(
-            {
-                "channel_id": channel_id,
-                "youtube_video_id": {"$in": sorted(fetched_ids | alive)},
-                "platform_missing_since": {"$ne": None},
-            },
-            {"$set": {"platform_missing_since": None, "updated_at": now_ist()}},
-        )
         return len(gone)
 
     def _fetch_all_youtube_videos(self, yt, youtube_channel_id: str):
