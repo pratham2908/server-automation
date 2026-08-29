@@ -169,19 +169,98 @@ async def _ready_videos(db: AsyncIOMotorDatabase, channel_id: str) -> list[dict[
     return await db.videos.find({"channel_id": channel_id, "status": "ready"}).to_list(length=None)
 
 
-async def _schedule_video(
+async def _enqueue_for_channel(
     db: AsyncIOMotorDatabase,
     channel: dict[str, Any],
     video_doc: dict[str, Any],
     schedule_at: datetime,
 ) -> dict[str, Any]:
-    """Schedule a ready video via the platform-appropriate enqueue path."""
+    """Schedule one video on one channel via the platform-appropriate path.
+
+    Deliberately group-unaware: ``_schedule_video`` layers the linked-channel
+    expansion on top, and the expansion calls this so it cannot recurse.
+    """
     channel_id = channel["channel_id"]
     if get_channel_platform(channel) == "instagram":
         return await schedule_single_video_instagram(
             db=db, channel_id=channel_id, video_doc=video_doc, scheduled_at=schedule_at
         )
     return await enqueue_video_for_youtube(db=db, channel_id=channel_id, video_doc=video_doc, scheduled_at=schedule_at)
+
+
+async def _schedule_linked_siblings(
+    db: AsyncIOMotorDatabase,
+    channel: dict[str, Any],
+    video_doc: dict[str, Any],
+    schedule_at: datetime,
+) -> list[dict[str, Any]]:
+    """Schedule this video's sibling records on the channels linked to this one.
+
+    Linking says "same brand, same content". The import already creates the
+    sibling record and analysis makes it postable, but nothing ever scheduled it,
+    so a linked channel accumulated ready videos and posted none of them.
+
+    Only *this video's* siblings are touched — the records sharing its
+    ``multi_channel_group_id``. Scheduling whatever else happened to be ready on
+    the linked channel would post unrelated content at the primary's slot.
+
+    Every outcome is returned, including the misses, so the daily summary can say
+    a linked channel was skipped rather than quietly omitting it.
+    """
+    from app.services.channel_group_service import ChannelGroupService
+
+    group_id = video_doc.get("multi_channel_group_id")
+    if not group_id:
+        return []
+
+    targets = await ChannelGroupService(db).expansion_targets(channel["channel_id"])
+    if not targets:
+        return []
+
+    outcomes: list[dict[str, Any]] = []
+    for target_id in targets:
+        target = await db.channels.find_one({"channel_id": target_id})
+        if not target:
+            continue  # unlinked or deleted between import and slot — nothing to post to
+
+        entry: dict[str, Any] = {"channel_id": target_id, "channel_name": target.get("name") or target_id}
+        sibling = await db.videos.find_one({"channel_id": target_id, "multi_channel_group_id": group_id})
+
+        if not sibling:
+            entry.update(state=_SKIPPED, reason="no linked copy of this video on that channel")
+        elif sibling.get("status") != "ready":
+            # Usually still analysing: packaging writes its title, and a video is
+            # not postable before that lands. Reported, not retried — the next
+            # video's slot will find it ready.
+            entry.update(state=_SKIPPED, reason=f"linked copy is '{sibling.get('status')}', not ready")
+        else:
+            result = await _enqueue_for_channel(db, target, sibling, schedule_at)
+            if result.get("status") == "queued":
+                entry.update(state=_SCHEDULED, video_id=sibling.get("video_id"))
+                logger.info(
+                    "Auto-scheduler: also scheduled linked channel %s for %s",
+                    target_id,
+                    channel["channel_id"],
+                )
+            else:
+                entry.update(state=_FAILED, reason=f"schedule failed: {result.get('status')}")
+        outcomes.append(entry)
+
+    return outcomes
+
+
+async def _schedule_video(
+    db: AsyncIOMotorDatabase,
+    channel: dict[str, Any],
+    video_doc: dict[str, Any],
+    schedule_at: datetime,
+) -> dict[str, Any]:
+    """Schedule a ready video, and its linked copies, at the same time."""
+    result = await _enqueue_for_channel(db, channel, video_doc, schedule_at)
+    if result.get("status") != "queued":
+        return result
+    linked = await _schedule_linked_siblings(db, channel, video_doc, schedule_at)
+    return {**result, "linked": linked} if linked else result
 
 
 async def _pick_import_across_sources(
@@ -254,7 +333,7 @@ async def _recheck_imports(
         if status == "ready" and video is not None:
             result = await _schedule_video(db, channel, video, _slot_schedule_at(slot, day, now))
             if result.get("status") == "queued":
-                await _set_slot(db, day, channel_id, slot, {"state": _SCHEDULED})
+                await _set_slot(db, day, channel_id, slot, {"state": _SCHEDULED, "linked": result.get("linked")})
                 logger.info("Auto-scheduler: imported video for %s slot %s is ready and scheduled", channel_id, slot)
             else:
                 await _set_slot(
@@ -300,7 +379,13 @@ async def _fill_pending_slots(
             if result.get("status") == "queued":
                 if ready_id:
                     used_ids.add(ready_id)
-                await _set_slot(db, day, channel_id, slot, {"state": _SCHEDULED, "video_id": ready_id})
+                await _set_slot(
+                    db,
+                    day,
+                    channel_id,
+                    slot,
+                    {"state": _SCHEDULED, "video_id": ready_id, "linked": result.get("linked")},
+                )
                 logger.info("Auto-scheduler: scheduled ready video for %s slot %s", channel_id, slot)
             else:
                 await _set_slot(
@@ -403,6 +488,22 @@ def _assemble_summary(day: date, run_docs: dict[str, dict[str, Any]]) -> dict[st
                         "reason": (data or {}).get("reason", state),
                     }
                 )
+
+            # Linked channels post from the primary's slot, so they have no slot
+            # row of their own. Without this they would post silently — the email
+            # would say one channel was scheduled while two actually were.
+            for link in (data or {}).get("linked") or []:
+                row = {
+                    "channel_id": link.get("channel_id"),
+                    "channel_name": link.get("channel_name") or link.get("channel_id"),
+                    "slot": slot,
+                    "linked_to": name,
+                }
+                if link.get("state") == _SCHEDULED:
+                    scheduled.append({**row, "video_id": link.get("video_id", ""), "source": f"linked to {name}"})
+                else:
+                    skipped.append({**row, "reason": link.get("reason", link.get("state", _SKIPPED))})
+
     return {"date": _day_key(day), "scheduled": scheduled, "skipped": skipped}
 
 
