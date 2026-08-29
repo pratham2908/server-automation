@@ -292,12 +292,14 @@ async def delete_video(
     delete_on_platform: bool = False,
     service: VideoService = Depends(get_video_service),
 ):
-    """Remove a video from the library.
+    """Archive a video (soft delete).
 
-    By default only our copy is removed (R2 + DB + queues). Pass
-    ``?delete_on_platform=true`` to also delete a published YouTube video on
-    YouTube first (Instagram is not supported). The response reports
-    ``platform_deleted`` and ``platform_error``.
+    The record is kept as an ``archived`` tombstone — hidden from the normal
+    views but restorable — while its R2 file and queue entries are purged. By
+    default only our side is affected; pass ``?delete_on_platform=true`` to also
+    delete the live post first (YouTube via the Data API; Instagram only on the
+    Facebook-Login path). The response reports ``platform_deleted`` and
+    ``platform_error``.
     """
     try:
         return await service.delete_video(channel_id, video_id, delete_on_platform=delete_on_platform)
@@ -306,6 +308,19 @@ async def delete_video(
     except RuntimeError as e:
         # Platform deletion failed — our copy was deliberately kept for a retry.
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(e))
+
+
+@router.post("/{video_id}/restore")
+async def restore_video(
+    channel_id: str,
+    video_id: str,
+    service: VideoService = Depends(get_video_service),
+):
+    """Restore an archived (soft-deleted) video to its pre-deletion status."""
+    try:
+        return await service.restore_video(channel_id, video_id)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
 @router.post("/{video_id}/extract-params")

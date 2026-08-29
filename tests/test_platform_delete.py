@@ -22,8 +22,22 @@ class FakeColl:
                 del self.docs[i]
                 return
 
+    async def update_one(self, query, update):
+        for d in self.docs:
+            if _match(d, query):
+                for k, v in update.get("$set", {}).items():
+                    d[k] = v
+                for k in update.get("$unset", {}):
+                    d.pop(k, None)
+                return
+
     async def count_documents(self, query):
         return sum(1 for d in self.docs if _match(d, query))
+
+
+def _archived(db):
+    """delete_video now soft-deletes: the record stays as an archived tombstone."""
+    return len(db.videos.docs) == 1 and db.videos.docs[0].get("status") == "archived"
 
 
 class FakeDB:
@@ -115,7 +129,7 @@ async def test_default_delete_leaves_the_platform_untouched():
     assert result["deleted"] is True
     assert result["platform_deleted"] is False
     assert yt.deleted == []  # never called
-    assert db.videos.docs == []  # local record removed
+    assert _archived(db)  # soft-deleted: tombstone kept
 
 
 @pytest.mark.asyncio
@@ -128,7 +142,7 @@ async def test_opt_in_deletes_the_youtube_video_then_the_record():
 
     assert yt.deleted == ["yt1"]
     assert result["platform_deleted"] is True
-    assert db.videos.docs == []
+    assert _archived(db)
 
 
 @pytest.mark.asyncio
@@ -165,7 +179,7 @@ async def test_unpublished_video_deletes_locally_with_a_note():
     assert yt.deleted == []
     assert result["platform_deleted"] is False
     assert "not published" in result["platform_error"].lower()
-    assert db.videos.docs == []
+    assert _archived(db)
 
 
 @pytest.mark.asyncio
@@ -181,7 +195,7 @@ async def test_opt_in_deletes_the_instagram_media_then_the_record():
 
     assert ig.deleted == ["ig1"]
     assert result["platform_deleted"] is True
-    assert db.videos.docs == []
+    assert _archived(db)
 
 
 @pytest.mark.asyncio
@@ -197,7 +211,7 @@ async def test_instagram_login_channel_cannot_delete_but_removed_locally():
 
     assert result["platform_deleted"] is False
     assert "facebook login" in result["platform_error"].lower()
-    assert db.videos.docs == []  # local delete still proceeds
+    assert _archived(db)  # local soft-delete still proceeds
 
 
 @pytest.mark.asyncio
@@ -226,4 +240,45 @@ async def test_unpublished_instagram_video_deletes_locally_with_a_note():
 
     assert result["platform_deleted"] is False
     assert "not published" in result["platform_error"].lower()
-    assert db.videos.docs == []
+    assert _archived(db)
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_records_provenance_and_clears_r2():
+    yt = FakeYouTube()
+    r2 = FakeR2()
+    db = FakeDB(_video(status="published"), {"channel_id": "c1", "platform": "youtube"})
+    svc = VideoService(db=db, r2_service=r2, youtube_manager=FakeYTManager(yt))
+
+    await svc.delete_video("c1", "v1", delete_on_platform=True)
+
+    doc = db.videos.docs[0]
+    assert doc["status"] == "archived"
+    assert doc["archived_from_status"] == "published"
+    assert doc["platform_deleted"] is True
+    assert doc["r2_object_key"] is None  # uploaded copy purged
+    assert r2.deleted == ["c1/v1.mp4"]
+
+
+@pytest.mark.asyncio
+async def test_restore_returns_video_to_previous_status():
+    db = FakeDB(_video(status="ready"), {"channel_id": "c1", "platform": "youtube"})
+    svc = _service(db, FakeYouTube())
+
+    await svc.delete_video("c1", "v1")  # archive (local only)
+    assert db.videos.docs[0]["status"] == "archived"
+
+    result = await svc.restore_video("c1", "v1")
+
+    assert result["restored"] is True
+    assert result["status"] == "ready"
+    assert db.videos.docs[0]["status"] == "ready"
+    assert "archived_at" not in db.videos.docs[0]
+
+
+@pytest.mark.asyncio
+async def test_restore_rejects_a_non_archived_video():
+    db = FakeDB(_video(status="published"), {"channel_id": "c1", "platform": "youtube"})
+    svc = _service(db, FakeYouTube())
+    with pytest.raises(ValueError):
+        await svc.restore_video("c1", "v1")

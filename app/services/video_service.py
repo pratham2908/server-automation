@@ -214,8 +214,14 @@ class VideoService:
         suggest_n: int | None = None,
     ) -> dict[str, Any]:
         query: dict = {"channel_id": channel_id}
-        if status_filter and status_filter != "all":
+        if status_filter == "archived":
+            query["status"] = "archived"
+        elif status_filter and status_filter != "all":
             query["status"] = status_filter
+        else:
+            # Archived videos are soft-deleted tombstones — kept out of the
+            # default and "all" views; fetch them with status_filter="archived".
+            query["status"] = {"$ne": "archived"}
         if verification_status:
             if verification_status == "missing":
                 query["verification_status"] = None
@@ -409,14 +415,61 @@ class VideoService:
             await self._safe_delete_r2(video["r2_object_key"])
         await self.db.posting_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
         await self.db.schedule_queue.delete_one({"channel_id": channel_id, "video_id": video_id})
-        await self.db.videos.delete_one({"_id": video["_id"]})
+        # Soft delete: keep the record as an "archived" tombstone rather than
+        # dropping it, so deletion history survives and — crucially — sync still
+        # de-dupes by the retained platform id (a locally-removed but still-live
+        # video is not re-imported as new). The R2 file is purged above, so
+        # r2_object_key is cleared to reflect that the uploaded copy is gone.
+        await self.db.videos.update_one(
+            {"_id": video["_id"]},
+            {
+                "$set": {
+                    "status": "archived",
+                    "archived_at": now_ist(),
+                    "archived_from_status": video.get("status"),
+                    "platform_deleted": platform_deleted,
+                    "platform_delete_error": platform_error,
+                    "r2_object_key": None,
+                    "updated_at": now_ist(),
+                }
+            },
+        )
         return {
             "ok": True,
             "video_id": video_id,
             "deleted": True,
+            "archived": True,
             "platform_deleted": platform_deleted,
             "platform_error": platform_error,
         }
+
+    async def restore_video(self, channel_id: str, video_id: str) -> dict[str, Any]:
+        """Restore an archived (soft-deleted) video to its pre-deletion status.
+
+        The R2 file was purged when the video was archived, so a restored video
+        that relied on that uploaded copy will need a re-download before it can
+        be reposted. If the delete was local-only, the live platform post is
+        untouched and the restored record simply points at it again.
+        """
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+        if not video:
+            raise ValueError("Video not found")
+        if video.get("status") != "archived":
+            raise ValueError("Video is not archived")
+        restored_status = video.get("archived_from_status") or "published"
+        await self.db.videos.update_one(
+            {"_id": video["_id"]},
+            {
+                "$set": {"status": restored_status, "updated_at": now_ist()},
+                "$unset": {
+                    "archived_at": "",
+                    "archived_from_status": "",
+                    "platform_deleted": "",
+                    "platform_delete_error": "",
+                },
+            },
+        )
+        return {"ok": True, "video_id": video_id, "restored": True, "status": restored_status}
 
     async def upload_video(self, channel_id: str, video_id: str, file: Any) -> dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
@@ -1330,7 +1383,9 @@ class VideoService:
                 upd["thumbnail_url"] = v["thumbnail_url"]
 
             await self.db.videos.update_one(
-                {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"]},
+                # Never refresh an archived record — overwriting its status would
+                # resurrect a soft-deleted video that is still live on YouTube.
+                {"channel_id": channel_id, "youtube_video_id": v["youtube_video_id"], "status": {"$ne": "archived"}},
                 {"$set": upd},
             )
 
@@ -1470,7 +1525,9 @@ class VideoService:
                 if thumb and not self._has_thumbnail_url(existing):
                     set_doc["thumbnail_url"] = thumb
                 await self.db.videos.update_one(
-                    {"channel_id": channel_id, "instagram_media_id": mid},
+                    # Skip archived records — see the YouTube path; a refresh would
+                    # un-archive a soft-deleted reel that is still live on Instagram.
+                    {"channel_id": channel_id, "instagram_media_id": mid, "status": {"$ne": "archived"}},
                     {"$set": set_doc},
                 )
 
@@ -1565,7 +1622,9 @@ class VideoService:
         stored: set[str] = {
             doc["youtube_video_id"]
             async for doc in self.db.videos.find(
-                {"channel_id": channel_id, "youtube_video_id": {"$ne": None}},
+                # Archived videos are already deleted from our side; don't flag
+                # them "gone from platform" (they may well be, on purpose).
+                {"channel_id": channel_id, "youtube_video_id": {"$ne": None}, "status": {"$ne": "archived"}},
                 {"youtube_video_id": 1},
             )
         }
