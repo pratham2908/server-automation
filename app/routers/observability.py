@@ -850,6 +850,7 @@ async def get_ai_cost_summary(
             "$group": {
                 "_id": None,
                 "total_cost_usd": {"$sum": "$cost_usd"},
+                "unpriced_calls": {"$sum": {"$cond": [{"$eq": ["$cost_usd", None]}, 1, 0]}},
                 "total_calls": {"$sum": 1},
                 "total_input_tokens": {"$sum": "$input_tokens"},
                 "total_output_tokens": {"$sum": "$output_tokens"},
@@ -866,6 +867,7 @@ async def get_ai_cost_summary(
                 "_id": "$model",
                 "calls": {"$sum": 1},
                 "cost_usd": {"$sum": "$cost_usd"},
+                "unpriced_calls": {"$sum": {"$cond": [{"$eq": ["$cost_usd", None]}, 1, 0]}},
                 "input_tokens": {"$sum": "$input_tokens"},
                 "output_tokens": {"$sum": "$output_tokens"},
             }
@@ -881,6 +883,7 @@ async def get_ai_cost_summary(
                 "_id": "$task",
                 "calls": {"$sum": 1},
                 "cost_usd": {"$sum": "$cost_usd"},
+                "unpriced_calls": {"$sum": {"$cond": [{"$eq": ["$cost_usd", None]}, 1, 0]}},
             }
         },
         {"$sort": {"cost_usd": -1}},
@@ -899,6 +902,7 @@ async def get_ai_cost_summary(
                     }
                 },
                 "cost_usd": {"$sum": "$cost_usd"},
+                "unpriced_calls": {"$sum": {"$cond": [{"$eq": ["$cost_usd", None]}, 1, 0]}},
                 "calls": {"$sum": 1},
             }
         },
@@ -911,21 +915,29 @@ async def get_ai_cost_summary(
 
     totals = totals_res[0] if totals_res else {}
     total_calls = totals.get("total_calls", 0)
-    total_cost = totals.get("total_cost_usd", 0.0)
+    # $sum skips nulls, so this is the cost of the *priced* calls only. The
+    # unpriced count beside it is what stops that being read as the whole bill.
+    total_cost = totals.get("total_cost_usd") or 0.0
+    unpriced_calls = totals.get("unpriced_calls", 0)
     success_count = totals.get("success_count", 0)
+    priced_calls = total_calls - unpriced_calls
 
     return {
         "total_cost_usd": round(total_cost, 8),
+        "unpriced_calls": unpriced_calls,
         "total_calls": total_calls,
         "total_input_tokens": totals.get("total_input_tokens", 0),
         "total_output_tokens": totals.get("total_output_tokens", 0),
         "success_rate_pct": round(success_count / total_calls * 100, 2) if total_calls else 0.0,
-        "avg_cost_per_call": round(total_cost / total_calls, 8) if total_calls else 0.0,
+        # Averaged over priced calls only — dividing by calls whose cost is
+        # unknown would report a cheaper call than any that actually happened.
+        "avg_cost_per_call": round(total_cost / priced_calls, 8) if priced_calls else None,
         "by_model": [
             {
                 "model": r["_id"],
                 "calls": r["calls"],
-                "cost_usd": round(r["cost_usd"], 8),
+                "cost_usd": round(r["cost_usd"] or 0.0, 8),
+                "unpriced_calls": r.get("unpriced_calls", 0),
                 "input_tokens": r["input_tokens"],
                 "output_tokens": r["output_tokens"],
             }
@@ -935,11 +947,20 @@ async def get_ai_cost_summary(
             {
                 "task": r["_id"],
                 "calls": r["calls"],
-                "cost_usd": round(r["cost_usd"], 8),
+                "cost_usd": round(r["cost_usd"] or 0.0, 8),
+                "unpriced_calls": r.get("unpriced_calls", 0),
             }
             for r in by_task_res
         ],
-        "daily": [{"date": r["_id"], "cost_usd": round(r["cost_usd"], 8), "calls": r["calls"]} for r in daily_res],
+        "daily": [
+            {
+                "date": r["_id"],
+                "cost_usd": round(r["cost_usd"] or 0.0, 8),
+                "unpriced_calls": r.get("unpriced_calls", 0),
+                "calls": r["calls"],
+            }
+            for r in daily_res
+        ],
     }
 
 

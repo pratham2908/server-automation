@@ -15,7 +15,11 @@ dependencies = [
     "python-multipart>=0.0.6",
     "python-dateutil>=2.8.2",
     "psutil>=5.9.0",
+    "one-ai-client",
 ]
+
+[tool.uv.sources]
+one-ai-client = { path = "../../one-ai/sdk/python", editable = true }
 
 [tool.ruff]
 line-length = 120

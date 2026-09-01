@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     R2_BUCKET_NAME: str
     R2_ENDPOINT_URL: str
 
+    # One AI gateway — the only route to a model provider. It holds the Vertex
+    # credentials, caps this app's daily spend, and prices every call.
+    ONE_AI_URL: str = "http://localhost:4199"
+    ONE_AI_API_KEY: str | None = None
+
     # Gemini (Vertex AI / Agent Platform)
     GOOGLE_CLOUD_PROJECT: str
     GOOGLE_CLOUD_LOCATION: str = "global"

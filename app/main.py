@@ -103,7 +103,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # ---- Gemini ----
     from app.services.gemini import GeminiService
 
-    gemini_service = GeminiService(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.GOOGLE_CLOUD_LOCATION)
+    # Project and location are the gateway's business now — it owns the Vertex
+    # credentials and the routing.
+    gemini_service = GeminiService()
     logger.info("Gemini service initialised")
 
     # ---- Background auto-publisher (Instagram scheduled reels) ----

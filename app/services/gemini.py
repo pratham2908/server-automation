@@ -2,35 +2,63 @@ from __future__ import annotations
 
 """Gemini AI service – channel analysis and video content generation.
 
-Uses the ``google-genai`` SDK to interact with the Gemini API.
+Reaches Gemini through the One AI gateway, which holds the Vertex credentials
+and returns the cost of every call. Request bodies are still the ``google-genai``
+shape and responses are still Vertex's own JSON, so the prompt construction,
+model fallback chain and parsing below are unchanged by that routing.
 """
 
 import json
 import re
 from typing import Any
 
-from google import genai
-from google.genai import types
-
 from app.logger import get_logger
 from app.services.ai_call_logger import schedule_ai_call_log
+from app.services.one_ai_client import get_one_ai
 
 logger = get_logger(__name__)
 
+# Every call site sends the same generation config; only the contents differ.
+_GENERATION_CONFIG: dict[str, Any] = {
+    "responseMimeType": "application/json",
+    "labels": {"application": "automation-server"},
+}
 
-def _token_counts(response: Any) -> tuple[int, int]:
-    """Return ``(input_tokens, output_tokens)`` from a response.
 
-    Preview models sometimes omit ``usage_metadata`` entirely, so every hop is
-    treated as optional and falls back to 0 rather than raising.
+def _token_counts(data: dict[str, Any]) -> tuple[int, int]:
+    """Return ``(input_tokens, output_tokens)`` from a response body.
+
+    ``data`` is Vertex's own JSON as One AI forwarded it, so the keys are
+    camelCase. Preview models sometimes omit ``usageMetadata`` entirely — and a
+    call that spends its whole output budget on thinking comes back with no
+    ``candidatesTokenCount`` at all — so every hop is treated as optional and
+    falls back to 0 rather than raising.
+
+    Thinking tokens are billed but deliberately not folded into
+    ``output_tokens``: these two counters keep the meaning they have had in every
+    ``ai_call_logs`` document written so far. The billed total is carried
+    separately by ``cost_usd``, which One AI computes over every unit it metered
+    — thought tokens included, which the old local table never priced at all.
     """
-    usage = getattr(response, "usage_metadata", None)
-    if usage is None:
+    usage = data.get("usageMetadata") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
         return 0, 0
-    return (
-        getattr(usage, "prompt_token_count", 0) or 0,
-        getattr(usage, "candidates_token_count", 0) or 0,
-    )
+    return (usage.get("promptTokenCount") or 0, usage.get("candidatesTokenCount") or 0)
+
+
+def _response_text(data: dict[str, Any]) -> str:
+    """Concatenate the text parts of the first candidate.
+
+    Stands in for ``response.text`` on the google-genai response object. A
+    candidate that hit its token ceiling mid-thought carries no ``content`` key
+    at all, so the whole walk is defensive; call sites check for an empty result
+    and fall through to the next model rather than handing "" to a JSON parser.
+    """
+    candidates = data.get("candidates") if isinstance(data, dict) else None
+    if not candidates:
+        return ""
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    return "".join(part.get("text", "") for part in parts if isinstance(part, dict))
 
 
 def _loads_json_object(text: str) -> dict[str, Any]:
@@ -92,13 +120,9 @@ class GeminiService:
         "gemini-2.5-flash",
     ]
 
-    def __init__(self, project: str, location: str = "us-central1") -> None:
-        logger.info(
-            "Initializing Gemini with Vertex AI routing (Project: %s, Location: %s)",
-            project,
-            location,
-        )
-        self._client = genai.Client(vertexai=True, project=project, location=location)
+    def __init__(self) -> None:
+        logger.info("Initializing Gemini via the One AI gateway")
+        self._client = get_one_ai()
 
     # ------------------------------------------------------------------
     # Internal — model fallback
@@ -116,37 +140,53 @@ class GeminiService:
 
         for model in models_to_try:
             start_time = time.time()
+            # Set the moment the attempt is booked, so the handler below cannot
+            # book the same attempt a second time when the empty-text check raises.
+            recorded = False
             try:
-                # Use the async client and enforce a 90s timeout
-                response = await asyncio.wait_for(
-                    self._client.aio.models.generate_content(
-                        model=model,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            labels={"application": "automation-server"},
-                        ),
+                # The One AI SDK is synchronous, so it goes on a worker thread;
+                # the 90s bound is kept on this side as before.
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._client.generate_content,
+                        {"model": model, "contents": prompt, "config": _GENERATION_CONFIG},
                     ),
                     timeout=90.0,
                 )
                 duration = (time.time() - start_time) * 1000
-                input_tokens, output_tokens = _token_counts(response)
-                metrics_service.record_ai_call(model, duration, True, task, input_tokens, output_tokens)
-                schedule_ai_call_log(task, model, input_tokens, output_tokens, duration, True)
+                input_tokens, output_tokens = _token_counts(result.data)
+                cost_usd = result.cost.cost_usd
+                text = _response_text(result.data)
+
+                # One record per attempt, whatever the outcome. A reply with no
+                # usable text still cost real money (thinking tokens are billed),
+                # so it is booked with its true cost and marked unsuccessful —
+                # never recorded twice, and never recorded as free.
+                recorded = True
+                metrics_service.record_ai_call(model, duration, bool(text), task, input_tokens, output_tokens, cost_usd)
+                schedule_ai_call_log(task, model, input_tokens, output_tokens, duration, bool(text), cost_usd)
+                if not text:
+                    # Raised inside the loop so the chain falls through to the
+                    # next model; returning "" would only fail later, in the
+                    # caller's JSON parser, with no fallback left to try.
+                    raise ValueError("Gemini returned empty response text")
+
                 logger.info(
-                    "Gemini response from model '%s' (%.2fms)",
+                    "Gemini response from model '%s' (%.2fms, $%s)",
                     model,
                     duration,
+                    "unpriced" if cost_usd is None else f"{cost_usd:.6f}",
                     extra={"color": "CYAN"},
                 )
-                from typing import cast
-
-                return cast(str, response.text)
+                return text
 
             except Exception as exc:
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, False, task, 0, 0)
-                schedule_ai_call_log(task, model, 0, 0, duration, False)
+                if not recorded:
+                    # The call never came back, so there is no cost to attribute:
+                    # None means "unknown", which is not the same as free.
+                    metrics_service.record_ai_call(model, duration, False, task, 0, 0, None)
+                    schedule_ai_call_log(task, model, 0, 0, duration, False, None)
 
                 last_error = exc
                 is_last = model == models_to_try[-1]
@@ -739,40 +779,50 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
             gs_uri = await asyncio.to_thread(upload_local_video_for_vertex, bucket_name, video_path)
             logger.info("Staged video for Vertex multimodal at %s", gs_uri)
             mime = mime_type_for_video_path(video_path)
-            video_part = types.Part.from_uri(file_uri=gs_uri, mime_type=mime)
+            video_part = {"fileData": {"fileUri": gs_uri, "mimeType": mime}}
 
             last_error: Exception | None = None
             for model in self._MODEL_CHAIN:
                 start_time = time.time()
+                recorded = False
                 try:
-                    response = await asyncio.wait_for(
-                        self._client.aio.models.generate_content(
-                            model=model,
-                            contents=[video_part, prompt],
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                labels={"application": "automation-server"},
-                            ),
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self._client.generate_content,
+                            {
+                                "model": model,
+                                "contents": [video_part, prompt],
+                                "config": _GENERATION_CONFIG,
+                            },
                         ),
                         timeout=180.0,
                     )
                     duration = (time.time() - start_time) * 1000
-                    input_tokens, output_tokens = _token_counts(response)
-                    metrics_service.record_ai_call(model, duration, True, task, input_tokens, output_tokens)
-                    schedule_ai_call_log(task, model, input_tokens, output_tokens, duration, True)
+                    input_tokens, output_tokens = _token_counts(result.data)
+                    cost_usd = result.cost.cost_usd
+                    text = _response_text(result.data)
+
+                    recorded = True
+                    metrics_service.record_ai_call(
+                        model, duration, bool(text), task, input_tokens, output_tokens, cost_usd
+                    )
+                    schedule_ai_call_log(task, model, input_tokens, output_tokens, duration, bool(text), cost_usd)
+                    if not text:
+                        raise ValueError("Gemini returned empty response text")
+
                     logger.info(
-                        "Gemini video analysis response from model '%s' (%.2fms)",
+                        "Gemini video analysis response from model '%s' (%.2fms, $%s)",
                         model,
                         duration,
+                        "unpriced" if cost_usd is None else f"{cost_usd:.6f}",
                         extra={"color": "CYAN"},
                     )
-                    from typing import cast
-
-                    return cast(str, response.text)
+                    return text
                 except Exception as exc:
                     duration = (time.time() - start_time) * 1000
-                    metrics_service.record_ai_call(model, duration, False, task, 0, 0)
-                    schedule_ai_call_log(task, model, 0, 0, duration, False)
+                    if not recorded:
+                        metrics_service.record_ai_call(model, duration, False, task, 0, 0, None)
+                        schedule_ai_call_log(task, model, 0, 0, duration, False, None)
                     last_error = exc
                     is_last = model == self._MODEL_CHAIN[-1]
                     if is_last:
@@ -1299,6 +1349,7 @@ Return a JSON object with exactly these keys:
         Uses inline image bytes (no file upload API needed for images).
         """
         import asyncio
+        import base64
         import mimetypes
         import time
 
@@ -1308,45 +1359,55 @@ Return a JSON object with exactly these keys:
             image_bytes = f.read()
 
         mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
-        image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        image_part = {"inlineData": {"data": base64.b64encode(image_bytes).decode("ascii"), "mimeType": mime_type}}
         prompt = self._build_thumbnail_analysis_prompt(title, platform)
 
         last_error: Exception | None = None
         for model in self._MODEL_CHAIN:
             start_time = time.time()
+            recorded = False
             try:
-                response = await asyncio.wait_for(
-                    self._client.aio.models.generate_content(
-                        model=model,
-                        contents=[image_part, prompt],
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            labels={"application": "automation-server"},
-                        ),
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._client.generate_content,
+                        {
+                            "model": model,
+                            "contents": [image_part, prompt],
+                            "config": _GENERATION_CONFIG,
+                        },
                     ),
                     timeout=90.0,
                 )
                 duration = (time.time() - start_time) * 1000
-                input_tokens, output_tokens = _token_counts(response)
-                metrics_service.record_ai_call(model, duration, True, "thumbnail_analysis", input_tokens, output_tokens)
-                schedule_ai_call_log("thumbnail_analysis", model, input_tokens, output_tokens, duration, True)
+                input_tokens, output_tokens = _token_counts(result.data)
+                cost_usd = result.cost.cost_usd
+                text = _response_text(result.data)
+
+                recorded = True
+                metrics_service.record_ai_call(
+                    model, duration, bool(text), "thumbnail_analysis", input_tokens, output_tokens, cost_usd
+                )
+                schedule_ai_call_log(
+                    "thumbnail_analysis", model, input_tokens, output_tokens, duration, bool(text), cost_usd
+                )
+                if not text:
+                    raise ValueError("Gemini returned empty response text")
 
                 logger.info(
-                    "Gemini thumbnail analysis from '%s' (%.2fms)",
+                    "Gemini thumbnail analysis from '%s' (%.2fms, $%s)",
                     model,
                     duration,
+                    "unpriced" if cost_usd is None else f"{cost_usd:.6f}",
                     extra={"color": "CYAN"},
                 )
 
-                if response.text is None:
-                    raise ValueError("Gemini returned empty response text")
-
-                return _loads_json_object(response.text)
+                return _loads_json_object(text)
 
             except Exception as exc:
                 duration = (time.time() - start_time) * 1000
-                metrics_service.record_ai_call(model, duration, False, "thumbnail_analysis", 0, 0)
-                schedule_ai_call_log("thumbnail_analysis", model, 0, 0, duration, False)
+                if not recorded:
+                    metrics_service.record_ai_call(model, duration, False, "thumbnail_analysis", 0, 0, None)
+                    schedule_ai_call_log("thumbnail_analysis", model, 0, 0, duration, False, None)
 
                 last_error = exc
                 is_last = model == self._MODEL_CHAIN[-1]

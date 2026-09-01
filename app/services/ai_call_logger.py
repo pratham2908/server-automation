@@ -1,8 +1,13 @@
 """Per-call cost accounting for Gemini requests.
 
-Every Gemini call reports its token usage here; this module prices it against
-current Vertex AI rates and appends one document to ``db.ai_call_logs`` so spend
-can be broken down by model, task, and day.
+Every Gemini call reports its token usage and what One AI charged for it here,
+and this module appends one document to ``db.ai_call_logs`` so spend can be
+broken down by model, task, and day.
+
+``GEMINI_PRICING`` and :func:`compute_cost` below are no longer on the call
+path — One AI prices every call and ``log_ai_call`` stores what it returns —
+but they are kept importable for this phase so nothing that still references
+them breaks. They are removed in the follow-up commit.
 
 Writes are best-effort by design: a logging failure must never take down the
 call it was measuring.
@@ -90,8 +95,13 @@ async def log_ai_call(
     output_tokens: int,
     duration_ms: float,
     success: bool,
+    cost_usd: float | None,
 ) -> None:
     """Append one call record to ``ai_call_logs``.
+
+    ``cost_usd`` is what One AI charged, and ``None`` when it could not price the
+    call. The ``None`` is stored as-is: readers of this collection must treat a
+    null as "unknown cost", never coalesce it to zero.
 
     Silently does nothing when no DB is bound (tests, pre-startup). Any write
     failure is logged and swallowed so the Gemini call path is never affected.
@@ -108,7 +118,9 @@ async def log_ai_call(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
-        "cost_usd": compute_cost(model, input_tokens, output_tokens),
+        "cost_usd": cost_usd,
+        # Denormalised so a rollup can count unpriced calls without a null test.
+        "priced": cost_usd is not None,
         "duration_ms": round(duration_ms, 2),
         "success": success,
     }
@@ -126,6 +138,7 @@ def schedule_ai_call_log(
     output_tokens: int,
     duration_ms: float,
     success: bool,
+    cost_usd: float | None,
 ) -> asyncio.Task | None:
     """Persist a call record in the background, off the caller's critical path.
 
@@ -133,7 +146,7 @@ def schedule_ai_call_log(
     running loop to schedule on.
     """
 
-    coro = log_ai_call(task, model, input_tokens, output_tokens, duration_ms, success)
+    coro = log_ai_call(task, model, input_tokens, output_tokens, duration_ms, success, cost_usd)
     try:
         task_handle = asyncio.get_running_loop().create_task(coro)
     except RuntimeError:
