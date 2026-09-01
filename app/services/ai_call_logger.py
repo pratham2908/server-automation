@@ -4,10 +4,12 @@ Every Gemini call reports its token usage and what One AI charged for it here,
 and this module appends one document to ``db.ai_call_logs`` so spend can be
 broken down by model, task, and day.
 
-``GEMINI_PRICING`` and :func:`compute_cost` below are no longer on the call
-path — One AI prices every call and ``log_ai_call`` stores what it returns —
-but they are kept importable for this phase so nothing that still references
-them breaks. They are removed in the follow-up commit.
+The rates used to live here, in a ``GEMINI_PRICING`` table kept in step with
+Google's published prices by hand. One AI prices calls centrally now, so the
+table is gone along with the failure mode it carried: any model missing from it
+was priced at ``0.0``, which reads as free and silently understated this app's
+spend for as long as the gap went unnoticed. An unpriceable call is stored as
+``None`` — unknown, not free.
 
 Writes are best-effort by design: a logging failure must never take down the
 call it was measuring.
@@ -25,34 +27,6 @@ from app.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Vertex AI standard-tier pricing, USD per 1M tokens (fetched 2026-07-24).
-# Models with a ``context_threshold`` bill at the ``_long`` rates once a prompt
-# exceeds that many input tokens.
-GEMINI_PRICING: dict[str, dict[str, float]] = {
-    "gemini-2.5-pro": {
-        "input_per_1m": 1.25,
-        "output_per_1m": 10.00,
-        "input_per_1m_long": 2.50,
-        "output_per_1m_long": 15.00,
-        "context_threshold": 200_000,
-    },
-    "gemini-2.5-flash": {
-        "input_per_1m": 0.30,
-        "output_per_1m": 2.50,
-    },
-    "gemini-2.5-flash-lite": {
-        "input_per_1m": 0.10,
-        "output_per_1m": 0.40,
-    },
-    # Vertex AI published pricing (confirmed 2026-07-24).
-    "gemini-3-flash-preview": {
-        "input_per_1m": 0.50,
-        "output_per_1m": 3.00,
-    },
-}
-
-_PER_MILLION = 1_000_000
-
 _bound_db: AsyncIOMotorDatabase | None = None
 
 # Fire-and-forget log tasks are kept here so the event loop cannot garbage
@@ -65,27 +39,6 @@ def bind_ai_logger_db(db: AsyncIOMotorDatabase | None) -> None:
 
     global _bound_db
     _bound_db = db
-
-
-def compute_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Return the USD cost of one call, or ``0.0`` if the model has no known pricing."""
-
-    pricing = GEMINI_PRICING.get(model)
-    if pricing is None:
-        logger.warning("No pricing for model '%s' — recording call at $0.00", model)
-        return 0.0
-
-    threshold = pricing.get("context_threshold")
-    use_long_rates = threshold is not None and input_tokens > threshold
-
-    if use_long_rates:
-        input_rate = pricing["input_per_1m_long"]
-        output_rate = pricing["output_per_1m_long"]
-    else:
-        input_rate = pricing["input_per_1m"]
-        output_rate = pricing["output_per_1m"]
-
-    return (input_tokens * input_rate + output_tokens * output_rate) / _PER_MILLION
 
 
 async def log_ai_call(

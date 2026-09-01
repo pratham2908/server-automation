@@ -14,9 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.ai_call_logger import (
-    GEMINI_PRICING,
     bind_ai_logger_db,
-    compute_cost,
     log_ai_call,
     schedule_ai_call_log,
 )
@@ -51,58 +49,6 @@ def logger_db():
     bind_ai_logger_db(db)
     yield db
     bind_ai_logger_db(None)
-
-
-# ------------------------------------------------------------------
-# compute_cost
-# ------------------------------------------------------------------
-
-
-def test_flash_cost_uses_published_per_million_rates():
-    # 1M input @ $0.30 + 1M output @ $2.50
-    assert compute_cost("gemini-2.5-flash", 1_000_000, 1_000_000) == pytest.approx(2.80)
-
-
-def test_flash_lite_is_cheaper_than_flash():
-    lite = compute_cost("gemini-2.5-flash-lite", 100_000, 100_000)
-    flash = compute_cost("gemini-2.5-flash", 100_000, 100_000)
-
-    assert lite < flash
-    assert lite == pytest.approx(0.05)  # 0.1M*0.10 + 0.1M*0.40
-
-
-def test_pro_uses_standard_rates_below_the_context_threshold():
-    # 1k input @ $1.25/1M + 1k output @ $10/1M
-    assert compute_cost("gemini-2.5-pro", 1_000, 1_000) == pytest.approx(0.01125)
-
-
-def test_pro_switches_to_long_context_rates_above_the_threshold():
-    threshold = GEMINI_PRICING["gemini-2.5-pro"]["context_threshold"]
-
-    # 250k input @ $2.50/1M + 1k output @ $15/1M — both legs use the long rate
-    assert compute_cost("gemini-2.5-pro", threshold + 50_000, 1_000) == pytest.approx(0.625 + 0.015)
-
-
-def test_pro_exactly_at_the_threshold_still_uses_standard_rates():
-    """The long tier is for prompts *above* the threshold, not at it."""
-    threshold = GEMINI_PRICING["gemini-2.5-pro"]["context_threshold"]
-
-    assert compute_cost("gemini-2.5-pro", threshold, 0) == pytest.approx(threshold / 1_000_000 * 1.25)
-
-
-def test_preview_model_uses_its_own_published_rates():
-    """gemini-3-flash-preview was once proxied to flash rates; it now has published pricing."""
-    # 10k input @ $0.50/1M + 10k output @ $3.00/1M
-    assert compute_cost("gemini-3-flash-preview", 10_000, 10_000) == pytest.approx(0.005 + 0.03)
-    assert compute_cost("gemini-3-flash-preview", 10_000, 10_000) != compute_cost("gemini-2.5-flash", 10_000, 10_000)
-
-
-def test_unknown_model_costs_zero_rather_than_raising():
-    assert compute_cost("some-unreleased-model", 10_000, 5_000) == 0.0
-
-
-def test_failed_call_with_no_tokens_costs_zero():
-    assert compute_cost("gemini-2.5-pro", 0, 0) == 0.0
 
 
 # ------------------------------------------------------------------

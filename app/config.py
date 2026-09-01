@@ -32,10 +32,13 @@ class Settings(BaseSettings):
     ONE_AI_URL: str = "http://localhost:4199"
     ONE_AI_API_KEY: str | None = None
 
-    # Gemini (Vertex AI / Agent Platform)
-    GOOGLE_CLOUD_PROJECT: str
-    GOOGLE_CLOUD_LOCATION: str = "global"
-    # Optional: GCS bucket for staging videos (e.g. gs:// URI for Vertex multimodal). Same project as Vertex recommended.
+    # GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION used to live here to point the
+    # Vertex client at a project. The gateway owns that routing now, so nothing
+    # reads them. GOOGLE_APPLICATION_CREDENTIALS is still required in the
+    # environment: the GCS staging below authenticates with it, and the storage
+    # client takes its project from those credentials.
+
+    # Optional: GCS bucket for staging videos (e.g. gs:// URI for Vertex multimodal).
     GCS_VERTEX_STAGING_BUCKET: str | None = None
 
     # YouTube (optional — prefer DB config collection; kept for backward compat)
