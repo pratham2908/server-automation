@@ -11,3 +11,6 @@ secrets/*
 .claude/
 # scratch space for staged media
 tmp/
+
+# Local worktree registry: coordination state between concurrent sessions, never committed.
+worktrees.md
