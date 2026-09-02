@@ -13,7 +13,7 @@ round trip and stall every other request in flight.
 
 from __future__ import annotations
 
-from one_ai import ApiKey, OneAI
+from one_ai import ApiKey, OneAI, local_first
 
 from app.config import get_settings
 from app.logger import get_logger
@@ -48,6 +48,9 @@ def get_one_ai() -> OneAI:
             "One AI gateway; set ONE_AI_URL and ONE_AI_API_KEY in the environment."
         )
 
-    logger.info("Initializing One AI client (gateway: %s)", settings.ONE_AI_URL)
-    _client = OneAI(settings.ONE_AI_URL, ApiKey(settings.ONE_AI_API_KEY), timeout_s=_TIMEOUT_S)
+    # `local_first`: a local gateway when one is running on this machine, the deployed one
+    # otherwise. In production nothing is probed at all.
+    gateway_url = local_first(settings.ONE_AI_URL, log=logger.info)
+    logger.info("Initializing One AI client (gateway: %s)", gateway_url)
+    _client = OneAI(gateway_url, ApiKey(settings.ONE_AI_API_KEY), timeout_s=_TIMEOUT_S)
     return _client
