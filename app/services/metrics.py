@@ -29,6 +29,9 @@ class MetricsService:
         self.ai_model_usage: dict[str, int] = {}  # model -> count
         self.ai_last_calls: deque[dict[str, Any]] = deque(maxlen=20)  # Last 20 AI calls
         self.ai_total_cost_usd = 0.0
+        # Calls One AI could not price. Tracked separately so a total is never
+        # quietly understated by calls that contributed nothing to it.
+        self.ai_unpriced_calls = 0
         self.ai_task_usage: dict[str, int] = {}  # task -> count
         self.ai_task_cost: dict[str, float] = {}  # task -> USD
 
@@ -75,19 +78,29 @@ class MetricsService:
         task: str = "unknown",
         input_tokens: int = 0,
         output_tokens: int = 0,
+        cost_usd: float | None = None,
     ):
-        from app.services.ai_call_logger import compute_cost
+        """Roll one AI call into the in-process counters.
 
-        cost_usd = compute_cost(model, input_tokens, output_tokens)
+        ``cost_usd`` comes from One AI, which prices the call centrally. ``None``
+        means the gateway could not price it — it is counted as unpriced and left
+        out of the running totals rather than added as 0.0, because a zero would
+        read as free and quietly drag every average and total down with it.
+        """
 
         self.ai_calls += 1
         if not success:
             self.ai_errors += 1
         self.ai_total_latency += duration_ms
         self.ai_model_usage[model] = self.ai_model_usage.get(model, 0) + 1
-        self.ai_total_cost_usd += cost_usd
         self.ai_task_usage[task] = self.ai_task_usage.get(task, 0) + 1
-        self.ai_task_cost[task] = self.ai_task_cost.get(task, 0.0) + cost_usd
+        # The task appears in the breakdown either way; only a priced call moves it.
+        self.ai_task_cost.setdefault(task, 0.0)
+        if cost_usd is None:
+            self.ai_unpriced_calls += 1
+        else:
+            self.ai_total_cost_usd += cost_usd
+            self.ai_task_cost[task] += cost_usd
         self.ai_last_calls.append(
             {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -150,6 +163,7 @@ class MetricsService:
                 "avg_latency_ms": round(self.ai_total_latency / self.ai_calls, 2) if self.ai_calls else 0,
                 "model_usage": self.ai_model_usage,
                 "total_cost_usd": round(self.ai_total_cost_usd, 6),
+                "unpriced_calls": self.ai_unpriced_calls,
                 "task_usage": self.ai_task_usage,
                 "task_cost": {task: round(cost, 6) for task, cost in self.ai_task_cost.items()},
                 "recent": list(self.ai_last_calls),

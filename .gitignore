@@ -9,4 +9,5 @@ __pycache__/
 *$py.class
 secrets/*
 .claude/
-
+# scratch space for staged media
+tmp/

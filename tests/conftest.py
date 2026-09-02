@@ -15,7 +15,6 @@ _TEST_ENV = {
     "R2_SECRET_ACCESS_KEY": "test-secret-key",
     "R2_BUCKET_NAME": "test-bucket",
     "R2_ENDPOINT_URL": "https://test.r2.cloudflarestorage.com",
-    "GOOGLE_CLOUD_PROJECT": "test-project",
 }
 for _key, _value in _TEST_ENV.items():
     os.environ.setdefault(_key, _value)
