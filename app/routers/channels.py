@@ -71,6 +71,14 @@ class ChannelCreate(BaseModel):
     instagram_user_id: str | None = Field(None, description="Instagram user ID (required for instagram)")
     access_token: str | None = Field(None, description="Long-lived Instagram access token (required for instagram)")
     expires_at: str | None = Field(None, description="ISO 8601 token expiry datetime (optional, for instagram)")
+    instagram_provider: str = Field(
+        "facebook",
+        description=(
+            "Where the Instagram token came from: 'facebook' (Instagram Graph API via Facebook "
+            "Login, graph.facebook.com) or 'instagram' (Instagram API with Instagram Login, "
+            "graph.instagram.com). The two use different hosts and id namespaces."
+        ),
+    )
     channel_id: str | None = Field(None, description="Custom internal slug. Auto-generated if omitted.")
     register_password: str | None = Field(
         None, description="App-level password required to register a channel. Not persisted."
@@ -277,14 +285,25 @@ async def _create_instagram_channel(
             detail="access_token is required for Instagram channels",
         )
 
-    from app.services.instagram import InstagramService
+    from app.services.instagram import PROVIDER_FACEBOOK, PROVIDER_INSTAGRAM, InstagramService
 
-    ig_svc = InstagramService(access_token=body.access_token)
+    provider = body.instagram_provider if body.instagram_provider == PROVIDER_INSTAGRAM else PROVIDER_FACEBOOK
+    ig_svc = InstagramService(access_token=body.access_token, provider=provider)
 
     try:
         ig_data = ig_svc.get_account_info(body.instagram_user_id)
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        # The two providers fail identically here (401) for opposite reasons, so
+        # say which one was tried — the fix is almost always the other one.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Could not read the Instagram account using {provider.capitalize()} Login: {e}. "
+                f"If this account authenticates with "
+                f"{'Facebook' if provider == PROVIDER_INSTAGRAM else 'Instagram'} Login, register it "
+                f"with that option instead."
+            ),
+        )
 
     channel_id = body.channel_id
     if not channel_id:
@@ -306,7 +325,9 @@ async def _create_instagram_channel(
             detail=f"Channel '{channel_id}' already exists",
         )
 
-    token_doc = {"access_token": body.access_token.strip()}
+    # Without this every later call defaults to Facebook (see instagram.py's
+    # tokens.get("provider", PROVIDER_FACEBOOK)) and hits the wrong Graph host.
+    token_doc = {"access_token": body.access_token.strip(), "provider": provider}
     if body.expires_at:
         token_doc["expires_at"] = body.expires_at
 
@@ -314,7 +335,10 @@ async def _create_instagram_channel(
     doc = {
         "channel_id": channel_id,
         "platform": "instagram",
-        "instagram_user_id": body.instagram_user_id,
+        # Instagram Login tokens are scoped to their own account, whose id lives in
+        # a different namespace than the Facebook business id — so trust the id the
+        # API just returned over whatever was pasted into the form.
+        "instagram_user_id": ig_data.get("instagram_user_id") or body.instagram_user_id,
         "instagram_tokens": token_doc,
         "name": ig_data.get("name") or ig_data.get("username", channel_id),
         "description": ig_data.get("biography", ""),
@@ -330,7 +354,12 @@ async def _create_instagram_channel(
     doc["_id"] = str(doc["_id"])
     doc.pop("instagram_tokens", None)
 
-    logger.success("Registered Instagram channel '%s' (user_id=%s)", channel_id, body.instagram_user_id)
+    logger.success(
+        "Registered Instagram channel '%s' (user_id=%s, provider=%s)",
+        channel_id,
+        doc["instagram_user_id"],
+        provider,
+    )
     return doc
 
 
