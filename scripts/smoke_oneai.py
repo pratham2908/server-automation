@@ -62,12 +62,12 @@ async def _report(label: str, response: object, logs: _CapturedLogs) -> float | 
     print(f"  duration_ms   : {call['duration_ms']}")
     print(f"  cost_usd      : {_money(call['cost_usd'])}   <- from metrics_service")
     print(f"  log cost_usd  : {_money(doc.get('cost_usd'))}   <- from ai_call_logs (priced={doc.get('priced')})")
-    return call["cost_usd"]
+    return call["cost_usd"]  # type: ignore[no-any-return]
 
 
 async def main() -> int:
     logs = _CapturedLogs()
-    bind_ai_logger_db(SimpleNamespace(ai_call_logs=logs))
+    bind_ai_logger_db(SimpleNamespace(ai_call_logs=logs))  # type: ignore[arg-type]
 
     service = GeminiService()
     costs: list[float | None] = []
