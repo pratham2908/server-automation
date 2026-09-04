@@ -21,6 +21,72 @@ When asked to **commit changes, push, and deploy** (or similar), run these steps
    Or using the env value: run the command stored in `ORACLE_SERVER_SSH_COMMAND` with the remote part appended, e.g.  
    `"<ORACLE_SERVER_SSH_COMMAND>" "cd automation-server && git pull && sudo systemctl restart automation-server"`
 
+4. **Confirm it actually came up.** A restart that reports `active` can still be a crash loop —
+   systemd restarts a failing process, so `is-active` says `active` while the app is dying on boot.
+   Check the health endpoint from inside the box, giving uvicorn ~15s to bind:
+
+   ```bash
+   ssh -i ssh-key-2.key ubuntu@68.233.115.135 "sleep 15; systemctl is-active automation-server; curl -s -o /dev/null -w 'health:%{http_code}\n' http://127.0.0.1:8000/health"
+   ```
+
+   `health:200` means it is up. Anything else — read the log:
+   `sudo journalctl -u automation-server -n 30 --no-pager`
+
+---
+
+## 📦 The One AI SDK — ship it separately, every time it changes
+
+**Read this before deploying if you have touched the One AI SDK.**
+
+`requirements.txt` declares the SDK as an editable local path:
+
+```
+-e ../../one-ai/sdk/python
+```
+
+That resolves on the dev Mac. It cannot resolve on the server — from
+`/home/ubuntu/automation-server` it points at `/home/one-ai/sdk/python`, which does not exist. So
+the SDK is **not** installed by `git pull`, and `pip install -r requirements.txt` aborts on that
+line. The server has a plain (non-editable) copy in its venv, installed by hand.
+
+The consequence: **a change to the SDK does not reach production by deploying automation-server.**
+The server keeps running its existing copy — no error, no warning, just the old code answering
+requests. Ship it explicitly:
+
+Run this from anywhere — it holds the key in a variable because the `cd` into the SDK directory
+breaks the usual relative `-i ssh-key-2.key` (that mistake fails with
+`Permission denied (publickey)`, which reads like an access problem rather than a wrong path):
+
+```bash
+KEY=~/work/Code/content-manager/automation-server/ssh-key-2.key
+
+cd ~/work/Code/one-ai/sdk/python
+tar czf /tmp/one-ai-sdk.tgz --exclude='*.egg-info' --exclude='__pycache__' --exclude='tests' .
+scp -i "$KEY" /tmp/one-ai-sdk.tgz ubuntu@68.233.115.135:/tmp/
+
+ssh -i "$KEY" ubuntu@68.233.115.135 \
+  "rm -rf ~/one-ai-sdk && mkdir -p ~/one-ai-sdk && tar xzf /tmp/one-ai-sdk.tgz -C ~/one-ai-sdk \
+   && ~/automation-server/venv/bin/pip install ~/one-ai-sdk \
+   && sudo systemctl restart automation-server"
+```
+
+Then confirm with the health check in step 4 above.
+
+Notes:
+
+- **The restart is not optional.** `pip install` swaps the files on disk, but the running process
+  already has the old module imported. Skipping it looks exactly like a deploy that did not take.
+- **Bumping the SDK version is not required.** pip reinstalls from a local path even when the
+  version is unchanged (verified — it uninstalls and reinstalls).
+- **A fresh server or rebuilt venv needs this too**, plus `ONE_AI_URL` and `ONE_AI_API_KEY` in the
+  server's `.env`. Without the key the app does not start: `get_one_ai()` is called during lifespan
+  startup, so a missing key is a boot failure, not a failed AI call.
+- **Adding any new Python dependency** means installing it directly on the server — the
+  `pip install -r requirements.txt` route dies on the editable path above.
+
+This whole section disappears the day the SDK is installable from the server — a git URL in
+`requirements.txt` (or a published package) would make it a normal `git pull && pip install`.
+
 ---
 
 ## 🔐 SSH Access
