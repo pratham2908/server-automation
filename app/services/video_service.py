@@ -1464,6 +1464,7 @@ class VideoService:
         }
         # Batch fetch insights for all media IDs
         media_ids = [r["id"] for r in ig_reels]
+        missing = await self._archive_missing_instagram_videos(channel_id, set(media_ids))
         insights_map = ig.get_reel_insights(media_ids)
 
         new_vids = []
@@ -1535,7 +1536,7 @@ class VideoService:
                 )
 
         if not new_vids:
-            return {"ok": True, "synced": 0}
+            return {"ok": True, "synced": 0, "missing": missing}
         schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
         cats = [
             {"name": c["name"], "description": c.get("description", "")}
@@ -1578,7 +1579,7 @@ class VideoService:
                     }
                 )
                 inserted += 1
-        return {"ok": True, "synced": inserted}
+        return {"ok": True, "synced": inserted, "missing": missing}
 
     async def _extract_params_and_categorize_batch(self, schema, cats, batch, instructions, platform):
         if not self.gemini:
@@ -1661,6 +1662,97 @@ class VideoService:
                 },
             )
         return len(gone)
+
+    async def _archive_missing_instagram_videos(self, channel_id: str, fetched_ids: set[str]) -> int:
+        """Archive stored reels that Instagram no longer returns.
+
+        Unlike YouTube, no per-reel confirmation is needed: ``/{ig-user-id}/media``
+        is the account's own media list rather than a derived view like the
+        uploads playlist, and ``get_reels`` paginates all of it. So a complete
+        fetch is authoritative and absence really does mean gone. A partial fetch
+        cannot masquerade as a complete one either — ``_get`` raises on a bad
+        page, which aborts the sync before this runs.
+
+        What a single fetch cannot rule out is the page seam: posting during
+        pagination shifts the cursor and an item can fall between two pages,
+        present on the account but absent from our list. Deduping the pages
+        catches the duplicate half of that, not the omission half. So absence has
+        to be seen twice — ``missing_since`` is stamped on the first sync that
+        does not see a reel and only the second one archives it. A seam miss is
+        transient and clears itself; a deleted reel stays gone.
+
+        Archiving is a soft delete, so this self-heals: a reel that reappears is
+        returned to published by the normal update path.
+        """
+        # An empty fetch is indistinguishable from an account whose reels were
+        # all deleted, and archiving a whole channel on it is not a risk worth
+        # taking for the one case where it would be right.
+        if not fetched_ids:
+            return 0
+
+        now = now_ist()
+
+        # Anything present again has stopped being missing — clear the strike so
+        # a reel that flickers out and back never accumulates two.
+        await self.db.videos.update_many(
+            {"channel_id": channel_id, "instagram_media_id": {"$in": sorted(fetched_ids)}},
+            {"$set": {"missing_since": None}},
+        )
+
+        stored = [
+            doc
+            async for doc in self.db.videos.find(
+                {
+                    "channel_id": channel_id,
+                    "instagram_media_id": {"$ne": None},
+                    "status": {"$ne": "archived"},
+                },
+                {"instagram_media_id": 1, "missing_since": 1},
+            )
+        ]
+
+        first_miss: list[str] = []
+        confirmed: list[str] = []
+        for doc in stored:
+            media_id = doc["instagram_media_id"]
+            if media_id in fetched_ids:
+                continue
+            (confirmed if doc.get("missing_since") else first_miss).append(media_id)
+
+        if first_miss:
+            logger.info(
+                "Sync: %d reel(s) on %s absent this pass; archiving them if they are absent next time too",
+                len(first_miss),
+                channel_id,
+            )
+            await self.db.videos.update_many(
+                {"channel_id": channel_id, "instagram_media_id": {"$in": first_miss}},
+                {"$set": {"missing_since": now, "updated_at": now}},
+            )
+
+        if confirmed:
+            logger.warning(
+                "Sync: archiving %d reel(s) on %s absent from Instagram twice running: %s",
+                len(confirmed),
+                channel_id,
+                ", ".join(confirmed),
+            )
+            await self.db.videos.update_many(
+                {"channel_id": channel_id, "instagram_media_id": {"$in": confirmed}, "status": {"$ne": "archived"}},
+                {
+                    "$set": {
+                        "status": "archived",
+                        "archived_at": now,
+                        # Gone from the platform, whether deleted or hidden — the
+                        # Graph API does not distinguish the two.
+                        "platform_deleted": True,
+                        "missing_since": None,
+                        "updated_at": now,
+                    }
+                },
+            )
+
+        return len(confirmed)
 
     def _fetch_all_youtube_videos(self, yt, youtube_channel_id: str):
         uploads_playlist_id = "UU" + youtube_channel_id[2:]

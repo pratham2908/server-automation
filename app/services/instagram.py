@@ -285,13 +285,19 @@ class InstagramService:
         """
         fields = "id,caption,media_type,media_url,thumbnail_url,timestamp,permalink,like_count,comments_count"
         reels: list[dict[str, Any]] = []
+        # /media is newest-first and cursor-paged, so posting during pagination
+        # shifts everything down a slot and an item can come back on two
+        # consecutive pages. Keyed by id, first sighting wins — the same seam
+        # that once imported a YouTube video twice.
+        seen: set[str] = set()
         url: str | None = f"{self._user_node(ig_user_id)}/media"
         params: dict = {"fields": fields, "limit": "100"}
 
         while url:
             body = self._get(url, params=params)
             for item in body.get("data", []):
-                if item.get("media_type") in ("VIDEO", "REEL"):
+                if item.get("media_type") in ("VIDEO", "REEL") and item.get("id") not in seen:
+                    seen.add(item["id"])
                     reels.append(item)
             paging = body.get("paging", {})
             next_url = paging.get("next")
