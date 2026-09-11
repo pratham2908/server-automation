@@ -66,9 +66,7 @@ class FakeVideos:
 
     def find(self, q, _projection=None):
         wanted = q.get("video_id", {}).get("$in", [])
-        return _IdCursor(
-            [{"video_id": vid, **self.by_id[vid]} for vid in wanted if vid in self.by_id]
-        )
+        return _IdCursor([{"video_id": vid, **self.by_id[vid]} for vid in wanted if vid in self.by_id])
 
 
 class FakeChannels:
@@ -77,9 +75,7 @@ class FakeChannels:
 
     def find(self, q, _projection=None):
         wanted = q.get("channel_id", {}).get("$in", [])
-        return _IdCursor(
-            [{"channel_id": cid, **self.by_id[cid]} for cid in wanted if cid in self.by_id]
-        )
+        return _IdCursor([{"channel_id": cid, **self.by_id[cid]} for cid in wanted if cid in self.by_id])
 
 
 class FakeSummaries:
@@ -223,10 +219,14 @@ async def test_empty_ready_and_no_import_skips_the_slot(monkeypatch):
     monkeypatch.setattr(cron, "_pick_import_across_sources", fake_pick)
 
     now = _dt(2026, 8, 24, 18, 30)
-    await cron.process_channel(db, _channel(["19:00"]), service=None, day=now.date(), now=now, timing=TIMING)
+    # No source can render, so there is genuinely nothing left to try.
+    await cron.process_channel(
+        db, _channel(["19:00"]), service=FakeService(sources=[]), day=now.date(), now=now, timing=TIMING
+    )
 
     slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
     assert slot["state"] == cron._SKIPPED
+    assert "no source can generate" in slot["reason"]
 
 
 @pytest.mark.asyncio
@@ -434,3 +434,257 @@ async def test_summary_prefers_configured_recipient(monkeypatch):
     await cron._maybe_send_summary(db, settings, [_channel(["19:00"])], now.date(), now)
 
     assert sends == ["ops@example.com"]
+
+
+# ------------------------------------------------------------------
+# Phase A/C — asking an app to render, then importing what it made
+# ------------------------------------------------------------------
+
+
+def _source(source_id="s-geo", name="GeoRank", eta=15, per_day=4, enabled=True, can_generate=True):
+    return SimpleNamespace(
+        source_id=source_id,
+        name=name,
+        enabled=enabled,
+        supports_generation=can_generate,
+        generation_eta_minutes=eta if can_generate else None,
+        generation_max_per_day=per_day,
+    )
+
+
+class FakeService:
+    """Stands in for VideoSourceService across the generation calls."""
+
+    def __init__(self, sources=None, already_today=0, state="pending", request_ok=True):
+        self._sources = sources if sources is not None else [_source()]
+        self._already_today = already_today
+        self._state = state
+        self._request_ok = request_ok
+        self.requested: list[str] = []
+        self.enqueued: list[tuple[str, list[str]]] = []
+
+    async def list_sources(self, _channel_id):
+        return list(self._sources)
+
+    async def generations_today(self, _channel_id, _source_id, _since):
+        return self._already_today
+
+    async def request_generation(self, _channel_id, source_id):
+        self.requested.append(source_id)
+        if not self._request_ok:
+            return {"ok": False, "error": "HTTP 503 — app is down"}
+        return {"ok": True, "job_id": f"job-{len(self.requested)}", "source_name": "GeoRank"}
+
+    async def generation_state(self, _channel_id, _source_id, _job_id):
+        return self._state
+
+    async def enqueue_import(self, _channel_id, source_id, ids):
+        self.enqueued.append((source_id, list(ids)))
+        return {"queued": [{"video_id": "rendered-1"}]}
+
+
+def _no_ready(monkeypatch, pick=None):
+    """Nothing committed, nothing in Ready, and a configurable import pick."""
+
+    async def fake_committed(db_, cid, day):
+        return []
+
+    async def fake_ready(db_, cid):
+        return []
+
+    async def fake_pick(service, cid):
+        return pick
+
+    monkeypatch.setattr(cron, "_channel_videos_today", fake_committed)
+    monkeypatch.setattr(cron, "_ready_videos", fake_ready)
+    monkeypatch.setattr(cron, "_pick_import_across_sources", fake_pick)
+
+
+def _seed_generating(db, awaiting_since, job_id="job-1", slot="19:00"):
+    db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")] = {
+        "date": "2026-08-24",
+        "channel_id": "histriphy",
+        "channel_name": "Histriphy",
+        "slots": {
+            slot: {
+                "state": cron._GENERATING,
+                "source": "GeoRank",
+                "source_id": "s-geo",
+                "job_id": job_id,
+                "awaiting_since": awaiting_since,
+            }
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_nothing_to_import_asks_a_capable_source_to_render(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = FakeService()
+
+    now = _dt(2026, 8, 24, 18, 0)  # an hour before the slot
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._GENERATING
+    assert slot["job_id"] == "job-1"
+    assert service.requested == ["s-geo"]
+
+
+@pytest.mark.asyncio
+async def test_a_source_too_slow_for_the_slot_is_never_asked(monkeypatch):
+    """The whole point of the ETA: do not commission work that cannot arrive."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = FakeService(sources=[_source(eta=30)])
+
+    now = _dt(2026, 8, 24, 18, 40)  # only 20 minutes of headroom
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._SKIPPED
+    assert "in time" in slot["reason"]
+    assert service.requested == []
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_stops_a_stuck_catalogue_spending_forever(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = FakeService(sources=[_source(per_day=4)], already_today=4)
+
+    now = _dt(2026, 8, 24, 18, 0)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._SKIPPED
+    assert "limit reached" in slot["reason"]
+    assert service.requested == []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_request_ends_the_slot_rather_than_retrying(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = FakeService(request_ok=False)
+
+    now = _dt(2026, 8, 24, 18, 0)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._SKIPPED
+    assert "app is down" in slot["reason"]
+
+
+@pytest.mark.asyncio
+async def test_one_pass_with_many_empty_slots_does_not_fire_a_render_each(monkeypatch):
+    """_set_slot writes to the DB, not our in-memory run doc — the cap must still hold."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = FakeService()
+
+    now = _dt(2026, 8, 24, 18, 0)
+    channel = _channel(["18:30", "18:45", "19:00"])
+    await cron.process_channel(db, channel, service=service, day=now.date(), now=now, timing=TIMING)
+
+    assert len(service.requested) == cron._MAX_CONCURRENT_GENERATIONS
+
+
+@pytest.mark.asyncio
+async def test_a_render_that_lands_is_imported_for_its_slot(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch, pick=("s-geo", "GeoRank", "src-vid-1"))
+    _seed_generating(db, awaiting_since=_dt(2026, 8, 24, 18, 0))
+    service = FakeService(state="completed")
+
+    now = _dt(2026, 8, 24, 18, 20)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._IMPORTING
+    assert slot["video_id"] == "rendered-1"
+    # Flagged so the import is watched on the tick, not the 35-minute recheck.
+    assert slot["from_generation"] is True
+    assert service.enqueued == [("s-geo", ["src-vid-1"])]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_render_gives_up_without_waiting_out_the_slot(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    _seed_generating(db, awaiting_since=_dt(2026, 8, 24, 18, 0))
+    service = FakeService(state="failed")
+
+    now = _dt(2026, 8, 24, 18, 20)  # well before the slot
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._SKIPPED
+    assert "render failed" in slot["reason"]
+
+
+@pytest.mark.asyncio
+async def test_a_render_still_missing_at_the_slot_is_skipped(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    _seed_generating(db, awaiting_since=_dt(2026, 8, 24, 18, 0))
+    service = FakeService(state="pending")
+
+    now = _dt(2026, 8, 24, 19, 0)  # the slot has arrived
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._SKIPPED
+    assert "did not arrive" in slot["reason"]
+
+
+@pytest.mark.asyncio
+async def test_a_render_still_pending_before_the_slot_keeps_waiting(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    _seed_generating(db, awaiting_since=_dt(2026, 8, 24, 18, 0))
+    service = FakeService(state="pending")
+
+    now = _dt(2026, 8, 24, 18, 30)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._GENERATING  # still cooking, left alone
+
+
+@pytest.mark.asyncio
+async def test_an_import_from_a_render_is_rechecked_on_the_tick(monkeypatch):
+    """It has already spent most of its hour rendering; it cannot wait 35 minutes."""
+    db = FakeDB(
+        videos=FakeVideos({"rendered-1": {"video_id": "rendered-1", "status": "ready", "channel_id": "histriphy"}})
+    )
+    db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")] = {
+        "date": "2026-08-24",
+        "channel_id": "histriphy",
+        "channel_name": "Histriphy",
+        "slots": {
+            "19:00": {
+                "state": cron._IMPORTING,
+                "video_id": "rendered-1",
+                "source": "GeoRank",
+                "awaiting_since": _dt(2026, 8, 24, 18, 40),
+                "from_generation": True,
+            }
+        },
+    }
+    scheduled = []
+
+    async def fake_schedule(db_, channel, video, when):
+        scheduled.append(video["video_id"])
+        return {"status": "queued"}
+
+    monkeypatch.setattr(cron, "_schedule_video", fake_schedule)
+    _no_ready(monkeypatch)
+
+    now = _dt(2026, 8, 24, 18, 42)  # two minutes later — far inside the 35
+    await cron.process_channel(db, _channel(["19:00"]), service=FakeService(), day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._SCHEDULED
+    assert scheduled == ["rendered-1"]

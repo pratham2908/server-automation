@@ -176,6 +176,18 @@ class VidForgeAdapter(SourceAdapter):
             forget_token(_cache_key(source))
         raise SourceUnavailableError("The app rejected our credentials twice — check the email and password")
 
+    async def authed_request(
+        self,
+        source: VideoSource,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        # _request already handles the short-lived token, including one retry
+        # after a 401, so generation inherits that for free.
+        return await self._request(source, method, path, json_body=json_body)
+
     # ------------------------------------------------------------------
     # Reading
     # ------------------------------------------------------------------

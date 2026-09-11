@@ -1,6 +1,7 @@
 """Per-kind adapters for the content apps channels pull their videos from."""
 
 from app.services.video_sources.base import (
+    GenerationState,
     SourceAdapter,
     SourcePage,
     SourceUnavailableError,
@@ -10,6 +11,7 @@ from app.services.video_sources.base import (
 from app.services.video_sources.registry import adapter_for, adapter_for_kind, known_kinds
 
 __all__ = [
+    "GenerationState",
     "SourceAdapter",
     "SourcePage",
     "SourceUnavailableError",

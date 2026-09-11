@@ -57,6 +57,20 @@ class GeoRankAdapter(SourceAdapter):
     def supports_mark_imported(self, source: VideoSource) -> bool:
         return bool(self._cfg(source).mark_imported_path)
 
+    async def authed_request(
+        self,
+        source: VideoSource,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        headers = {**self._headers(source), "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
+            resp = await client.request(method, f"{source.base_url}{path}", json=json_body, headers=headers)
+        resp.raise_for_status()
+        return resp
+
     # ------------------------------------------------------------------
 
     @staticmethod

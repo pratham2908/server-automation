@@ -41,6 +41,44 @@ def _require_id_placeholder(value: str, field: str, *, allow_empty: bool = False
     return value
 
 
+class GenerationConfig(BaseModel):
+    """Optional capability: ask the app to render a *new* video on demand.
+
+    A source without this block cannot generate, and the auto-scheduler then skips
+    an unfillable slot rather than inventing work for an app that has no such
+    endpoint. Adding the capability to a third app is this block plus an adapter —
+    never a change to the generation logic itself.
+
+    ``eta_minutes`` is what makes a slot decision possible at all: the scheduler
+    acts an hour before each slot, so it must know whether a render started now
+    could plausibly be imported in time.
+    """
+
+    create_path: str = Field(..., description="POSTed to ask for one new render")
+    status_path: str = Field(
+        "",
+        description="GET one render's state; needs '{id}'. Empty ⇒ watch the catalogue instead",
+    )
+    eta_minutes: int = Field(
+        ..., ge=1, le=180, description="Typical render time; decides whether a slot can still be met"
+    )
+    max_per_day: int = Field(4, ge=1, le=50, description="Cap on renders asked of this source per channel per day")
+
+    # Response shapes differ per app, so they are named here rather than guessed.
+    job_id_field: str = Field("id", description="Field in the create response holding the render id")
+    status_field: str = Field("status", description="Field in the status response holding the state")
+    completed_status: str = Field(COMPLETED_STATUS, description="Status value meaning the render finished")
+    failed_statuses: list[str] = Field(
+        default_factory=lambda: ["failed", "error", "cancelled"],
+        description="Status values meaning the render will never finish",
+    )
+
+    @field_validator("status_path")
+    @classmethod
+    def _status(cls, v: str) -> str:
+        return _require_id_placeholder(v, "status_path", allow_empty=True)
+
+
 class GeoRankConfig(BaseModel):
     """An app exposing the read-only export feed contract.
 
@@ -61,6 +99,10 @@ class GeoRankConfig(BaseModel):
     auth_style: AuthStyle = Field("bearer", description="Send the secret as a Bearer token or as X-Api-Key")
 
     page_limit: int = Field(50, ge=1, le=100, description="Videos requested per page")
+
+    generation: GenerationConfig | None = Field(
+        None, description="Ask this app to render a new video; None ⇒ it cannot"
+    )
 
     @field_validator("detail_path")
     @classmethod
@@ -105,6 +147,10 @@ class VidForgeConfig(BaseModel):
         description="Field carrying delivery state, used both as a filter and in the mark payload",
     )
     page_limit: int = Field(50, ge=1, le=100, description="Videos requested per page")
+
+    generation: GenerationConfig | None = Field(
+        None, description="Ask this app to render a new video; None ⇒ it cannot"
+    )
 
     @field_validator("detail_path")
     @classmethod
@@ -172,6 +218,9 @@ class VideoSourcePublic(BaseModel):
     list_path: str
     credential_hint: str = Field(..., description="How this source authenticates, with the secret redacted")
     supports_mark_imported: bool = Field(..., description="Whether we can tell the app we ingested a video")
+    supports_generation: bool = Field(False, description="Whether we can ask the app to render a new video")
+    generation_eta_minutes: int | None = Field(None, description="Typical render time, when it can generate")
+    generation_max_per_day: int | None = Field(None, description="Renders allowed per channel per day")
     enabled: bool
     last_checked_at: datetime | None
     last_status: SourceHealth

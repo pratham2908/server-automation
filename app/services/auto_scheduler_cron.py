@@ -8,7 +8,9 @@ time. The decision per slot:
   * Else take the oldest video from the Ready tab and schedule it for the slot.
   * If Ready is empty, trigger an import from a configured source and re-check a
     while later — once it lands, schedule it the same day.
-  * If there is nothing to import either, skip the slot for the day.
+  * If there is nothing to import either, ask a source to *render* one, provided
+    it says it can finish in time, and import that when it lands.
+  * If no source can generate, or none could finish before the slot, skip it.
 
 At the end of the day a summary of everything scheduled and skipped is emailed.
 
@@ -31,8 +33,12 @@ from app.config import Settings, get_settings
 from app.database import get_channel_platform, not_paused_query
 from app.logger import get_logger
 from app.services.auto_scheduler_selection import (
+    GenerationCandidate,
     due_slots,
+    generation_expired,
+    may_request_generation,
     pending_action_slots,
+    pick_generation_source,
     pick_ready_video,
     pick_source_video,
     recheck_ready,
@@ -62,10 +68,15 @@ _DEFAULT_MAX_WAIT_MINUTES = 90
 # runaway catalogue while still seeing enough to apply the oldest/episode rules.
 _MAX_CATALOGUE_PAGES = 20
 
+# Most one channel may have rendering at once. Several empty slots in a single
+# pass would otherwise fire a render each at the same app simultaneously.
+_MAX_CONCURRENT_GENERATIONS = 2
+
 # Slot states persisted on the run document.
 _PENDING = "pending"
 _SCHEDULED = "scheduled"
 _IMPORTING = "importing"
+_GENERATING = "generating"  # a render was asked for; waiting for it to land
 _SKIPPED = "skipped"
 _FAILED = "failed"
 _TERMINAL = {_SCHEDULED, _SKIPPED, _FAILED}
@@ -323,7 +334,11 @@ async def _recheck_imports(
             continue
         if awaiting_since.tzinfo is None:
             awaiting_since = awaiting_since.replace(tzinfo=IST)
-        if not recheck_ready(awaiting_since, now, timing.recheck_minutes):
+        # A slot that spent most of its hour rendering cannot then wait out the
+        # standard recheck interval; imports themselves finish in a few minutes,
+        # so watch those on the tick instead.
+        recheck_minutes = 0 if data.get("from_generation") else timing.recheck_minutes
+        if not recheck_ready(awaiting_since, now, recheck_minutes):
             continue  # too soon to look again
 
         video_id = data.get("video_id")
@@ -352,14 +367,14 @@ async def _fill_pending_slots(
     db: AsyncIOMotorDatabase,
     channel: dict[str, Any],
     service: VideoSourceService,
+    run_doc: dict[str, Any],
     day: date,
     now: datetime,
 ) -> None:
-    """Phase A: for slots still needing a video, schedule from Ready or import."""
+    """Phase A: for slots still needing a video, schedule from Ready, import, or render."""
     channel_id = channel["channel_id"]
     schedule_times = _schedule_times(channel)
 
-    run_doc = await _run_doc(db, day, channel)
     committed = videos_committed_today(await _channel_videos_today(db, channel_id, day), day)
     to_fill = pending_action_slots(schedule_times, now, committed, _slot_states(run_doc))
     if not to_fill:
@@ -396,8 +411,14 @@ async def _fill_pending_slots(
         # Ready is empty — trigger an import and re-check later.
         pick = await _pick_import_across_sources(service, channel_id)
         if pick is None:
-            await _set_slot(db, day, channel_id, slot, {"state": _SKIPPED, "reason": "no videos available to import"})
-            logger.info("Auto-scheduler: nothing to schedule or import for %s slot %s", channel_id, slot)
+            # Nothing finished anywhere: ask an app to render one, if any can
+            # still finish before the slot. Only when that is impossible is the
+            # slot genuinely unfillable.
+            reason = await _try_generation(db, channel, service, run_doc, day, now, slot)
+            if reason is None:
+                continue
+            await _set_slot(db, day, channel_id, slot, {"state": _SKIPPED, "reason": reason})
+            logger.info("Auto-scheduler: %s for %s slot %s", reason, channel_id, slot)
             continue
 
         source_id, source_name, source_video_id = pick
@@ -422,6 +443,169 @@ async def _fill_pending_slots(
             await _set_slot(db, day, channel_id, slot, {"state": _SKIPPED, "reason": reason})
 
 
+async def _generation_candidates(service: VideoSourceService, channel_id: str) -> list[GenerationCandidate]:
+    """Enabled sources for this channel that can render on demand, in configured order."""
+    candidates: list[GenerationCandidate] = []
+    for source in await service.list_sources(channel_id):
+        if not source.enabled or not source.supports_generation:
+            continue
+        if source.generation_eta_minutes is None:
+            continue  # capability without an ETA cannot be reasoned about
+        candidates.append(
+            GenerationCandidate(
+                source_id=source.source_id,
+                source_name=source.name,
+                eta_minutes=source.generation_eta_minutes,
+                max_per_day=source.generation_max_per_day or 4,
+            )
+        )
+    return candidates
+
+
+async def _try_generation(
+    db: AsyncIOMotorDatabase,
+    channel: dict[str, Any],
+    service: VideoSourceService,
+    run_doc: dict[str, Any],
+    day: date,
+    now: datetime,
+    slot: str,
+) -> str | None:
+    """Ask a source to render something for a slot nothing else can fill.
+
+    Returns None once a render is requested and the slot is left ``generating``,
+    or a reason the slot should be skipped instead. The reason is carried through
+    to the summary email so an empty slot always says *why* it was empty.
+    """
+    channel_id = channel["channel_id"]
+    _run_at, schedule_at = slot_datetimes(slot, day)
+
+    candidates = await _generation_candidates(service, channel_id)
+    if not candidates:
+        return "no videos available to import, and no source can generate one"
+
+    candidate = pick_generation_source(candidates, now, schedule_at)
+    if candidate is None:
+        return "no videos available to import, and no source could render one in time"
+
+    in_flight = sum(1 for d in (run_doc.get("slots") or {}).values() if (d or {}).get("state") == _GENERATING)
+    day_start = datetime.combine(day, time.min, tzinfo=IST)
+    requested_today = await service.generations_today(channel_id, candidate.source_id, day_start)
+    if not may_request_generation(requested_today, candidate.max_per_day, in_flight, _MAX_CONCURRENT_GENERATIONS):
+        return f"no videos available to import; {candidate.source_name} render limit reached"
+
+    result = await service.request_generation(channel_id, candidate.source_id)
+    if not result.get("ok"):
+        # A refused request ends this slot rather than retrying every tick; the
+        # next slot an hour later is the natural, unhurried retry.
+        return f"could not ask {candidate.source_name} to render: {result.get('error')}"
+
+    await _set_slot(
+        db,
+        day,
+        channel_id,
+        slot,
+        {
+            "state": _GENERATING,
+            "source": candidate.source_name,
+            "source_id": candidate.source_id,
+            "job_id": result.get("job_id") or "",
+            "awaiting_since": now,
+        },
+    )
+    # _set_slot writes to Mongo, not to our in-memory copy — without this a pass
+    # with three empty slots would count zero in flight each time and fire three.
+    slots = run_doc.setdefault("slots", {})
+    slots[slot] = {**(slots.get(slot) or {}), "state": _GENERATING}
+
+    logger.info(
+        "Auto-scheduler: asked %s to render for %s slot %s (eta %dm)",
+        candidate.source_name,
+        channel_id,
+        slot,
+        candidate.eta_minutes,
+    )
+    return None
+
+
+async def _recheck_generations(
+    db: AsyncIOMotorDatabase,
+    channel: dict[str, Any],
+    service: VideoSourceService,
+    run_doc: dict[str, Any],
+    day: date,
+    now: datetime,
+) -> None:
+    """Phase C: for slots awaiting a render, import it once it lands or give up.
+
+    Polled every tick rather than on the import recheck interval: a 15-minute
+    render behind a 35-minute recheck would waste most of the hour the scheduler
+    has to work with before the slot.
+    """
+    channel_id = channel["channel_id"]
+    for slot, data in (run_doc.get("slots") or {}).items():
+        if (data or {}).get("state") != _GENERATING:
+            continue
+        _run_at, schedule_at = slot_datetimes(slot, day)
+        source_id = data.get("source_id") or ""
+        job_id = data.get("job_id") or ""
+        source_name = data.get("source") or source_id
+
+        # An app that can report a dead render spares us waiting out the slot for
+        # something that is never coming.
+        if source_id and job_id:
+            state = await service.generation_state(channel_id, source_id, job_id)
+            if state == "failed":
+                await _set_slot(
+                    db, day, channel_id, slot, {"state": _SKIPPED, "reason": f"render failed at {source_name}"}
+                )
+                logger.warning("Auto-scheduler: render failed at %s for %s slot %s", source_name, channel_id, slot)
+                continue
+
+        # Whether or not the app reports job state, a finished render shows up in
+        # the catalogue — which every app supports by definition, so this is the
+        # path that actually decides the happy case.
+        pick = await _pick_import_across_sources(service, channel_id)
+        if pick is not None:
+            picked_source_id, picked_source_name, source_video_id = pick
+            enqueued = await service.enqueue_import(channel_id, picked_source_id, [source_video_id])
+            queued = enqueued.get("queued") or []
+            if queued:
+                await _set_slot(
+                    db,
+                    day,
+                    channel_id,
+                    slot,
+                    {
+                        "state": _IMPORTING,
+                        "video_id": queued[0]["video_id"],
+                        "source": picked_source_name,
+                        "awaiting_since": now,
+                        # Imports run in well under three minutes, and this slot has
+                        # already spent most of its hour rendering — so watch it on
+                        # the tick rather than the standard recheck interval.
+                        "from_generation": True,
+                    },
+                )
+                logger.info(
+                    "Auto-scheduler: render for %s slot %s landed, importing from %s",
+                    channel_id,
+                    slot,
+                    picked_source_name,
+                )
+                continue
+
+        if generation_expired(now, schedule_at):
+            await _set_slot(
+                db,
+                day,
+                channel_id,
+                slot,
+                {"state": _SKIPPED, "reason": f"{source_name} render did not arrive before the slot"},
+            )
+            logger.info("Auto-scheduler: render for %s slot %s missed the slot", channel_id, slot)
+
+
 async def process_channel(
     db: AsyncIOMotorDatabase,
     channel: dict[str, Any],
@@ -430,12 +614,16 @@ async def process_channel(
     now: datetime,
     timing: _Timing,
 ) -> None:
-    """One tick's work for one channel: recheck imports, then fill due slots."""
+    """One tick's work for one channel: settle what is in flight, then fill due slots."""
     if not _schedule_times(channel):
         return  # enabled but no slots configured — nothing to do
     run_doc = await _run_doc(db, day, channel)
     await _recheck_imports(db, channel, run_doc, day, now, timing)
-    await _fill_pending_slots(db, channel, service, day, now)
+    await _recheck_generations(db, channel, service, run_doc, day, now)
+    # Re-read: the phases above move slots out of pending/in-flight states, and
+    # filling decides what to do from the whole day's picture.
+    run_doc = await _run_doc(db, day, channel)
+    await _fill_pending_slots(db, channel, service, run_doc, day, now)
 
 
 # ------------------------------------------------------------------
@@ -476,7 +664,14 @@ def _assemble_summary(day: date, run_docs: dict[str, dict[str, Any]]) -> dict[st
                         "channel_name": name,
                         "slot": slot,
                         "video_id": (data or {}).get("video_id", ""),
-                        "source": (data or {}).get("source"),
+                        # Name the renders explicitly: a video that exists only
+                        # because we asked for it should not read like one that
+                        # was already sitting in the app.
+                        "source": (
+                            f"rendered by {(data or {}).get('source')}"
+                            if (data or {}).get("from_generation")
+                            else (data or {}).get("source")
+                        ),
                     }
                 )
             elif state in (_SKIPPED, _FAILED):

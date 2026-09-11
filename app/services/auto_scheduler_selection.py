@@ -8,6 +8,7 @@ or from an import source. Kept pure so the branching rules are testable directly
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -58,15 +59,17 @@ def pending_action_slots(
 
     * ``committed_today`` already counts anything we scheduled this run (those
       videos are ``queued``/``scheduled`` now) plus external commitments.
-    * ``importing`` slots have a transfer in flight that will become a commitment
-      but is not counted yet, so we add it to the projection.
+    * ``importing`` and ``generating`` slots have work in flight that will become
+      a commitment but is not counted yet, so both are added to the projection.
+      Leaving either out lets an external commitment plus an in-flight one exceed
+      the day's slots — i.e. over-post.
 
     We top up only to the number of slots whose time has come, and only act on
     slots not already handled (``pending`` or unseen).
     """
     due = due_slots(schedule_times, now)
-    importing = sum(1 for s in due if slot_states.get(s) == "importing")
-    needed = len(due) - (committed_today + importing)
+    in_flight = sum(1 for s in due if slot_states.get(s) in ("importing", "generating"))
+    needed = len(due) - (committed_today + in_flight)
     if needed <= 0:
         return []
     pending = [s for s in due if slot_states.get(s) in (None, "pending")]
@@ -168,3 +171,78 @@ def pick_source_video(videos: list[SourceVideo]) -> SourceVideo | None:
     # Oldest qualifying episode by its earliest video, then that episode's latest video.
     oldest_group = min(episodes, key=lambda g: min(_created(v) for v in episodes[g]))
     return max(episodes[oldest_group], key=_created)
+
+
+# ----------------------------------------------------------------------
+# Generation — deciding whether to ask an app to render something new
+# ----------------------------------------------------------------------
+
+# Headroom left for the import itself once a render finishes. Measured against
+# the live source_imports history: end-to-end imports run well under three
+# minutes (median 0.2, p99 2.5), so five is generous without making a source
+# that could comfortably make the slot look infeasible.
+GENERATION_IMPORT_SLACK_MINUTES = 5
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationCandidate:
+    """A source that can render on demand, and how long it says that takes."""
+
+    source_id: str
+    source_name: str
+    eta_minutes: int
+    max_per_day: int
+
+
+def generation_fits_slot(
+    now: datetime,
+    schedule_at: datetime,
+    eta_minutes: int,
+    slack_minutes: int = GENERATION_IMPORT_SLACK_MINUTES,
+) -> bool:
+    """Whether a render started now could still be imported before the slot.
+
+    The cron acts an hour ahead of each slot, so a 15-minute app has room and a
+    30-minute one still does; this is what stops a slower app being asked for
+    something it cannot deliver in time.
+    """
+    return now + timedelta(minutes=eta_minutes + slack_minutes) <= schedule_at
+
+
+def pick_generation_source(
+    candidates: list[GenerationCandidate],
+    now: datetime,
+    schedule_at: datetime,
+    slack_minutes: int = GENERATION_IMPORT_SLACK_MINUTES,
+) -> GenerationCandidate | None:
+    """The first configured source whose render would still make the slot.
+
+    Configured order is the operator's preference, so a favoured app wins whenever
+    it can make it; a slower one is passed over only once its ETA genuinely no
+    longer fits, which is what lets a 30-minute app sit alongside a 15-minute one.
+    """
+    for candidate in candidates:
+        if generation_fits_slot(now, schedule_at, candidate.eta_minutes, slack_minutes):
+            return candidate
+    return None
+
+
+def may_request_generation(requested_today: int, max_per_day: int, in_flight: int, max_in_flight: int) -> bool:
+    """Whether another render may be asked for right now.
+
+    The daily cap bounds spend at the app; the in-flight cap stops one channel
+    with several empty slots firing every render at once.
+    """
+    return requested_today < max_per_day and in_flight < max_in_flight
+
+
+def generation_expired(now: datetime, schedule_at: datetime) -> bool:
+    """Whether to stop waiting on a requested render.
+
+    The slot's own time is the deadline — there is nothing to be gained by
+    holding a slot open past the moment it was meant to post. A render that lands
+    afterwards is not wasted: it stays in the app's catalogue and the next slot
+    imports it through the ordinary path, which is how a late rescue becomes
+    tomorrow's inventory rather than a failure.
+    """
+    return now >= schedule_at

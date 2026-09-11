@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
-from app.models.video_source import SourceKind, SourceVideo, VideoSource
+from app.models.video_source import GenerationConfig, SourceKind, SourceVideo, VideoSource
 
 REQUEST_TIMEOUT_S = 30.0
 
@@ -32,6 +32,11 @@ class SourcePage:
     videos: list[SourceVideo] = field(default_factory=list)
     next_cursor: str | None = None
     url_ttl_seconds: int | None = None
+
+
+# Where one requested render has got to. "pending" also covers an app that
+# cannot report job state at all — the catalogue is then the source of truth.
+GenerationState = Literal["pending", "completed", "failed"]
 
 
 class SourceUnavailableError(Exception):
@@ -88,6 +93,85 @@ class SourceAdapter(abc.ABC):
     @abc.abstractmethod
     def credential_hint(self, source: VideoSource) -> str:
         """How this source authenticates, with the secret redacted, for display."""
+
+    @abc.abstractmethod
+    async def authed_request(
+        self,
+        source: VideoSource,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """Call the app with whatever auth it uses, raising for a bad status.
+
+        Generation below is written once against this hook, so an app that can
+        render gains the capability from its config alone — no new adapter code
+        beyond whatever authenticating it already required.
+        """
+
+    # ------------------------------------------------------------------
+    # Generation — optional capability, entirely config-driven
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def generation_config(source: VideoSource) -> GenerationConfig | None:
+        return source.config.generation
+
+    def supports_generation(self, source: VideoSource) -> bool:
+        cfg = self.generation_config(source)
+        return bool(cfg and cfg.create_path)
+
+    async def request_generation(self, source: VideoSource) -> str:
+        """Ask the app for one new render; returns its job id, '' if it gives none.
+
+        The body is deliberately empty: the app knows its own content pipeline far
+        better than we do, and picking the subject here would couple our topic
+        model to theirs. A brief can be added later without breaking this.
+        """
+        cfg = self.generation_config(source)
+        if cfg is None or not cfg.create_path:
+            raise SourceUnavailableError(f"Source '{source.name}' cannot generate videos")
+
+        resp = await self.authed_request(source, "POST", cfg.create_path, json_body={})
+        try:
+            data = resp.json()
+        except ValueError:
+            return ""  # accepted, but told us nothing pollable
+        if not isinstance(data, dict):
+            return ""
+        # Accept the job bare or wrapped, as fetch_download_url does: a harmless
+        # shape difference between deployments should not fail an accepted render.
+        payload = data["job"] if isinstance(data.get("job"), dict) else data
+        job_id = payload.get(cfg.job_id_field)
+        return str(job_id) if job_id else ""
+
+    async def generation_state(self, source: VideoSource, job_id: str) -> GenerationState:
+        """Where a render has got to.
+
+        "pending" whenever the app cannot tell us — no status_path, no job id, or
+        an unrecognised status. Completion is then detected by the video showing
+        up in the catalogue instead, which every app supports by definition.
+        """
+        cfg = self.generation_config(source)
+        if cfg is None or not cfg.status_path or not job_id:
+            return "pending"
+
+        resp = await self.authed_request(source, "GET", cfg.status_path.replace("{id}", job_id))
+        try:
+            data = resp.json()
+        except ValueError:
+            return "pending"
+        if not isinstance(data, dict):
+            return "pending"
+        payload = data["job"] if isinstance(data.get("job"), dict) else data
+
+        raw = str(payload.get(cfg.status_field) or "").strip().lower()
+        if raw and raw == cfg.completed_status.strip().lower():
+            return "completed"
+        if raw in {v.strip().lower() for v in cfg.failed_statuses}:
+            return "failed"
+        return "pending"
 
     async def probe(self, source: VideoSource) -> dict[str, Any]:
         """Verify credentials by asking for a single video.

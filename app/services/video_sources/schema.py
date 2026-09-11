@@ -102,6 +102,20 @@ class SourceKindInfo(BaseModel):
     fields: list[SourceKindField]
 
 
+def _is_nested_model(annotation: Any) -> bool:
+    """Whether the field holds a sub-model rather than a scalar.
+
+    The form is a flat list of inputs, so a nested block (the generation
+    capability, say) has no sensible rendering here — offering a free-text box
+    for it would just collect something the config could never validate. Those
+    are configured through the API instead, and left out of the form.
+    """
+    for candidate in (annotation, *typing.get_args(annotation)):
+        if isinstance(candidate, type) and issubclass(candidate, BaseModel):
+            return True
+    return False
+
+
 def _describe_field(name: str, info: FieldInfo) -> SourceKindField:
     required = info.is_required()
     default = None if required or info.default is None else str(info.default)
@@ -127,9 +141,10 @@ def describe_kind(kind: SourceKind) -> SourceKindInfo:
         description=KIND_DESCRIPTIONS[kind],
         fields=[
             _describe_field(name, info)
-            # The discriminator is chosen by picking the kind, not typed by hand.
             for name, info in model.model_fields.items()
-            if name != "kind"
+            # The discriminator is chosen by picking the kind; nested blocks have
+            # no flat input to render into.
+            if name != "kind" and not _is_nested_model(info.annotation)
         ],
     )
 
