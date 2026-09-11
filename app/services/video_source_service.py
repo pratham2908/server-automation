@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import datetime
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -25,7 +26,7 @@ from app.models.video_source import (
     VideoSource,
     VideoSourcePublic,
 )
-from app.services.video_sources import adapter_for, describe_http_error
+from app.services.video_sources import GenerationState, adapter_for, describe_http_error
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -84,6 +85,9 @@ def to_public(source: VideoSource) -> VideoSourcePublic:
         list_path=source.config.list_path,
         credential_hint=adapter.credential_hint(source),
         supports_mark_imported=adapter.supports_mark_imported(source),
+        supports_generation=adapter.supports_generation(source),
+        generation_eta_minutes=source.config.generation.eta_minutes if source.config.generation else None,
+        generation_max_per_day=source.config.generation.max_per_day if source.config.generation else None,
         enabled=source.enabled,
         last_checked_at=source.last_checked_at,
         last_status=source.last_status,
@@ -199,6 +203,70 @@ class VideoSourceService:
 
         await self._record_health(source_id, ok=True)
         return {"kind": source.kind, **result}
+
+    # ------------------------------------------------------------------
+    # Generation — ask an app to render something new
+    # ------------------------------------------------------------------
+
+    async def generations_today(self, channel_id: str, source_id: str, since: datetime) -> int:
+        """How many renders we have already asked this source for today.
+
+        The cap this feeds is the only thing standing between a stuck catalogue
+        and an unbounded spend at the app, so it counts requests made, not
+        requests that succeeded.
+        """
+        return await self.db.source_generations.count_documents(
+            {"channel_id": channel_id, "source_id": source_id, "created_at": {"$gte": since}}
+        )
+
+    async def request_generation(self, channel_id: str, source_id: str) -> dict[str, Any]:
+        """Ask a source for one new render, recording the job. Never raises.
+
+        Returns ``{"ok": True, "job_id": ..., "source_name": ...}`` or
+        ``{"ok": False, "error": ...}`` — the caller is a cron slot that must stay
+        on its feet whatever the app does.
+        """
+        source = await self._require_source(channel_id, source_id)
+        adapter = adapter_for(source)
+        if not adapter.supports_generation(source):
+            return {"ok": False, "error": f"source '{source.name}' cannot generate videos"}
+
+        try:
+            job_id = await adapter.request_generation(source)
+        except Exception as exc:
+            message = describe_http_error(exc)
+            await self._record_health(source_id, ok=False, error=message)
+            logger.warning("Video source %s refused a render request: %s", source_id, message)
+            return {"ok": False, "error": message}
+
+        await self._record_health(source_id, ok=True)
+        generation_id = uuid.uuid4().hex
+        await self.db.source_generations.insert_one(
+            {
+                "generation_id": generation_id,
+                "channel_id": channel_id,
+                "source_id": source_id,
+                "source_name": source.name,
+                "job_id": job_id,
+                "created_at": now_ist(),
+            }
+        )
+        logger.info("Requested a render from %s for %s (job %s)", source.name, channel_id, job_id or "n/a")
+        return {"ok": True, "job_id": job_id, "source_name": source.name, "generation_id": generation_id}
+
+    async def generation_state(self, channel_id: str, source_id: str, job_id: str) -> GenerationState:
+        """Where a requested render has got to.
+
+        Falls back to "pending" whenever the app cannot be asked — an unreachable
+        status endpoint must not look like a failed render, because the catalogue
+        check that follows is what actually decides the happy path.
+        """
+        try:
+            source = await self._require_source(channel_id, source_id)
+            return await adapter_for(source).generation_state(source, job_id)
+        except Exception as exc:
+            logger.warning("Could not read render state for %s: %s", source_id, describe_http_error(exc))
+            return "pending"
 
     async def download_url(self, source: VideoSource, source_video_id: str) -> str:
         """A freshly minted download URL, for the worker at transfer time."""

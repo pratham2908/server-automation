@@ -87,3 +87,16 @@ def test_labels_read_as_english():
     assert humanise("login_path") == "Login path"
     assert humanise("email") == "Email"
     assert humanise("base_url") == "Base URL"
+
+
+def test_nested_capability_blocks_stay_out_of_the_flat_form():
+    """The form renders one input per field, so a sub-model has no place in it.
+
+    Without this the generation block would surface as a free-text box labelled
+    "Generation" that could never produce a valid config.
+    """
+    for kind in describe_kinds():
+        for field in kind.fields:
+            assert field.name != "generation"
+            # And nothing else nested sneaks in either.
+            assert field.type in ("text", "password", "number", "select")

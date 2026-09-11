@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from app.models.video_source import GeoRankConfig, VideoSource, VidForgeConfig
 from app.services.video_source_service import parse_source, to_public
-from app.services.video_sources import adapter_for, known_kinds
+from app.services.video_sources import SourceUnavailableError, adapter_for, known_kinds
 from app.services.video_sources.georank import GeoRankAdapter
 from app.services.video_sources.vidforge import VidForgeAdapter
 
@@ -297,9 +297,7 @@ def test_a_video_in_no_episode_is_ungrouped():
 
 def test_a_name_that_is_only_an_id_keeps_its_name():
     """Stripping must never leave a video with a blank label."""
-    v = VidForgeAdapter.normalise(
-        {"_id": "x", "name": "(6a85f6aec7ac28f0e2efbd12)", "sourceEpisodeId": "ep1"}, "sent"
-    )
+    v = VidForgeAdapter.normalise({"_id": "x", "name": "(6a85f6aec7ac28f0e2efbd12)", "sourceEpisodeId": "ep1"}, "sent")
     assert v.group_label == "(6a85f6aec7ac28f0e2efbd12)"
 
 
@@ -309,3 +307,130 @@ def test_a_title_with_its_own_parentheses_is_left_alone():
         {"_id": "x", "name": "How Planes Fly (The Real Reason)", "sourceEpisodeId": "ep1"}, "sent"
     )
     assert v.group_label == "How Planes Fly (The Real Reason)"
+
+
+# ---------------------------------------------------------------- generation
+
+
+class _FakeResponse:
+    """Just enough of httpx.Response for the generation helpers."""
+
+    def __init__(self, payload, *, json_error: bool = False):
+        self._payload = payload
+        self._json_error = json_error
+
+    def json(self):
+        if self._json_error:
+            raise ValueError("not json")
+        return self._payload
+
+
+def _generating_source(**gen_overrides) -> VideoSource:
+    """A GeoRank source that can render, with the capability fully configured."""
+    gen = {
+        "create_path": "/api/ext/renders",
+        "status_path": "/api/ext/renders/{id}",
+        "eta_minutes": 15,
+        **gen_overrides,
+    }
+    return VideoSource(
+        source_id="s-geo",
+        channel_id="ch",
+        name="Renderer",
+        base_url="https://geo.example.com",
+        config=GeoRankConfig(api_key=SECRET, generation=gen),
+    )
+
+
+def _stub(adapter, response):
+    """Replace the adapter's authenticated call with a canned response."""
+    calls = []
+
+    async def fake(source, method, path, *, json_body=None):
+        calls.append((method, path, json_body))
+        return response
+
+    adapter.authed_request = fake  # type: ignore[method-assign]
+    return calls
+
+
+def test_generation_is_opt_in_per_source():
+    """A source with no generation block must never be asked to render."""
+    assert GeoRankAdapter().supports_generation(georank_source()) is False
+    assert GeoRankAdapter().supports_generation(_generating_source()) is True
+    assert VidForgeAdapter().supports_generation(vidforge_source()) is False
+
+
+def test_public_projection_reports_the_capability_and_its_eta():
+    plain = to_public(georank_source())
+    assert plain.supports_generation is False
+    assert plain.generation_eta_minutes is None
+
+    capable = to_public(_generating_source())
+    assert capable.supports_generation is True
+    assert capable.generation_eta_minutes == 15
+    # Still no secret, however the projection grew.
+    assert SECRET not in capable.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_request_generation_posts_and_returns_the_job_id():
+    adapter = GeoRankAdapter()
+    calls = _stub(adapter, _FakeResponse({"id": "job-7"}))
+
+    job_id = await adapter.request_generation(_generating_source())
+
+    assert job_id == "job-7"
+    assert calls == [("POST", "/api/ext/renders", {})]
+
+
+@pytest.mark.asyncio
+async def test_request_generation_accepts_a_wrapped_job():
+    """A deployment that wraps its response should not fail an accepted render."""
+    adapter = GeoRankAdapter()
+    _stub(adapter, _FakeResponse({"job": {"id": "job-9"}}))
+    assert await adapter.request_generation(_generating_source()) == "job-9"
+
+
+@pytest.mark.asyncio
+async def test_request_generation_tolerates_an_app_that_returns_nothing_pollable():
+    adapter = GeoRankAdapter()
+    _stub(adapter, _FakeResponse(None, json_error=True))
+    # Accepted, but unpollable — the catalogue check is what will notice it land.
+    assert await adapter.request_generation(_generating_source()) == ""
+
+
+@pytest.mark.asyncio
+async def test_request_generation_refuses_a_source_without_the_capability():
+    with pytest.raises(SourceUnavailableError):
+        await GeoRankAdapter().request_generation(georank_source())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        ({"status": "completed"}, "completed"),
+        ({"status": "COMPLETED"}, "completed"),
+        ({"status": "failed"}, "failed"),
+        ({"status": "cancelled"}, "failed"),
+        ({"status": "rendering"}, "pending"),
+        ({}, "pending"),
+        ({"job": {"status": "completed"}}, "completed"),
+    ],
+)
+async def test_generation_state_maps_app_status_onto_ours(payload, expected):
+    adapter = GeoRankAdapter()
+    _stub(adapter, _FakeResponse(payload))
+    assert await adapter.generation_state(_generating_source(), "job-1") == expected
+
+
+@pytest.mark.asyncio
+async def test_generation_state_is_pending_when_the_app_cannot_be_asked():
+    """No status endpoint, or no job id, must not read as a failed render."""
+    adapter = GeoRankAdapter()
+    _stub(adapter, _FakeResponse({"status": "failed"}))
+
+    no_status_path = _generating_source(status_path="")
+    assert await adapter.generation_state(no_status_path, "job-1") == "pending"
+    assert await adapter.generation_state(_generating_source(), "") == "pending"

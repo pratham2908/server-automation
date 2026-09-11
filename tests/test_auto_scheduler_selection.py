@@ -4,8 +4,9 @@ No I/O here — slot timing, the today-commitment count, and which video to pick
 from Ready or from an import source.
 """
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
+import app.services.auto_scheduler_selection as sel
 from app.models.video_source import SourceVideo
 from app.services.auto_scheduler_selection import (
     due_slots,
@@ -211,3 +212,66 @@ def test_grouped_source_returns_none_when_every_episode_already_posted():
 
 def test_source_pick_returns_none_when_there_are_no_videos():
     assert pick_source_video([]) is None
+
+
+# ------------------------------------------------------------------
+# Generation — asking an app to render something new
+# ------------------------------------------------------------------
+
+
+def _slot_at(hh, mm=0):
+    return datetime(2026, 8, 24, hh, mm, tzinfo=IST)
+
+
+def test_generation_fits_slot_uses_eta_plus_import_slack():
+    slot = _slot_at(19)
+    # The cron acts an hour ahead, which is room enough for every app we have.
+    assert sel.generation_fits_slot(slot - timedelta(minutes=60), slot, 15) is True
+    assert sel.generation_fits_slot(slot - timedelta(minutes=60), slot, 30) is True
+    # A 30-minute render with 5 minutes of import slack needs 35 minutes.
+    assert sel.generation_fits_slot(slot - timedelta(minutes=35), slot, 30) is True
+    assert sel.generation_fits_slot(slot - timedelta(minutes=34), slot, 30) is False
+
+
+def test_pick_generation_source_prefers_configured_order_then_falls_back_to_a_faster_app():
+    slot = _slot_at(19)
+    blender = sel.GenerationCandidate("b", "Music Blender", eta_minutes=30, max_per_day=4)
+    georank = sel.GenerationCandidate("g", "GeoRank", eta_minutes=15, max_per_day=4)
+    candidates = [blender, georank]
+
+    # Plenty of time: the operator's first choice wins.
+    assert sel.pick_generation_source(candidates, slot - timedelta(minutes=60), slot) is blender
+    # Too late for the slow one, still fine for the quick one.
+    assert sel.pick_generation_source(candidates, slot - timedelta(minutes=25), slot) is georank
+    # Too late for anything.
+    assert sel.pick_generation_source(candidates, slot - timedelta(minutes=10), slot) is None
+
+
+def test_may_request_generation_respects_both_caps():
+    assert sel.may_request_generation(0, 4, 0, 2) is True
+    assert sel.may_request_generation(3, 4, 1, 2) is True
+    assert sel.may_request_generation(4, 4, 0, 2) is False  # daily cap reached
+    assert sel.may_request_generation(0, 4, 2, 2) is False  # too many already rendering
+
+
+def test_generation_expires_at_the_slot_it_was_meant_to_fill():
+    slot = _slot_at(19)
+    assert sel.generation_expired(slot - timedelta(minutes=1), slot) is False
+    assert sel.generation_expired(slot, slot) is True
+
+
+def test_generating_slots_count_as_in_flight_so_we_do_not_over_post():
+    """A render in flight is a commitment-to-be, exactly like an import.
+
+    Without counting it, an external commitment plus a pending slot would let the
+    channel post more times than it has slots.
+    """
+    now = _slot_at(19, 30)
+    times = ["18:00", "19:00"]
+
+    # One slot rendering, one external commitment already today: nothing left to do.
+    assert sel.pending_action_slots(times, now, 1, {"18:00": "generating"}) == []
+    # Same shape with an import in flight behaves identically.
+    assert sel.pending_action_slots(times, now, 1, {"18:00": "importing"}) == []
+    # With nothing in flight the second slot is still fillable.
+    assert sel.pending_action_slots(times, now, 1, {}) == ["18:00"]
