@@ -125,15 +125,17 @@ class SourceAdapter(abc.ABC):
     async def request_generation(self, source: VideoSource) -> str:
         """Ask the app for one new render; returns its job id, '' if it gives none.
 
-        The body is deliberately empty: the app knows its own content pipeline far
-        better than we do, and picking the subject here would couple our topic
-        model to theirs. A brief can be added later without breaking this.
+        The body comes from the config rather than being fixed here, because "make
+        something good, you choose" is spelled differently by every app — GeoRank
+        wants an explicit ``{"auto": true}`` and answers a bodyless request with a
+        400. What stays constant is that we never pick the subject: the app knows
+        its own content pipeline far better than we do.
         """
         cfg = self.generation_config(source)
         if cfg is None or not cfg.create_path:
             raise SourceUnavailableError(f"Source '{source.name}' cannot generate videos")
 
-        resp = await self.authed_request(source, "POST", cfg.create_path, json_body={})
+        resp = await self.authed_request(source, "POST", cfg.create_path, json_body=dict(cfg.create_body))
         try:
             data = resp.json()
         except ValueError:

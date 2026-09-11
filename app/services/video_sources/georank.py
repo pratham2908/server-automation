@@ -33,6 +33,33 @@ NOTIFY_ATTEMPTS = 3
 NOTIFY_BACKOFF_S = 2.0
 
 
+# The generation contract, read off the app itself
+# (gerorank-visualizer-2: routes/consumerVideos.ts, lib/autoVideoPolicy.ts,
+# middleware/serviceAuth.ts). Kept here so enabling it is a config value rather
+# than folklore:
+#
+#   POST /api/videos  {"auto": true}   -> 201 {videoId, status: "rendering", ...}
+#   GET  /api/videos/{id}/status       -> {status: "ready"|"rendering"|"failed"}
+#
+# `auto: true` is the "you choose" mode: the app fixes aspect and length to its
+# house format, rotates voice and channel preset, drafts several ideas and keeps
+# the highest-scoring one (skipping anything used in the last 30 days). The flag
+# is explicit on purpose — without it the endpoint answers 400 "prompt is
+# required" rather than quietly inventing a video.
+#
+# Note the vocabularies differ by design: a finished render is "ready" here and
+# "completed" in the pull feed, which is why both are per-source config.
+GEORANK_AUTO_GENERATION: dict[str, Any] = {
+    "create_path": "/api/videos",
+    "create_body": {"auto": True},
+    "status_path": "/api/videos/{id}/status",
+    "job_id_field": "videoId",
+    "status_field": "status",
+    "completed_status": "ready",
+    "failed_statuses": ["failed"],
+}
+
+
 class GeoRankAdapter(SourceAdapter):
     kind = "georank"
     pushes_to_us = True
@@ -65,7 +92,18 @@ class GeoRankAdapter(SourceAdapter):
         *,
         json_body: dict[str, Any] | None = None,
     ) -> httpx.Response:
-        headers = {**self._headers(source), "Content-Type": "application/json"}
+        # X-Api-Key unconditionally, whatever auth_style the feed is configured
+        # with. The read-only feed accepts either header, but the create endpoint
+        # sits behind a different gate that reads x-api-key and ONLY x-api-key —
+        # it dropped its Bearer fallback because an operator's session token is
+        # also a bearer token. A bearer-configured source would otherwise list
+        # videos happily and 401 the moment it asked for one.
+        cfg = self._cfg(source)
+        headers = {
+            **self._headers(source),
+            "X-Api-Key": cfg.api_key,
+            "Content-Type": "application/json",
+        }
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
             resp = await client.request(method, f"{source.base_url}{path}", json=json_body, headers=headers)
         resp.raise_for_status()

@@ -9,13 +9,14 @@ mangles a field (a duration in the wrong unit renders every clip as 0:00) and a
 credential reaching an API response.
 """
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.models.video_source import GeoRankConfig, VideoSource, VidForgeConfig
+from app.models.video_source import GenerationConfig, GeoRankConfig, VideoSource, VidForgeConfig
 from app.services.video_source_service import parse_source, to_public
 from app.services.video_sources import SourceUnavailableError, adapter_for, known_kinds
-from app.services.video_sources.georank import GeoRankAdapter
+from app.services.video_sources.georank import GEORANK_AUTO_GENERATION, GeoRankAdapter
 from app.services.video_sources.vidforge import VidForgeAdapter
 
 SECRET = "Pt02vSXYZ8UgNJquVWZA"
@@ -434,3 +435,104 @@ async def test_generation_state_is_pending_when_the_app_cannot_be_asked():
     no_status_path = _generating_source(status_path="")
     assert await adapter.generation_state(no_status_path, "job-1") == "pending"
     assert await adapter.generation_state(_generating_source(), "") == "pending"
+
+
+# ------------------------------------------------- georank's auto-generate
+
+
+def _auto_source() -> VideoSource:
+    """A GeoRank source wired to the app's real 'you choose' contract."""
+    return VideoSource(
+        source_id="s-geo",
+        channel_id="ch",
+        name="Renderer",
+        base_url="https://geo.example.com",
+        config=GeoRankConfig(
+            api_key=SECRET,
+            generation=GenerationConfig(eta_minutes=15, **GEORANK_AUTO_GENERATION),
+        ),
+    )
+
+
+class _CapturingResponse:
+    def __init__(self, payload):
+        self._payload = payload
+        self.raised = False
+
+    def raise_for_status(self):
+        self.raised = True
+
+    def json(self):
+        return self._payload
+
+
+@pytest.mark.asyncio
+async def test_auto_generate_sends_the_flag_the_app_actually_requires():
+    """Without an explicit ``auto: true`` GeoRank answers 400 'prompt is required'.
+
+    An empty body would look like it worked right up until every render request
+    was rejected, so the flag is pinned here.
+    """
+    adapter = GeoRankAdapter()
+    sent = {}
+
+    async def fake_request(source, method, path, *, json_body=None):
+        sent.update(method=method, path=path, body=json_body)
+        return _CapturingResponse({"videoId": "gen-42", "status": "rendering"})
+
+    adapter.authed_request = fake_request  # type: ignore[method-assign]
+
+    job_id = await adapter.request_generation(_auto_source())
+
+    assert sent["method"] == "POST"
+    assert sent["path"] == "/api/videos"
+    assert sent["body"] == {"auto": True}
+    # The app names the job videoId, not id.
+    assert job_id == "gen-42"
+
+
+@pytest.mark.asyncio
+async def test_generation_calls_always_present_x_api_key(monkeypatch):
+    """GeoRank's create gate reads x-api-key and only x-api-key.
+
+    The pull feed accepts a Bearer token too, so a bearer-configured source would
+    list videos happily and 401 the instant it asked for one.
+    """
+    captured = {}
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def request(self, method, url, *, json=None, headers=None):
+            captured.update(method=method, url=url, headers=headers or {})
+            return _CapturingResponse({"videoId": "gen-1"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: _FakeClient())
+
+    bearer_source = _auto_source()  # auth_style defaults to bearer
+    assert bearer_source.config.auth_style == "bearer"
+    await GeoRankAdapter().request_generation(bearer_source)
+
+    assert captured["headers"]["X-Api-Key"] == SECRET
+    assert captured["url"] == "https://geo.example.com/api/videos"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "app_status,expected",
+    [("ready", "completed"), ("rendering", "pending"), ("failed", "failed")],
+)
+async def test_georank_status_vocabulary_maps_onto_ours(app_status, expected):
+    """A finished render is "ready" on this endpoint and "completed" in the feed."""
+    adapter = GeoRankAdapter()
+
+    async def fake_request(source, method, path, *, json_body=None):
+        assert path == "/api/videos/gen-42/status"
+        return _CapturingResponse({"status": app_status, "progress": 50})
+
+    adapter.authed_request = fake_request  # type: ignore[method-assign]
+    assert await adapter.generation_state(_auto_source(), "gen-42") == expected
