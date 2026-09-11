@@ -16,7 +16,7 @@ Secrets live on the config and are never returned by the API — see
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -55,6 +55,10 @@ class GenerationConfig(BaseModel):
     """
 
     create_path: str = Field(..., description="POSTed to ask for one new render")
+    create_body: dict[str, Any] = Field(
+        default_factory=dict,
+        description="JSON body for the create call — where an app's 'you choose' flag goes",
+    )
     status_path: str = Field(
         "",
         description="GET one render's state; needs '{id}'. Empty ⇒ watch the catalogue instead",
