@@ -13,9 +13,15 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+import app.services.video_sources.base as base_module
 from app.models.video_source import GenerationConfig, GeoRankConfig, VideoSource, VidForgeConfig
 from app.services.video_source_service import parse_source, to_public
 from app.services.video_sources import SourceUnavailableError, adapter_for, known_kinds
+from app.services.video_sources.base import (
+    GENERATION_ATTEMPTS,
+    GENERATION_CREATE_TIMEOUT_S,
+    REQUEST_TIMEOUT_S,
+)
 from app.services.video_sources.georank import GEORANK_AUTO_GENERATION, GeoRankAdapter
 from app.services.video_sources.vidforge import VidForgeAdapter
 
@@ -347,7 +353,7 @@ def _stub(adapter, response):
     """Replace the adapter's authenticated call with a canned response."""
     calls = []
 
-    async def fake(source, method, path, *, json_body=None):
+    async def fake(source, method, path, *, json_body=None, timeout=None):
         calls.append((method, path, json_body))
         return response
 
@@ -476,7 +482,7 @@ async def test_auto_generate_sends_the_flag_the_app_actually_requires():
     adapter = GeoRankAdapter()
     sent = {}
 
-    async def fake_request(source, method, path, *, json_body=None):
+    async def fake_request(source, method, path, *, json_body=None, timeout=None):
         sent.update(method=method, path=path, body=json_body)
         return _CapturingResponse({"videoId": "gen-42", "status": "rendering"})
 
@@ -530,9 +536,112 @@ async def test_georank_status_vocabulary_maps_onto_ours(app_status, expected):
     """A finished render is "ready" on this endpoint and "completed" in the feed."""
     adapter = GeoRankAdapter()
 
-    async def fake_request(source, method, path, *, json_body=None):
+    async def fake_request(source, method, path, *, json_body=None, timeout=None):
         assert path == "/api/videos/gen-42/status"
         return _CapturingResponse({"status": app_status, "progress": 50})
 
     adapter.authed_request = fake_request  # type: ignore[method-assign]
     assert await adapter.generation_state(_auto_source(), "gen-42") == expected
+
+
+# ------------------------------------------- create timeout + safe retry
+
+
+def _flaky_adapter(outcomes):
+    """A GeoRank adapter whose create call yields `outcomes` in order.
+
+    Each outcome is either an exception to raise or a response to return.
+    Records the timeout each attempt was given.
+    """
+    adapter = GeoRankAdapter()
+    calls = {"n": 0, "timeouts": []}
+
+    async def fake(source, method, path, *, json_body=None, timeout=None):
+        calls["timeouts"].append(timeout)
+        outcome = outcomes[calls["n"]]
+        calls["n"] += 1
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    adapter.authed_request = fake  # type: ignore[method-assign]
+    return adapter, calls
+
+
+@pytest.fixture
+def slept(monkeypatch):
+    """Record backoffs instead of serving them, so retry tests stay instant."""
+    recorded: list[float] = []
+
+    async def fake_sleep(seconds):
+        recorded.append(seconds)
+
+    monkeypatch.setattr(base_module.asyncio, "sleep", fake_sleep)
+    return recorded
+
+
+def _status_error(code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://geo.example.com/api/videos")
+    response = httpx.Response(code, text="upstream said no", request=request)
+    return httpx.HTTPStatusError("boom", request=request, response=response)
+
+
+@pytest.mark.asyncio
+async def test_create_gets_its_own_timeout_not_the_listing_one():
+    """GeoRank runs two grounded LLM calls before answering; 30s cut that off."""
+    adapter, calls = _flaky_adapter([_CapturingResponse({"videoId": "v1"})])
+    await adapter.request_generation(_auto_source())
+    assert calls["timeouts"] == [GENERATION_CREATE_TIMEOUT_S]
+    assert GENERATION_CREATE_TIMEOUT_S > REQUEST_TIMEOUT_S
+
+
+@pytest.mark.asyncio
+async def test_a_server_error_is_retried_because_nothing_was_created(slept):
+    """A 502 is an ANSWER — it proves no render started, so asking again is safe.
+
+    This is the transient `topic_unavailable` GeoRank's idea generation returns.
+    """
+    adapter, calls = _flaky_adapter([_status_error(502), _status_error(502), _CapturingResponse({"videoId": "v9"})])
+    job_id = await adapter.request_generation(_auto_source())
+
+    assert job_id == "v9"
+    assert calls["n"] == 3
+    assert slept, "should have backed off between attempts"
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_is_never_retried_so_we_cannot_bill_a_second_render():
+    """The one rule that matters: an ambiguous failure must not be repeated.
+
+    We cannot tell "never arrived" from "arrived, started a render, and we
+    stopped listening" — retrying the second case quietly pays for a video
+    nobody is waiting for.
+    """
+    adapter, calls = _flaky_adapter([httpx.TimeoutException("timed out")])
+
+    with pytest.raises(httpx.TimeoutException):
+        await adapter.request_generation(_auto_source())
+
+    assert calls["n"] == 1, "a timeout must not be attempted twice"
+
+
+@pytest.mark.asyncio
+async def test_a_client_error_is_not_retried_either():
+    """Repeating a request the app already rejected as malformed helps nobody."""
+    adapter, calls = _flaky_adapter([_status_error(400)])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.request_generation(_auto_source())
+
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_exhausted_retries_surface_the_last_server_error(slept):
+    adapter, calls = _flaky_adapter([_status_error(503)] * GENERATION_ATTEMPTS)
+
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        await adapter.request_generation(_auto_source())
+
+    assert caught.value.response.status_code == 503
+    assert calls["n"] == GENERATION_ATTEMPTS

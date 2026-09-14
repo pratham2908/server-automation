@@ -158,11 +158,12 @@ class VidForgeAdapter(SourceAdapter):
         *,
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
+        timeout: float = REQUEST_TIMEOUT_S,
     ) -> httpx.Response:
         """Call the app, re-logging in once if the token turns out to be dead."""
         for force in (False, True):
             token = await self._token(source, force=force)
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.request(
                     method,
                     f"{source.base_url}{path}",
@@ -183,10 +184,11 @@ class VidForgeAdapter(SourceAdapter):
         path: str,
         *,
         json_body: dict[str, Any] | None = None,
+        timeout: float = REQUEST_TIMEOUT_S,
     ) -> httpx.Response:
         # _request already handles the short-lived token, including one retry
         # after a 401, so generation inherits that for free.
-        return await self._request(source, method, path, json_body=json_body)
+        return await self._request(source, method, path, json_body=json_body, timeout=timeout)
 
     # ------------------------------------------------------------------
     # Reading

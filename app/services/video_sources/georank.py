@@ -91,6 +91,7 @@ class GeoRankAdapter(SourceAdapter):
         path: str,
         *,
         json_body: dict[str, Any] | None = None,
+        timeout: float = REQUEST_TIMEOUT_S,
     ) -> httpx.Response:
         # X-Api-Key unconditionally, whatever auth_style the feed is configured
         # with. The read-only feed accepts either header, but the create endpoint
@@ -104,7 +105,7 @@ class GeoRankAdapter(SourceAdapter):
             "X-Api-Key": cfg.api_key,
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.request(method, f"{source.base_url}{path}", json=json_body, headers=headers)
         resp.raise_for_status()
         return resp
