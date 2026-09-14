@@ -11,6 +11,7 @@ editing anything that an existing channel already depends on.
 from __future__ import annotations
 
 import abc
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -19,6 +20,17 @@ import httpx
 from app.models.video_source import GenerationConfig, SourceKind, SourceVideo, VideoSource
 
 REQUEST_TIMEOUT_S = 30.0
+
+# Asking for a render is not the same shape of call as fetching a page. GeoRank
+# runs two sequential grounded LLM calls (a brief, then the ideas) *inside* the
+# request before it answers, and 30s — a listing budget — cut that off twice in
+# three nights, skipping the slot for work the app was still willing to do.
+GENERATION_CREATE_TIMEOUT_S = 120.0
+
+# Retries for the create call. Deliberately small: each attempt can itself take
+# two minutes, and the scheduler only has the hour before the slot.
+GENERATION_ATTEMPTS = 3
+GENERATION_BACKOFF_S = 3.0
 
 
 @dataclass(slots=True)
@@ -102,6 +114,7 @@ class SourceAdapter(abc.ABC):
         path: str,
         *,
         json_body: dict[str, Any] | None = None,
+        timeout: float = REQUEST_TIMEOUT_S,
     ) -> httpx.Response:
         """Call the app with whatever auth it uses, raising for a bad status.
 
@@ -135,7 +148,7 @@ class SourceAdapter(abc.ABC):
         if cfg is None or not cfg.create_path:
             raise SourceUnavailableError(f"Source '{source.name}' cannot generate videos")
 
-        resp = await self.authed_request(source, "POST", cfg.create_path, json_body=dict(cfg.create_body))
+        resp = await self._create_with_retry(source, cfg)
         try:
             data = resp.json()
         except ValueError:
@@ -147,6 +160,41 @@ class SourceAdapter(abc.ABC):
         payload = data["job"] if isinstance(data.get("job"), dict) else data
         job_id = payload.get(cfg.job_id_field)
         return str(job_id) if job_id else ""
+
+    async def _create_with_retry(self, source: VideoSource, cfg: GenerationConfig) -> httpx.Response:
+        """POST the create call, retrying only when it is provably safe to.
+
+        A retry here can cost a second video, so the rule is narrow: retry only
+        when the app ANSWERED with a server error. An answer proves it did not
+        start a render, so asking again cannot duplicate one — that covers the
+        transient ``502 topic_unavailable`` its idea generation returns.
+
+        A timeout or a transport failure is NOT retried, however tempting. We
+        cannot tell "never arrived" from "arrived, started a render, and we
+        stopped listening", and guessing wrong bills a render nobody watches.
+        The slot is skipped instead and the next slot retries an hour later.
+
+        A 4xx is never retried either: the request itself is wrong, and repeating
+        it just annoys the app.
+        """
+        last: httpx.HTTPStatusError | None = None
+        for attempt in range(1, GENERATION_ATTEMPTS + 1):
+            try:
+                return await self.authed_request(
+                    source,
+                    "POST",
+                    cfg.create_path,
+                    json_body=dict(cfg.create_body),
+                    timeout=GENERATION_CREATE_TIMEOUT_S,
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code < 500:
+                    raise
+                last = exc
+                if attempt < GENERATION_ATTEMPTS:
+                    await asyncio.sleep(GENERATION_BACKOFF_S * attempt)
+        assert last is not None  # only reachable after a 5xx set it
+        raise last
 
     async def generation_state(self, source: VideoSource, job_id: str) -> GenerationState:
         """Where a render has got to.
