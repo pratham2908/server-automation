@@ -530,6 +530,7 @@ class InstagramService:
         *,
         upload_type: str = "resumable",
         thumb_offset: int | None = None,
+        cover_url: str | None = None,
     ) -> dict[str, str]:
         """Create a Reel media container for resumable upload.
 
@@ -540,7 +541,10 @@ class InstagramService:
             "upload_type": upload_type,
             "caption": caption,
         }
-        if thumb_offset is not None:
+        # See publish_reel_from_url: cover_url supersedes thumb_offset.
+        if cover_url:
+            params["cover_url"] = cover_url
+        elif thumb_offset is not None:
             params["thumb_offset"] = str(thumb_offset)
 
         data = self._post(f"{self._user_node(ig_user_id)}/media", params)
@@ -679,6 +683,7 @@ class InstagramService:
         caption: str,
         *,
         thumb_offset: int | None = None,
+        cover_url: str | None = None,
         poll_interval: float = 10.0,
         max_polls: int = 40,
     ) -> str:
@@ -694,7 +699,14 @@ class InstagramService:
             "video_url": video_url,
             "caption": caption,
         }
-        if thumb_offset is not None:
+        # A supplied cover image wins over a timestamp into the video, and the
+        # two are not combined: Instagram ignores thumb_offset when cover_url is
+        # set, so sending both would only make the request lie about its intent.
+        # The URL must be publicly fetchable by Meta's servers for the duration
+        # of container processing.
+        if cover_url:
+            params["cover_url"] = cover_url
+        elif thumb_offset is not None:
             params["thumb_offset"] = str(thumb_offset)
 
         data = self._post(f"{self._user_node(ig_user_id)}/media", params)

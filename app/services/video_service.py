@@ -920,11 +920,16 @@ class VideoService:
         except Exception:
             raise ValueError("Gemini extraction failed")
 
-    def _store_custom_thumbnail(self, channel_id: str, video_id: str, thumbnail: Any) -> str | None:
-        """Put an uploader-supplied thumbnail in R2 and return a URL for it.
+    def _store_custom_thumbnail(self, channel_id: str, video_id: str, thumbnail: Any) -> tuple[str, str] | None:
+        """Put an uploader-supplied thumbnail in R2. Returns ``(key, url)``.
 
         Kept under a distinct ``-custom`` key so it cannot be clobbered by the
         frame the analysis extracts, which writes ``{video_id}.jpg``.
+
+        The key is returned as well as the URL because the URL is presigned and
+        expires: anything that needs the image later — Instagram fetching it as a
+        reel cover, weeks after upload — has to mint a fresh one rather than
+        reuse this.
 
         A thumbnail is a nicety, so a failure here is logged and swallowed rather
         than failing an upload whose video landed fine — the caller gets None and
@@ -936,7 +941,7 @@ class VideoService:
             key = f"{channel_id}/thumbnails/{video_id}-custom.jpg"
             self.r2.upload_video(thumbnail, key)
             # 7 days is the SigV4 maximum, and what the analysis path uses.
-            return str(self.r2.generate_presigned_url(key, expires_in=604800))
+            return key, str(self.r2.generate_presigned_url(key, expires_in=604800))
         except Exception as exc:
             logger.error("Could not store the custom thumbnail for %s: %s", video_id, exc)
             return None
@@ -994,7 +999,7 @@ class VideoService:
         }
         custom_thumb = self._store_custom_thumbnail(channel_id, vid_id, thumbnail)
         if custom_thumb:
-            doc["thumbnail_url"] = custom_thumb
+            doc["thumbnail_r2_key"], doc["thumbnail_url"] = custom_thumb
             # Read by the analysis, which then leaves its own extracted frame
             # alone — an uploader who supplied a thumbnail has already decided.
             doc["custom_thumbnail"] = True
@@ -1270,7 +1275,7 @@ class VideoService:
             if custom_thumb:
                 # One image, one R2 object, referenced by every sibling — the
                 # file is identical and copying it per channel buys nothing.
-                doc["thumbnail_url"] = custom_thumb
+                doc["thumbnail_r2_key"], doc["thumbnail_url"] = custom_thumb
                 doc["custom_thumbnail"] = True
             await self.db.videos.insert_one(doc)
             channel_videos.append({"channel_id": cid, "video_id": vid_id})
@@ -1702,9 +1707,7 @@ class VideoService:
         }
 
         candidates = sorted(stored - fetched_ids)
-        alive = (
-            await asyncio.to_thread(self._resolve_existing_youtube_ids, yt, candidates) if candidates else set()
-        )
+        alive = await asyncio.to_thread(self._resolve_existing_youtube_ids, yt, candidates) if candidates else set()
         gone = [vid for vid in candidates if vid not in alive]
 
         if gone:

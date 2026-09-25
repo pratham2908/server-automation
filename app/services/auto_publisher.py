@@ -76,7 +76,19 @@ async def _publish_one_reel(
         # This is much more robust againstrupload/encoding issues.
         video_url = r2_service.generate_presigned_url(r2_key, expires_in=3600)
 
-        # Use AI-suggested best time frame for thumbnail if available
+        # An uploader-supplied thumbnail is the cover; otherwise fall back to the
+        # timestamp the analysis picked. Instagram takes a fetchable image URL for
+        # the first and an offset into the video for the second, so a custom
+        # thumbnail used to be silently dropped here — the image was stored, shown
+        # in the dashboard, and never reached the reel.
+        cover_url: str | None = None
+        thumb_key = video_doc.get("thumbnail_r2_key")
+        if video_doc.get("custom_thumbnail") and thumb_key:
+            # Minted fresh rather than reusing the stored URL: that one is
+            # presigned at upload time and a video published weeks later would
+            # hand Meta a dead link.
+            cover_url = r2_service.generate_presigned_url(thumb_key, expires_in=3600)
+
         ai_packaging = video_doc.get("ai_packaging") or {}
         thumb_offset_sec = ai_packaging.get("best_thumbnail_timestamp")
         thumb_offset_ms = int(thumb_offset_sec * 1000) if thumb_offset_sec is not None else None
@@ -86,6 +98,7 @@ async def _publish_one_reel(
             video_url=video_url,
             caption=caption,
             thumb_offset=thumb_offset_ms,
+            cover_url=cover_url,
         )
 
         now = now_ist()
