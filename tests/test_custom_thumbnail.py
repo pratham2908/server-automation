@@ -40,10 +40,20 @@ def test_a_supplied_thumbnail_is_stored_under_its_own_key():
     """Distinct from {video_id}.jpg, which the analysis writes — otherwise the
     extracted frame would overwrite the uploader's image."""
     r2 = _FakeR2()
-    url = _service(r2)._store_custom_thumbnail("c1", "v1", io.BytesIO(b"img"))
+    stored = _service(r2)._store_custom_thumbnail("c1", "v1", io.BytesIO(b"img"))
 
     assert r2.uploaded == ["c1/thumbnails/v1-custom.jpg"]
-    assert url is not None and "v1-custom.jpg" in url
+    assert stored is not None
+    key, url = stored
+    assert key == "c1/thumbnails/v1-custom.jpg"
+    assert "v1-custom.jpg" in url
+
+
+def test_the_key_comes_back_so_the_url_can_be_reminted():
+    """Instagram fetches the cover at publish time, which can be weeks after
+    upload — by then the presigned URL stored on the video has expired."""
+    stored = _service()._store_custom_thumbnail("c1", "v1", io.BytesIO(b"img"))
+    assert stored is not None and stored[0] == "c1/thumbnails/v1-custom.jpg"
 
 
 def test_no_thumbnail_supplied_stores_nothing():
@@ -58,8 +68,8 @@ def test_a_storage_failure_does_not_take_the_upload_with_it():
 
 
 def test_the_url_is_presigned_for_the_sigv4_maximum():
-    url = _service()._store_custom_thumbnail("c1", "v1", io.BytesIO(b"img"))
-    assert url is not None and "exp=604800" in url
+    stored = _service()._store_custom_thumbnail("c1", "v1", io.BytesIO(b"img"))
+    assert stored is not None and "exp=604800" in stored[1]
 
 
 # ------------------------------------------------------------------
