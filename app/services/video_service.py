@@ -930,6 +930,7 @@ class VideoService:
         category: str | None = None,
         content_params: str | None = None,
         scheduled_at: str | None = None,
+        analyze: bool = True,
     ) -> dict[str, Any]:
         channel = await self.db.channels.find_one({"channel_id": channel_id})
         if not channel:
@@ -965,12 +966,28 @@ class VideoService:
             "verification_status": "verified" if (category and params) else "unverified",
             # An Instagram upload-time schedule is kept as the intent; promotion honours it.
             "scheduled_at": sch_at if (sch_at and platform == "instagram") else None,
-            "packaging_status": "pending",
+            "packaging_status": "pending" if analyze else "skipped",
             "created_at": now,
             "updated_at": now,
         }
         await self.db.videos.insert_one(doc)
-        self.trigger_retention_analysis(channel_id, vid_id, local_video_path=tpath)
+        if analyze:
+            self.trigger_retention_analysis(channel_id, vid_id, local_video_path=tpath)
+        else:
+            # Nothing is going to write this video's metadata, so there is nothing
+            # to wait for — release it the same way a completed analysis does, so
+            # it lands on the posting queue and honours an upload-time Instagram
+            # schedule rather than sitting in "processing" forever.
+            from app.services.retention_analysis import promote_processing_to_ready
+
+            await promote_processing_to_ready(self.db, channel_id, vid_id)
+            promoted = await self.db.videos.find_one({"channel_id": channel_id, "video_id": vid_id})
+            if promoted:
+                doc = promoted
+            # The analysis path deletes this on its way out; with no analysis
+            # running, nobody else will.
+            if os.path.exists(tpath):
+                os.unlink(tpath)
         doc.pop("_id", None)
         return {"ok": True, "video": doc}
 
@@ -1110,6 +1127,7 @@ class VideoService:
         primary_channel_id: str,
         file: Any,
         channels: list[dict],
+        analyze: bool = True,
     ) -> dict[str, Any]:
         """Upload a video file once and create records for every target channel.
 
@@ -1212,7 +1230,7 @@ class VideoService:
                 ),
                 # An Instagram upload-time schedule is kept as the intent; promotion honours it.
                 "scheduled_at": sch_at if (sch_at and platform == "instagram") else None,
-                "packaging_status": "pending",
+                "packaging_status": "pending" if analyze else "skipped",
                 "multi_channel_group_id": group_id,
                 "created_at": now,
                 "updated_at": now,
@@ -1229,7 +1247,18 @@ class VideoService:
         # ── 3. Trigger retention analysis once on the primary record ────
         #    retention_analysis.py will propagate packaging to siblings via
         #    multi_channel_group_id after the Gemini call completes.
-        self.trigger_retention_analysis(primary_channel_id, primary_vid_id, local_video_path=tpath)
+        if analyze:
+            self.trigger_retention_analysis(primary_channel_id, primary_vid_id, local_video_path=tpath)
+        else:
+            # No analysis means no sibling propagation either, so every record
+            # has to be released on its own — each keeps the metadata it was
+            # created with.
+            from app.services.retention_analysis import promote_processing_to_ready
+
+            for cv in channel_videos:
+                await promote_processing_to_ready(self.db, cv["channel_id"], cv["video_id"])
+            if os.path.exists(tpath):
+                os.unlink(tpath)
 
         return {
             "ok": True,

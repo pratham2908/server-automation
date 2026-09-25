@@ -55,17 +55,23 @@ def extract_thumbnail(video_path: str, timestamp: float, output_path: str) -> bo
         return False
 
 
+# Packaging states after which a video's metadata will not change again, so it
+# can be released to the posting queue. "skipped" is the uploader declining AI
+# for this video; their own title and description are then final.
+_TERMINAL_PACKAGING = {"completed", "skipped"}
+
+
 async def promote_processing_to_ready(
     db: AsyncIOMotorDatabase,
     channel_id: str,
     video_id: str,
 ) -> None:
-    """Make a single fully-analysed video postable.
+    """Make a single video postable once its packaging question is settled.
 
-    Every upload path now creates a video as ``processing`` and leaves it there
-    until AI packaging has written its title/description/tags — that packaging is
-    the source of truth for a video's metadata, so it is not postable before it
-    exists. Once packaging has *completed*, this promotes the video:
+    Every upload path creates a video as ``processing`` and leaves it there until
+    AI packaging has written its title/description/tags — that packaging is the
+    source of truth for a video's metadata, so it is not postable before it
+    exists. Once packaging has reached a terminal state, this promotes the video:
 
     * to ``ready`` (and onto the posting queue), or
     * for an Instagram video carrying a future ``scheduled_at`` (a schedule set at
@@ -76,14 +82,19 @@ async def promote_processing_to_ready(
 
     * ``status == "processing"`` — never rewind a live/scheduled/published video,
       e.g. a manual "predict" re-analysing an existing upload.
-    * ``packaging_status == "completed"`` — a video whose analysis produced no
-      packaging stays ``processing`` rather than being posted without metadata.
+    * packaging is terminal — ``completed`` (analysis wrote the metadata) or
+      ``skipped`` (the uploader asked for no AI, so the metadata they typed is
+      the final word). A video still ``pending``/``analyzing``, or one whose
+      analysis produced no packaging at all, stays ``processing`` rather than
+      being posted without metadata.
 
     It acts on one video; callers invoke it for each record (primary and each
     multi-channel sibling) once that record's packaging is done.
     """
     video = await db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-    if not video or video.get("status") != "processing" or video.get("packaging_status") != "completed":
+    if not video or video.get("status") != "processing":
+        return
+    if video.get("packaging_status") not in _TERMINAL_PACKAGING:
         return
 
     now = now_ist()

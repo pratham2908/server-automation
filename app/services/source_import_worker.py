@@ -23,6 +23,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.logger import get_logger
 from app.services.error_reporting import report_error
 from app.services.r2 import R2Service
+from app.services.retention_analysis import promote_processing_to_ready
 from app.services.video_source_service import VideoSourceService, get_import_queue
 from app.services.video_sources import adapter_for, describe_http_error
 from app.timezone import now_ist
@@ -144,10 +145,16 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
         # analysis is skipped there is nothing more to wait for, so it is ready now.
         will_analyze = job.get("analyze", True)
         if not will_analyze:
+            # Released through the same promotion an analysed video uses, rather
+            # than by setting "ready" directly: that also puts it on the posting
+            # queue (Schedule All reads that queue, so a bare status flip left
+            # skipped imports invisible to it) and honours an Instagram
+            # upload-time schedule.
             await db.videos.update_one(
                 {"video_id": video_id},
-                {"$set": {"status": "ready", "updated_at": now_ist()}},
+                {"$set": {"packaging_status": "skipped", "updated_at": now_ist()}},
             )
+            await promote_processing_to_ready(db, job["channel_id"], video_id)
 
         # ── 5. Close the pull loop with the app ─────────────────────────
         # Deliberately fired on ingest, not after analysis: we hold the file now,
@@ -189,10 +196,6 @@ async def _process_import(job_id: str, db: AsyncIOMotorDatabase, r2: R2Service) 
             if notify_error:
                 message += " (app not notified)"
         else:
-            await db.videos.update_one(
-                {"video_id": video_id},
-                {"$set": {"packaging_status": "skipped", "updated_at": now_ist()}},
-            )
             message = "Imported"
 
         await db.source_imports.update_one(
