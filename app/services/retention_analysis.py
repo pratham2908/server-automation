@@ -273,7 +273,14 @@ async def run_retention_analysis(
                     updates["tags"] = tags
 
             thumb_url: str | None = None
-            if extract_thumbnail(temp_path, ts, local_thumb_path):
+            # An uploader who supplied a thumbnail has already made this call, and
+            # the UI prefers ai_packaging.thumbnail_url over the video's own — so
+            # writing one here would quietly override their choice. The timestamp
+            # still lands in packaging, which is what Instagram's cover offset
+            # reads, so only the extracted image is skipped.
+            if video.get("custom_thumbnail"):
+                logger.info("Video %s has a custom thumbnail; not extracting one", video_id)
+            elif extract_thumbnail(temp_path, ts, local_thumb_path):
                 try:
                     # Upload to R2 under channel/thumbnails/
                     r2_thumb_key = f"{channel_id}/thumbnails/{video_id}.jpg"

@@ -920,6 +920,27 @@ class VideoService:
         except Exception:
             raise ValueError("Gemini extraction failed")
 
+    def _store_custom_thumbnail(self, channel_id: str, video_id: str, thumbnail: Any) -> str | None:
+        """Put an uploader-supplied thumbnail in R2 and return a URL for it.
+
+        Kept under a distinct ``-custom`` key so it cannot be clobbered by the
+        frame the analysis extracts, which writes ``{video_id}.jpg``.
+
+        A thumbnail is a nicety, so a failure here is logged and swallowed rather
+        than failing an upload whose video landed fine — the caller gets None and
+        the video simply has no custom thumbnail.
+        """
+        if thumbnail is None or self.r2 is None:
+            return None
+        try:
+            key = f"{channel_id}/thumbnails/{video_id}-custom.jpg"
+            self.r2.upload_video(thumbnail, key)
+            # 7 days is the SigV4 maximum, and what the analysis path uses.
+            return str(self.r2.generate_presigned_url(key, expires_in=604800))
+        except Exception as exc:
+            logger.error("Could not store the custom thumbnail for %s: %s", video_id, exc)
+            return None
+
     async def create_video(
         self,
         channel_id: str,
@@ -931,6 +952,7 @@ class VideoService:
         content_params: str | None = None,
         scheduled_at: str | None = None,
         analyze: bool = True,
+        thumbnail: Any | None = None,
     ) -> dict[str, Any]:
         channel = await self.db.channels.find_one({"channel_id": channel_id})
         if not channel:
@@ -970,6 +992,12 @@ class VideoService:
             "created_at": now,
             "updated_at": now,
         }
+        custom_thumb = self._store_custom_thumbnail(channel_id, vid_id, thumbnail)
+        if custom_thumb:
+            doc["thumbnail_url"] = custom_thumb
+            # Read by the analysis, which then leaves its own extracted frame
+            # alone — an uploader who supplied a thumbnail has already decided.
+            doc["custom_thumbnail"] = True
         await self.db.videos.insert_one(doc)
         if analyze:
             self.trigger_retention_analysis(channel_id, vid_id, local_video_path=tpath)
@@ -1128,6 +1156,7 @@ class VideoService:
         file: Any,
         channels: list[dict],
         analyze: bool = True,
+        thumbnail: Any | None = None,
     ) -> dict[str, Any]:
         """Upload a video file once and create records for every target channel.
 
@@ -1178,6 +1207,9 @@ class VideoService:
             tpath = tmp.name
         with open(tpath, "rb") as f:
             self.r2.upload_video(f, r2_key)
+
+        # Stored once under the primary's id; every sibling points at the same object.
+        custom_thumb = self._store_custom_thumbnail(primary_channel_id, primary_vid_id, thumbnail)
 
         now = now_ist()
         channel_videos: list[dict] = []
@@ -1235,6 +1267,11 @@ class VideoService:
                 "created_at": now,
                 "updated_at": now,
             }
+            if custom_thumb:
+                # One image, one R2 object, referenced by every sibling — the
+                # file is identical and copying it per channel buys nothing.
+                doc["thumbnail_url"] = custom_thumb
+                doc["custom_thumbnail"] = True
             await self.db.videos.insert_one(doc)
             channel_videos.append({"channel_id": cid, "video_id": vid_id})
 

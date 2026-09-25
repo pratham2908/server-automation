@@ -376,6 +376,7 @@ async def create_multi_channel_video(
     file: UploadFile = File(...),
     channels: str = Form(..., description="JSON array of per-channel configs"),
     analyze: bool = Form(True, description="Run AI analysis and packaging; false keeps the metadata as sent"),
+    thumbnail: UploadFile | None = File(None, description="Custom thumbnail image; shared by every channel record"),
     service: VideoService = Depends(get_video_service),
 ):
     """Upload a video file once and create records for multiple channels.
@@ -399,7 +400,9 @@ async def create_multi_channel_video(
     except Exception:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="channels must be valid JSON")
     try:
-        return await service.create_multi_channel_video(channel_id, file.file, channel_configs, analyze)
+        return await service.create_multi_channel_video(
+            channel_id, file.file, channel_configs, analyze, thumbnail.file if thumbnail else None
+        )
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -415,12 +418,22 @@ async def create_video(
     content_params: str | None = Form(None),
     scheduled_at: str | None = Form(None),
     analyze: bool = Form(True, description="Run AI analysis and packaging; false keeps the metadata as sent"),
+    thumbnail: UploadFile | None = File(None, description="Custom thumbnail image; replaces the AI-extracted frame"),
     service: VideoService = Depends(get_video_service),
 ):
     """Create an ad-hoc video."""
     try:
         return await service.create_video(
-            channel_id, file.file, title, description, tags, category, content_params, scheduled_at, analyze
+            channel_id,
+            file.file,
+            title,
+            description,
+            tags,
+            category,
+            content_params,
+            scheduled_at,
+            analyze,
+            thumbnail.file if thumbnail else None,
         )
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
