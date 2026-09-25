@@ -275,3 +275,45 @@ def test_generating_slots_count_as_in_flight_so_we_do_not_over_post():
     assert sel.pending_action_slots(times, now, 1, {"18:00": "importing"}) == []
     # With nothing in flight the second slot is still fillable.
     assert sel.pending_action_slots(times, now, 1, {}) == ["18:00"]
+
+
+# ------------------------------------------------------------------
+# Naive Mongo timestamps
+# ------------------------------------------------------------------
+
+
+def test_a_naive_mongo_timestamp_is_read_as_utc_not_relabelled_ist():
+    """The bug this pins: a naive value was given IST's offset instead of being
+    converted from UTC, moving every stored instant 5h30m into the past.
+
+    A video queued for 23:00 IST is stored 17:30 UTC. Relabelling that as IST put
+    it at 17:30 IST — same date here, but the same misread on an elapsed-time
+    comparison is what made a wait look exhausted before it had begun.
+    """
+    stored_utc = datetime(2026, 9, 25, 17, 30)  # 23:00 IST, as Mongo hands it back
+    assert sel._local_date(stored_utc) == date(2026, 9, 25)
+
+    # Just after midnight IST belongs to the new day, though UTC still says the old.
+    just_after_midnight_ist = datetime(2026, 9, 25, 19, 0)  # 00:30 IST on the 26th
+    assert sel._local_date(just_after_midnight_ist) == date(2026, 9, 26)
+
+
+def test_committed_today_counts_a_late_evening_slot_on_its_own_day():
+    """The practical cost of the misread: a 23:00 IST post is stored as 17:30 UTC,
+    and reading that as IST would still land on the right date — but a 00:30 IST
+    one would be credited to yesterday, so the channel would post twice."""
+    videos = [{"status": "queued", "scheduled_at": datetime(2026, 9, 25, 19, 0)}]  # 00:30 IST on the 26th
+    assert videos_committed_today(videos, date(2026, 9, 26)) == 1
+    assert videos_committed_today(videos, date(2026, 9, 25)) == 0
+
+
+def test_as_datetime_is_always_aware_so_picks_cannot_raise():
+    """``pick_ready_video`` compares parsed timestamps against an aware sentinel.
+    One naive value in that mix raises TypeError rather than sorting oddly, so a
+    single video missing ``created_at`` would break the whole pick."""
+    videos = [
+        {"video_id": "no-date", "status": "ready"},
+        {"video_id": "naive", "status": "ready", "created_at": datetime(2026, 9, 25, 1, 0)},
+        {"video_id": "aware", "status": "ready", "created_at": "2026-09-25T09:00:00+05:30"},
+    ]
+    assert pick_ready_video(videos)["video_id"] == "naive"  # 06:30 IST, the oldest

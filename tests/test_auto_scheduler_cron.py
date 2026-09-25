@@ -6,7 +6,7 @@ the side-effect boundaries (scheduling, import picking) so no DB or network runs
 """
 
 import copy
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +33,11 @@ class FakeRuns:
     async def find_one(self, q):
         return copy.deepcopy(self.docs.get((q["date"], q["channel_id"])))
 
+    def find(self, q):
+        """Answers the ``{"date": {"$in": [...]}}`` query the rollover sweep makes."""
+        wanted = set(q.get("date", {}).get("$in", []))
+        return _IdCursor([copy.deepcopy(d) for (day, _cid), d in self.docs.items() if day in wanted])
+
     async def update_one(self, q, update, upsert=False):
         key = (q["date"], q["channel_id"])
         if "$setOnInsert" in update and key not in self.docs:
@@ -53,7 +58,7 @@ class _IdCursor:
     def __init__(self, docs):
         self._docs = docs
 
-    async def to_list(self, _length):
+    async def to_list(self, length=None):
         return list(self._docs)
 
 
@@ -145,7 +150,7 @@ async def test_due_slot_schedules_oldest_ready_video(monkeypatch):
             {"video_id": "new", "status": "ready", "created_at": "2026-08-22T00:00:00+05:30"},
         ]
 
-    async def fake_schedule(db_, channel, video_doc, schedule_at):
+    async def fake_schedule(db_, channel, video_doc, schedule_at, now_=None):
         scheduled_calls.append((video_doc["video_id"], schedule_at))
         return {"status": "queued"}
 
@@ -283,7 +288,7 @@ async def test_recheck_schedules_once_import_is_ready(monkeypatch):
     async def fake_ready(db_, cid):
         return []
 
-    async def fake_schedule(db_, channel, video_doc, schedule_at):
+    async def fake_schedule(db_, channel, video_doc, schedule_at, now_=None):
         scheduled.append(video_doc["video_id"])
         return {"status": "queued"}
 
@@ -349,19 +354,19 @@ async def test_recheck_fails_the_slot_after_max_wait(monkeypatch):
 def test_all_slots_terminal_is_false_before_slot_time():
     ch = _channel(["19:00"])
     run_docs = {"histriphy": {"slots": {"19:00": {"state": cron._SCHEDULED}}}}
-    assert cron._all_slots_terminal([ch], run_docs, _dt(2026, 8, 24, 18, 0)) is False
+    assert cron._all_slots_terminal([ch], run_docs, _dt(2026, 8, 24, 18, 0), date(2026, 8, 24)) is False
 
 
 def test_all_slots_terminal_true_when_every_slot_done_and_past():
     ch = _channel(["19:00", "21:00"])
     run_docs = {"histriphy": {"slots": {"19:00": {"state": cron._SCHEDULED}, "21:00": {"state": cron._SKIPPED}}}}
-    assert cron._all_slots_terminal([ch], run_docs, _dt(2026, 8, 24, 21, 30)) is True
+    assert cron._all_slots_terminal([ch], run_docs, _dt(2026, 8, 24, 21, 30), date(2026, 8, 24)) is True
 
 
 def test_all_slots_terminal_false_while_an_import_is_pending():
     ch = _channel(["19:00"])
     run_docs = {"histriphy": {"slots": {"19:00": {"state": cron._IMPORTING}}}}
-    assert cron._all_slots_terminal([ch], run_docs, _dt(2026, 8, 24, 21, 30)) is False
+    assert cron._all_slots_terminal([ch], run_docs, _dt(2026, 8, 24, 21, 30), date(2026, 8, 24)) is False
 
 
 def test_assemble_summary_splits_scheduled_and_skipped():
@@ -675,7 +680,7 @@ async def test_an_import_from_a_render_is_rechecked_on_the_tick(monkeypatch):
     }
     scheduled = []
 
-    async def fake_schedule(db_, channel, video, when):
+    async def fake_schedule(db_, channel, video, when, now_=None):
         scheduled.append(video["video_id"])
         return {"status": "queued"}
 
@@ -688,3 +693,153 @@ async def test_an_import_from_a_render_is_rechecked_on_the_tick(monkeypatch):
     slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
     assert slot["state"] == cron._SCHEDULED
     assert scheduled == ["rendered-1"]
+
+
+# ------------------------------------------------------------------
+# Rollover recovery
+# ------------------------------------------------------------------
+#
+# Every recheck phase works on *today's* run doc. A slot still ``importing`` when
+# midnight passed was therefore never looked at again: it stayed non-terminal
+# forever, and since the summary waits for every slot to be terminal, that day's
+# email never sent either. One real day was lost exactly this way.
+
+
+def _stale_runs(state, day="2026-08-24", extra=None):
+    runs = FakeRuns()
+    runs.docs[(day, "histriphy")] = {
+        "date": day,
+        "channel_id": "histriphy",
+        "channel_name": "Histriphy",
+        "slots": {"19:00": {"state": state, **(extra or {})}},
+    }
+    return runs
+
+
+def _catch_sends(monkeypatch, sends):
+    async def fake_send(settings, recipient, subject, body, html_body=None):
+        sends.append((recipient, subject))
+        return True
+
+    monkeypatch.setattr(cron, "send_email", fake_send)
+
+
+@pytest.mark.asyncio
+async def test_a_slot_stranded_importing_overnight_is_resolved_and_reported(monkeypatch):
+    runs = _stale_runs(cron._IMPORTING, extra={"video_id": "v1", "awaiting_since": datetime(2026, 8, 24, 13, 30)})
+    db = FakeDB(runs=runs, profile={"email": "owner@example.com"})
+    sends: list = []
+    _catch_sends(monkeypatch, sends)
+
+    now = _dt(2026, 8, 25, 0, 30)
+    await cron._resolve_stale_days(db, SimpleNamespace(SUMMARY_EMAIL_TO=None), [_channel(["19:00"])], now.date(), now)
+
+    slot = runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._FAILED
+    assert slot["reason"] == "import not ready before the day ended"
+    assert len(sends) == 1  # the summary that was held hostage finally goes out
+
+
+@pytest.mark.asyncio
+async def test_each_stranded_state_gets_its_own_resolution(monkeypatch):
+    sends: list = []
+    for state, expected_state, reason in [
+        (cron._IMPORTING, cron._FAILED, "import not ready before the day ended"),
+        (cron._GENERATING, cron._FAILED, "render not ready before the day ended"),
+        (cron._PENDING, cron._SKIPPED, "slot passed with no video chosen"),
+        ("something-new", cron._FAILED, "left unresolved when the day ended"),
+    ]:
+        runs = _stale_runs(state)
+        db = FakeDB(runs=runs, profile={"email": "owner@example.com"})
+        _catch_sends(monkeypatch, sends)
+        now = _dt(2026, 8, 25, 0, 30)
+        await cron._resolve_stale_days(
+            db, SimpleNamespace(SUMMARY_EMAIL_TO=None), [_channel(["19:00"])], now.date(), now
+        )
+        slot = runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+        assert (slot["state"], slot["reason"]) == (expected_state, reason), state
+
+
+@pytest.mark.asyncio
+async def test_an_awaiting_linked_copy_is_closed_when_the_day_ends(monkeypatch):
+    runs = _stale_runs(
+        cron._SCHEDULED,
+        extra={"video_id": "v1", "linked": [{"channel_id": "geo_ig", "state": cron._AWAITING, "video_id": "sib"}]},
+    )
+    db = FakeDB(runs=runs, profile={"email": "owner@example.com"})
+    sends: list = []
+    _catch_sends(monkeypatch, sends)
+
+    now = _dt(2026, 8, 25, 0, 30)
+    await cron._resolve_stale_days(db, SimpleNamespace(SUMMARY_EMAIL_TO=None), [_channel(["19:00"])], now.date(), now)
+
+    link = runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]["linked"][0]
+    assert link["state"] == cron._SKIPPED
+    assert link["reason"] == "day ended before the linked copy was ready"
+    assert len(sends) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_configured_slot_with_no_record_does_not_block_a_past_days_summary(monkeypatch):
+    """A second slot added to the config leaves an unseen slot on old days, which
+    reads as ``pending`` and would silence those summaries forever."""
+    runs = _stale_runs(cron._SCHEDULED, extra={"video_id": "v1"})
+    db = FakeDB(runs=runs, profile={"email": "owner@example.com"})
+    sends: list = []
+    _catch_sends(monkeypatch, sends)
+
+    now = _dt(2026, 8, 25, 0, 30)
+    await cron._resolve_stale_days(
+        db, SimpleNamespace(SUMMARY_EMAIL_TO=None), [_channel(["19:00", "21:00"])], now.date(), now
+    )
+
+    slots = runs.docs[("2026-08-24", "histriphy")]["slots"]
+    assert slots["21:00"] == {"state": cron._SKIPPED, "reason": "no attempt recorded"}
+    assert len(sends) == 1
+
+
+@pytest.mark.asyncio
+async def test_today_is_never_swept(monkeypatch):
+    """Today's in-flight work is the scheduler's job, not the sweep's — resolving it
+    would abandon an import that is minutes from landing."""
+    runs = _stale_runs(cron._IMPORTING, day="2026-08-25")
+    db = FakeDB(runs=runs, profile={"email": "owner@example.com"})
+    sends: list = []
+    _catch_sends(monkeypatch, sends)
+
+    now = _dt(2026, 8, 25, 19, 30)
+    await cron._resolve_stale_days(db, SimpleNamespace(SUMMARY_EMAIL_TO=None), [_channel(["19:00"])], now.date(), now)
+
+    assert runs.docs[("2026-08-25", "histriphy")]["slots"]["19:00"]["state"] == cron._IMPORTING
+    assert sends == []
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_does_not_re_send_a_summary_already_reported(monkeypatch):
+    """The sweep offers every day in its window to the summary; the per-date latch
+    is what stops a restart emailing a week of history."""
+    runs = _stale_runs(cron._SCHEDULED, extra={"video_id": "v1"})
+    summaries = FakeSummaries()
+    summaries.docs["2026-08-24"] = {"date": "2026-08-24", "sent": True}
+    db = FakeDB(runs=runs, summaries=summaries, profile={"email": "owner@example.com"})
+    sends: list = []
+    _catch_sends(monkeypatch, sends)
+
+    now = _dt(2026, 8, 25, 0, 30)
+    await cron._resolve_stale_days(db, SimpleNamespace(SUMMARY_EMAIL_TO=None), [_channel(["19:00"])], now.date(), now)
+
+    assert sends == []
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_only_reaches_back_a_bounded_window(monkeypatch):
+    runs = _stale_runs(cron._IMPORTING, day="2026-08-01")
+    db = FakeDB(runs=runs, profile={"email": "owner@example.com"})
+    sends: list = []
+    _catch_sends(monkeypatch, sends)
+
+    now = _dt(2026, 8, 25, 0, 30)  # 24 days on, well outside the 7-day window
+    await cron._resolve_stale_days(db, SimpleNamespace(SUMMARY_EMAIL_TO=None), [_channel(["19:00"])], now.date(), now)
+
+    assert runs.docs[("2026-08-01", "histriphy")]["slots"]["19:00"]["state"] == cron._IMPORTING
+    assert sends == []
