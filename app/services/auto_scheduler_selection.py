@@ -15,7 +15,7 @@ from typing import Any
 from dateutil.parser import isoparse
 
 from app.models.video_source import SourceVideo
-from app.timezone import IST
+from app.timezone import IST, assume_utc
 
 # How long before a slot's scheduled time its cron pass runs.
 _RUN_LEAD = timedelta(hours=1)
@@ -87,12 +87,17 @@ def wait_exhausted(awaiting_since: datetime, now: datetime, max_wait_minutes: in
 
 
 def _as_datetime(value: Any) -> datetime | None:
-    """Coerce a Mongo datetime or ISO string to a datetime; ``None`` if absent/bad."""
+    """Coerce a Mongo datetime or ISO string to an *aware* datetime; ``None`` if absent/bad.
+
+    Always aware, because these values get compared against each other and against
+    ``_FAR_FUTURE``: mixing one naive value into that comparison raises TypeError
+    rather than sorting wrongly, so normalising here is what keeps the picks safe.
+    """
     if isinstance(value, datetime):
-        return value
+        return assume_utc(value)
     if isinstance(value, str):
         try:
-            return isoparse(value)
+            return assume_utc(isoparse(value))
         except (ValueError, TypeError):
             return None
     return None
@@ -102,10 +107,7 @@ def _local_date(value: Any) -> date | None:
     dt = _as_datetime(value)
     if dt is None:
         return None
-    # Naive timestamps from Mongo are stored UTC; compare in IST like the rest of
-    # the app so "today" means the operator's day.
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=IST)
+    # Compare in IST like the rest of the app, so "today" means the operator's day.
     return dt.astimezone(IST).date()
 
 

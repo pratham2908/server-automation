@@ -13,6 +13,18 @@ def now_ist() -> datetime:
     return datetime.now(IST)
 
 
+def assume_utc(dt: datetime) -> datetime:
+    """Return ``dt`` timezone-aware, treating a naive value as UTC.
+
+    MongoDB hands back naive datetimes that are UTC. Relabelling one as IST
+    instead of converting it shifts the instant 5h30m into the past, which reads
+    as "this happened long ago" — enough to make a wait look already exhausted on
+    its first check. Every naive timestamp entering a time comparison goes
+    through here.
+    """
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 def to_ist_iso(dt: datetime | str | None) -> str | None:
     """Convert a datetime (or ISO string) to IST (GMT+5:30) and return ISO format string.
 
@@ -28,7 +40,4 @@ def to_ist_iso(dt: datetime | str | None) -> str | None:
         except (ValueError, TypeError):
             return None  # Return None if unparseable
 
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    ist_dt = dt.astimezone(IST)
-    return ist_dt.isoformat()
+    return assume_utc(dt).astimezone(IST).isoformat()

@@ -54,7 +54,7 @@ from app.services.schedule_operation import (
     schedule_single_video_instagram,
 )
 from app.services.video_source_service import MAX_PAGE_LIMIT, VideoSourceService
-from app.timezone import IST, now_ist
+from app.timezone import IST, assume_utc, now_ist
 
 logger = get_logger(__name__)
 
@@ -72,6 +72,11 @@ _MAX_CATALOGUE_PAGES = 20
 # pass would otherwise fire a render each at the same app simultaneously.
 _MAX_CONCURRENT_GENERATIONS = 2
 
+# How many past days a rollover sweep looks at. A day left unresolved is almost
+# always the previous one — the scheduler was mid-wait when midnight passed.
+# Bounded so a restart after a long outage cannot email a month of history.
+_STALE_LOOKBACK_DAYS = 7
+
 # Slot states persisted on the run document.
 _PENDING = "pending"
 _SCHEDULED = "scheduled"
@@ -80,6 +85,11 @@ _GENERATING = "generating"  # a render was asked for; waiting for it to land
 _SKIPPED = "skipped"
 _FAILED = "failed"
 _TERMINAL = {_SCHEDULED, _SKIPPED, _FAILED}
+
+# Linked-channel entries only: the sibling exists but is not postable yet, so it
+# is worth looking at again on a later tick. Never a slot state — the slot itself
+# is already scheduled on the primary channel by then.
+_AWAITING = "awaiting"
 
 
 class _Timing:
@@ -204,6 +214,7 @@ async def _schedule_linked_siblings(
     channel: dict[str, Any],
     video_doc: dict[str, Any],
     schedule_at: datetime,
+    now: datetime,
 ) -> list[dict[str, Any]]:
     """Schedule this video's sibling records on the channels linked to this one.
 
@@ -216,7 +227,9 @@ async def _schedule_linked_siblings(
     the linked channel would post unrelated content at the primary's slot.
 
     Every outcome is returned, including the misses, so the daily summary can say
-    a linked channel was skipped rather than quietly omitting it.
+    a linked channel was skipped rather than quietly omitting it. A sibling that is
+    merely not ready *yet* comes back as ``awaiting`` rather than skipped, because
+    ``_recheck_linked`` gets to try it again — see that function for why.
     """
     from app.services.channel_group_service import ChannelGroupService
 
@@ -241,9 +254,14 @@ async def _schedule_linked_siblings(
             entry.update(state=_SKIPPED, reason="no linked copy of this video on that channel")
         elif sibling.get("status") != "ready":
             # Usually still analysing: packaging writes its title, and a video is
-            # not postable before that lands. Reported, not retried — the next
-            # video's slot will find it ready.
-            entry.update(state=_SKIPPED, reason=f"linked copy is '{sibling.get('status')}', not ready")
+            # not postable before that lands. Held open rather than abandoned, so a
+            # later tick can post it once analysis finishes.
+            entry.update(
+                state=_AWAITING,
+                reason=f"linked copy is '{sibling.get('status')}', not ready",
+                video_id=sibling.get("video_id"),
+                awaiting_since=now,
+            )
         else:
             result = await _enqueue_for_channel(db, target, sibling, schedule_at)
             if result.get("status") == "queued":
@@ -265,12 +283,13 @@ async def _schedule_video(
     channel: dict[str, Any],
     video_doc: dict[str, Any],
     schedule_at: datetime,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Schedule a ready video, and its linked copies, at the same time."""
     result = await _enqueue_for_channel(db, channel, video_doc, schedule_at)
     if result.get("status") != "queued":
         return result
-    linked = await _schedule_linked_siblings(db, channel, video_doc, schedule_at)
+    linked = await _schedule_linked_siblings(db, channel, video_doc, schedule_at, now or now_ist())
     return {**result, "linked": linked} if linked else result
 
 
@@ -332,8 +351,7 @@ async def _recheck_imports(
         awaiting_since = data.get("awaiting_since")
         if not isinstance(awaiting_since, datetime):
             continue
-        if awaiting_since.tzinfo is None:
-            awaiting_since = awaiting_since.replace(tzinfo=IST)
+        awaiting_since = assume_utc(awaiting_since)
         # A slot that spent most of its hour rendering cannot then wait out the
         # standard recheck interval; imports themselves finish in a few minutes,
         # so watch those on the tick instead.
@@ -346,7 +364,7 @@ async def _recheck_imports(
         status = (video or {}).get("status")
 
         if status == "ready" and video is not None:
-            result = await _schedule_video(db, channel, video, _slot_schedule_at(slot, day, now))
+            result = await _schedule_video(db, channel, video, _slot_schedule_at(slot, day, now), now)
             if result.get("status") == "queued":
                 await _set_slot(db, day, channel_id, slot, {"state": _SCHEDULED, "linked": result.get("linked")})
                 logger.info("Auto-scheduler: imported video for %s slot %s is ready and scheduled", channel_id, slot)
@@ -361,6 +379,88 @@ async def _recheck_imports(
             await _set_slot(db, day, channel_id, slot, {"state": _FAILED, "reason": "import not ready in time"})
             logger.warning("Auto-scheduler: import for %s slot %s did not become ready in time", channel_id, slot)
         # else: still processing — leave it to recheck next tick.
+
+
+async def _recheck_linked(
+    db: AsyncIOMotorDatabase,
+    channel: dict[str, Any],
+    run_doc: dict[str, Any],
+    day: date,
+    now: datetime,
+    timing: _Timing,
+) -> None:
+    """Phase D: post a linked copy that was not ready when its primary went out.
+
+    The primary and its siblings are imported together but analysed separately, so
+    the sibling is regularly still analysing at the slot. Scheduling the group
+    one-shot meant that sibling was simply dropped — which is how a Geo Ranking
+    video reached YouTube and never reached Instagram, repeatedly.
+
+    Posting the linked copy late beats not posting it: the primary keeps its slot
+    and the sibling goes out a few minutes behind, as soon as it is postable. The
+    wait is bounded by the same ``max_wait_minutes`` as an import, so a sibling
+    that never lands still ends terminal and the day can close.
+    """
+    channel_id = channel["channel_id"]
+    for slot, data in (run_doc.get("slots") or {}).items():
+        links = (data or {}).get("linked") or []
+        if not any((link or {}).get("state") == _AWAITING for link in links):
+            continue
+
+        updated: list[dict[str, Any]] = []
+        changed = False
+        for link in links:
+            entry = dict(link or {})
+            if entry.get("state") != _AWAITING:
+                updated.append(entry)
+                continue
+
+            target = await db.channels.find_one({"channel_id": entry.get("channel_id")})
+            sibling = (
+                await db.videos.find_one({"channel_id": entry.get("channel_id"), "video_id": entry.get("video_id")})
+                if entry.get("video_id")
+                else None
+            )
+            status = (sibling or {}).get("status")
+            awaiting_since = entry.get("awaiting_since")
+            expired = isinstance(awaiting_since, datetime) and wait_exhausted(
+                assume_utc(awaiting_since), now, timing.max_wait_minutes
+            )
+
+            if status == "ready" and sibling is not None and target is not None:
+                result = await _enqueue_for_channel(db, target, sibling, _slot_schedule_at(slot, day, now))
+                if result.get("status") == "queued":
+                    entry.update(state=_SCHEDULED, reason=None)
+                    logger.info(
+                        "Auto-scheduler: linked channel %s became ready and was scheduled late for %s slot %s",
+                        entry.get("channel_id"),
+                        channel_id,
+                        slot,
+                    )
+                else:
+                    entry.update(state=_FAILED, reason=f"schedule failed: {result.get('status')}")
+                changed = True
+            elif status in ("queued", "scheduled", "published"):
+                # Scheduled by some other path (a manual post, the velocity booster)
+                # while we waited — the channel got its video, which is the point.
+                entry.update(state=_SCHEDULED, reason=None)
+                changed = True
+            elif target is None or sibling is None:
+                entry.update(state=_SKIPPED, reason="linked copy or channel disappeared while waiting")
+                changed = True
+            elif expired:
+                entry.update(state=_SKIPPED, reason=f"linked copy still '{status}' after waiting")
+                changed = True
+                logger.warning(
+                    "Auto-scheduler: linked copy on %s never became ready for %s slot %s",
+                    entry.get("channel_id"),
+                    channel_id,
+                    slot,
+                )
+            updated.append(entry)
+
+        if changed:
+            await _set_slot(db, day, channel_id, slot, {"linked": updated})
 
 
 async def _fill_pending_slots(
@@ -389,7 +489,7 @@ async def _fill_pending_slots(
 
         ready = pick_ready_video([v for v in ready_pool if v.get("video_id") not in used_ids])
         if ready is not None:
-            result = await _schedule_video(db, channel, ready, _slot_schedule_at(slot, day, now))
+            result = await _schedule_video(db, channel, ready, _slot_schedule_at(slot, day, now), now)
             ready_id = ready.get("video_id")
             if result.get("status") == "queued":
                 if ready_id:
@@ -620,6 +720,7 @@ async def process_channel(
     run_doc = await _run_doc(db, day, channel)
     await _recheck_imports(db, channel, run_doc, day, now, timing)
     await _recheck_generations(db, channel, service, run_doc, day, now)
+    await _recheck_linked(db, channel, run_doc, day, now, timing)
     # Re-read: the phases above move slots out of pending/in-flight states, and
     # filling decides what to do from the whole day's picture.
     run_doc = await _run_doc(db, day, channel)
@@ -631,22 +732,40 @@ async def process_channel(
 # ------------------------------------------------------------------
 
 
-def _all_slots_terminal(channels: list[dict[str, Any]], run_docs: dict[str, dict[str, Any]], now: datetime) -> bool:
+def _slot_has_awaiting_link(run_doc: dict[str, Any], slot: str) -> bool:
+    """Whether ``slot`` still has a linked copy we intend to try again."""
+    data = (run_doc.get("slots") or {}).get(slot) or {}
+    return any((link or {}).get("state") == _AWAITING for link in (data.get("linked") or []))
+
+
+def _all_slots_terminal(
+    channels: list[dict[str, Any]],
+    run_docs: dict[str, dict[str, Any]],
+    now: datetime,
+    day: date,
+) -> bool:
     """True when every enabled channel's every slot has reached a terminal state
-    and its time has passed — i.e. the day's work is finished."""
+    and its time has passed — i.e. ``day``'s work is finished.
+
+    ``day`` is passed rather than taken from ``now`` so a day resolved late (after
+    a rollover left work stranded) is judged against its own slot times.
+    """
     saw_a_slot = False
     for channel in channels:
         times = _schedule_times(channel)
         if not times:
             continue
-        states = _slot_states(run_docs.get(channel["channel_id"], {}))
+        run_doc = run_docs.get(channel["channel_id"], {})
+        states = _slot_states(run_doc)
         for slot in times:
             saw_a_slot = True
-            _run_at, schedule_at = slot_datetimes(slot, now.date())
+            _run_at, schedule_at = slot_datetimes(slot, day)
             if now < schedule_at:
                 return False  # a slot's time has not arrived yet
             if states.get(slot, _PENDING) not in _TERMINAL:
                 return False
+            if _slot_has_awaiting_link(run_doc, slot):
+                return False  # primary is out, a linked copy is still being retried
     return saw_a_slot
 
 
@@ -759,7 +878,7 @@ async def _maybe_send_summary(
         if doc:
             run_docs[channel["channel_id"]] = doc
 
-    if not _all_slots_terminal(channels, run_docs, now):
+    if not _all_slots_terminal(channels, run_docs, now, day):
         return
 
     key = _day_key(day)
@@ -792,6 +911,91 @@ async def _maybe_send_summary(
 
 
 # ------------------------------------------------------------------
+# Rollover recovery
+# ------------------------------------------------------------------
+
+# What a slot still in flight at midnight becomes. Every one is terminal: the
+# slot's time is long gone, so there is nothing left to wait for.
+_STALE_SLOT_RESOLUTIONS: dict[str, dict[str, str]] = {
+    _IMPORTING: {"state": _FAILED, "reason": "import not ready before the day ended"},
+    _GENERATING: {"state": _FAILED, "reason": "render not ready before the day ended"},
+    _PENDING: {"state": _SKIPPED, "reason": "slot passed with no video chosen"},
+}
+_STALE_FALLBACK = {"state": _FAILED, "reason": "left unresolved when the day ended"}
+
+
+async def _resolve_stale_days(
+    db: AsyncIOMotorDatabase,
+    settings: Settings,
+    channels: list[dict[str, Any]],
+    today: date,
+    now: datetime,
+) -> None:
+    """Close out days whose slots were still in flight when the day rolled over.
+
+    Every recheck phase works on *today's* run doc, so a slot still ``importing``
+    at midnight was never looked at again — it stayed non-terminal forever. And
+    because the summary refuses to send until every slot is terminal, that day's
+    email never arrived either: the one day that most needed explaining was the
+    one day that went unreported.
+
+    So each past day in the window is settled here, then offered to the summary.
+    ``_maybe_send_summary`` latches per date, so a day already reported is a
+    no-op and a day that was never reported gets its email late.
+    """
+    keys = {_day_key(today - timedelta(days=n)) for n in range(1, _STALE_LOOKBACK_DAYS + 1)}
+    docs = await db.auto_scheduler_runs.find({"date": {"$in": sorted(keys)}}).to_list(length=None)
+    if not docs:
+        return
+
+    times_by_channel = {c["channel_id"]: _schedule_times(c) for c in channels}
+    days: set[date] = set()
+    for doc in docs:
+        try:
+            day = date.fromisoformat(doc.get("date", ""))
+        except ValueError:
+            logger.warning("Auto-scheduler: run doc has an unparseable date %r, skipping", doc.get("date"))
+            continue
+        days.add(day)
+        channel_id = doc.get("channel_id") or ""
+        slots = doc.get("slots") or {}
+
+        for slot, data in slots.items():
+            state = (data or {}).get("state", _PENDING)
+            if state not in _TERMINAL:
+                patch = _STALE_SLOT_RESOLUTIONS.get(state, _STALE_FALLBACK)
+                await _set_slot(db, day, channel_id, slot, patch)
+                logger.warning(
+                    "Auto-scheduler: resolving stale %s slot %s on %s for %s", state, slot, doc.get("date"), channel_id
+                )
+            links = (data or {}).get("linked") or []
+            if any((link or {}).get("state") == _AWAITING for link in links):
+                await _set_slot(
+                    db,
+                    day,
+                    channel_id,
+                    slot,
+                    {
+                        "linked": [
+                            {**(link or {}), "state": _SKIPPED, "reason": "day ended before the linked copy was ready"}
+                            if (link or {}).get("state") == _AWAITING
+                            else (link or {})
+                            for link in links
+                        ]
+                    },
+                )
+
+        # A configured slot with no record at all on a day this channel *was* active
+        # blocks that day's summary just as a non-terminal one does.
+        for slot in times_by_channel.get(channel_id, []):
+            if slot not in slots:
+                await _set_slot(db, day, channel_id, slot, {"state": _SKIPPED, "reason": "no attempt recorded"})
+
+    for day in sorted(days):
+        await _maybe_send_summary(db, settings, channels, day, now)
+
+
+# ------------------------------------------------------------------
 # Tick loop
 # ------------------------------------------------------------------
 
@@ -808,6 +1012,10 @@ async def _tick(db: AsyncIOMotorDatabase) -> None:
     )
     if not channels:
         return
+
+    # Settle yesterday before touching today: a day left mid-flight at midnight can
+    # never resolve itself, and its summary is held hostage until it does.
+    await _resolve_stale_days(db, settings, channels, day, now)
 
     # Only do per-channel work once a slot is actually due, but always evaluate the
     # end-of-day summary so it fires even on a quiet day.
