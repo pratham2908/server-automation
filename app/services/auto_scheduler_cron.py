@@ -35,6 +35,7 @@ from app.logger import get_logger
 from app.services.auto_scheduler_selection import (
     GenerationCandidate,
     due_slots,
+    elapsed_seconds,
     generation_expired,
     may_request_generation,
     pending_action_slots,
@@ -265,7 +266,7 @@ async def _schedule_linked_siblings(
         else:
             result = await _enqueue_for_channel(db, target, sibling, schedule_at)
             if result.get("status") == "queued":
-                entry.update(state=_SCHEDULED, video_id=sibling.get("video_id"))
+                entry.update(state=_SCHEDULED, video_id=sibling.get("video_id"), scheduled_at=schedule_at)
                 logger.info(
                     "Auto-scheduler: also scheduled linked channel %s for %s",
                     target_id,
@@ -366,7 +367,13 @@ async def _recheck_imports(
         if status == "ready" and video is not None:
             result = await _schedule_video(db, channel, video, _slot_schedule_at(slot, day, now), now)
             if result.get("status") == "queued":
-                await _set_slot(db, day, channel_id, slot, {"state": _SCHEDULED, "linked": result.get("linked")})
+                await _set_slot(
+                    db,
+                    day,
+                    channel_id,
+                    slot,
+                    {"state": _SCHEDULED, "linked": result.get("linked"), "ready_at": now},
+                )
                 logger.info("Auto-scheduler: imported video for %s slot %s is ready and scheduled", channel_id, slot)
             else:
                 await _set_slot(
@@ -374,7 +381,7 @@ async def _recheck_imports(
                 )
         elif status in ("queued", "scheduled", "published"):
             # Already scheduled by some other path while we waited.
-            await _set_slot(db, day, channel_id, slot, {"state": _SCHEDULED})
+            await _set_slot(db, day, channel_id, slot, {"state": _SCHEDULED, "ready_at": now})
         elif wait_exhausted(awaiting_since, now, timing.max_wait_minutes):
             await _set_slot(db, day, channel_id, slot, {"state": _FAILED, "reason": "import not ready in time"})
             logger.warning("Auto-scheduler: import for %s slot %s did not become ready in time", channel_id, slot)
@@ -428,9 +435,10 @@ async def _recheck_linked(
             )
 
             if status == "ready" and sibling is not None and target is not None:
-                result = await _enqueue_for_channel(db, target, sibling, _slot_schedule_at(slot, day, now))
+                post_at = _slot_schedule_at(slot, day, now)
+                result = await _enqueue_for_channel(db, target, sibling, post_at)
                 if result.get("status") == "queued":
-                    entry.update(state=_SCHEDULED, reason=None)
+                    entry.update(state=_SCHEDULED, reason=None, scheduled_at=post_at)
                     logger.info(
                         "Auto-scheduler: linked channel %s became ready and was scheduled late for %s slot %s",
                         entry.get("channel_id"),
@@ -499,7 +507,7 @@ async def _fill_pending_slots(
                     day,
                     channel_id,
                     slot,
-                    {"state": _SCHEDULED, "video_id": ready_id, "linked": result.get("linked")},
+                    {"state": _SCHEDULED, "video_id": ready_id, "linked": result.get("linked"), "ready_at": now},
                 )
                 logger.info("Auto-scheduler: scheduled ready video for %s slot %s", channel_id, slot)
             else:
@@ -535,6 +543,7 @@ async def _fill_pending_slots(
                     "video_id": queued[0]["video_id"],
                     "source": source_name,
                     "awaiting_since": now,
+                    "import_started_at": now,
                 },
             )
             logger.info("Auto-scheduler: triggered import from %s for %s slot %s", source_name, channel_id, slot)
@@ -607,6 +616,10 @@ async def _try_generation(
         slot,
         {
             "state": _GENERATING,
+            # Kept beside awaiting_since, which the import phase overwrites: this
+            # is the only durable record of when the render was commissioned, and
+            # the summary measures the whole pipeline from it.
+            "generation_requested_at": now,
             "source": candidate.source_name,
             "source_id": candidate.source_id,
             "job_id": result.get("job_id") or "",
@@ -681,6 +694,7 @@ async def _recheck_generations(
                         "video_id": queued[0]["video_id"],
                         "source": picked_source_name,
                         "awaiting_since": now,
+                        "import_started_at": now,
                         # Imports run in well under three minutes, and this slot has
                         # already spent most of its hour rendering — so watch it on
                         # the tick rather than the standard recheck interval.
@@ -769,6 +783,44 @@ def _all_slots_terminal(
     return saw_a_slot
 
 
+def _slot_timing(data: dict[str, Any]) -> dict[str, float] | None:
+    """How long the system spent producing this slot's video, in seconds.
+
+    Answers "why did tonight's video only just make it", which is the question the
+    near-misses kept raising. Three stamps are laid down as the scheduler watches
+    the pipeline, so the phases are measured rather than guessed:
+
+    * ``render`` — from commissioning a render to the finished file appearing.
+    * ``import`` — the import itself plus the AI packaging that follows it, since
+      a video is not postable until its title lands.
+    * ``total`` — the two together, or just the import when we took a video the
+      source app already had.
+
+    ``None`` when the video came from the Ready pool: it was produced on an
+    earlier day, and reporting the days it sat waiting as "generation time" would
+    be worse than saying nothing.
+    """
+    requested = data.get("generation_requested_at")
+    import_started = data.get("import_started_at")
+    ready = data.get("ready_at")
+
+    render = elapsed_seconds(requested, import_started)
+    importing = elapsed_seconds(import_started, ready)
+    # Explicit None check, not ``or``: a genuine zero is a fact, not a missing value.
+    total = elapsed_seconds(requested, ready)
+    if total is None:
+        total = importing
+
+    if total is None:
+        return None
+    timing: dict[str, float] = {"total_seconds": total}
+    if render is not None:
+        timing["render_seconds"] = render
+    if importing is not None:
+        timing["import_seconds"] = importing
+    return timing
+
+
 def _assemble_summary(day: date, run_docs: dict[str, dict[str, Any]]) -> dict[str, Any]:
     scheduled: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -791,6 +843,7 @@ def _assemble_summary(day: date, run_docs: dict[str, dict[str, Any]]) -> dict[st
                             if (data or {}).get("from_generation")
                             else (data or {}).get("source")
                         ),
+                        "timing": _slot_timing(data or {}),
                     }
                 )
             elif state in (_SKIPPED, _FAILED):
@@ -814,7 +867,17 @@ def _assemble_summary(day: date, run_docs: dict[str, dict[str, Any]]) -> dict[st
                     "linked_to": name,
                 }
                 if link.get("state") == _SCHEDULED:
-                    scheduled.append({**row, "video_id": link.get("video_id", ""), "source": f"linked to {name}"})
+                    scheduled.append(
+                        {
+                            **row,
+                            "video_id": link.get("video_id", ""),
+                            "source": f"linked to {name}",
+                            # Same render and import as the primary — what differs is
+                            # how long this copy's own analysis held it up.
+                            "timing": _slot_timing(data or {}),
+                            "waited_seconds": elapsed_seconds(link.get("awaiting_since"), link.get("scheduled_at")),
+                        }
+                    )
                 else:
                     skipped.append({**row, "reason": link.get("reason", link.get("state", _SKIPPED))})
 

@@ -10,6 +10,7 @@ import app.services.auto_scheduler_selection as sel
 from app.models.video_source import SourceVideo
 from app.services.auto_scheduler_selection import (
     due_slots,
+    elapsed_seconds,
     parse_slot,
     pending_action_slots,
     pick_ready_video,
@@ -317,3 +318,29 @@ def test_as_datetime_is_always_aware_so_picks_cannot_raise():
         {"video_id": "aware", "status": "ready", "created_at": "2026-09-25T09:00:00+05:30"},
     ]
     assert pick_ready_video(videos)["video_id"] == "naive"  # 06:30 IST, the oldest
+
+
+def test_elapsed_seconds_spans_naive_and_aware_without_the_ist_skew():
+    """Mongo hands back naive UTC and the scheduler works in aware IST, so both
+    sides of a duration routinely have different awareness. Mixing them raises
+    TypeError; relabelling instead of converting would report a 5h30m error."""
+    started_naive = datetime(2026, 9, 24, 13, 3, 22)  # 18:33:22 IST, as stored
+    finished_aware = datetime(2026, 9, 24, 18, 42, 26, tzinfo=sel.IST)
+    assert elapsed_seconds(started_naive, finished_aware) == 544.0
+    # Same instants, both naive — the everyday case once both came from Mongo.
+    assert elapsed_seconds(started_naive, datetime(2026, 9, 24, 13, 12, 26)) == 544.0
+
+
+def test_elapsed_seconds_is_none_when_it_cannot_be_known():
+    now = datetime(2026, 9, 24, 13, 0, 0)
+    assert elapsed_seconds(None, now) is None
+    assert elapsed_seconds(now, None) is None
+    assert elapsed_seconds("not a date", now) is None
+    # Written out of order (a clock step, or a re-run): None beats "0s", which
+    # would read as an instant render.
+    assert elapsed_seconds(now, now - timedelta(seconds=30)) is None
+    assert elapsed_seconds(now, now) == 0.0  # genuinely simultaneous is still a fact
+
+
+def test_iso_strings_are_accepted_so_either_storage_shape_measures():
+    assert elapsed_seconds("2026-09-24T13:03:22", "2026-09-24T13:12:26") == 544.0

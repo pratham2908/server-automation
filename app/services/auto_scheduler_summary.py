@@ -6,7 +6,9 @@ stays trivially testable. The summary dict is assembled by the worker; shape::
     {
       "date": "2026-08-24",
       "scheduled": [{"channel_id", "channel_name"?, "channel_thumbnail"?,
-                     "slot", "video_title"?, "source"?}],
+                     "slot", "video_title"?, "source"?,
+                     "timing"?: {"total_seconds", "render_seconds"?, "import_seconds"?},
+                     "waited_seconds"?}],
       "skipped":   [{"channel_id", "channel_name"?, "channel_thumbnail"?,
                      "slot"?, "reason"}],
     }
@@ -48,6 +50,54 @@ class SummaryEmail(NamedTuple):
     subject: str
     text: str
     html: str
+
+
+def format_duration(seconds: float) -> str:
+    """A duration a person can read at a glance: ``48s``, ``9m 04s``, ``1h 12m``.
+
+    Seconds are dropped past the hour mark — nobody reading a digest cares that a
+    render took 1h 12m 09s — but kept below it, because the difference between a
+    40-second import and a 4-minute one is the whole story on a tight slot.
+    """
+    total = int(round(seconds))
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
+
+
+def _timing_phrase(entry: dict[str, Any]) -> str:
+    """The one-line timing note: ``Ready in 12m 30s (render 9m 04s + import 3m 26s)``.
+
+    Empty string when the video is untimed, so callers can concatenate it freely.
+
+    The split is only shown when a render was involved and both halves are known;
+    a bare total beats a breakdown that does not add up.
+    """
+    timing = entry.get("timing") or {}
+    total = timing.get("total_seconds")
+    if total is None:
+        # No ``source`` means nothing was imported or rendered for this slot — the
+        # video was already sitting in Ready, so there is no production time to
+        # report. Saying so beats a blank line that reads like a missing number.
+        # With a source but no stamps (a row scheduled before timing was recorded)
+        # we stay quiet rather than guess.
+        return "Picked from Ready" if not entry.get("source") else ""
+
+    phrase = f"Ready in {format_duration(float(total))}"
+    render = timing.get("render_seconds")
+    importing = timing.get("import_seconds")
+    if render is not None and importing is not None:
+        phrase += f" (render {format_duration(float(render))} + import {format_duration(float(importing))})"
+
+    # Only meaningful on a linked copy that was held back and posted late.
+    waited = entry.get("waited_seconds")
+    if waited:
+        phrase += f" · waited {format_duration(float(waited))} to be postable"
+    return phrase
 
 
 def _label(entry: dict[str, Any]) -> str:
@@ -107,12 +157,13 @@ def _row(entry: dict[str, Any], *, scheduled: bool) -> str:
         detail_style = f"font:600 13px/1.45 {_FONT};color:{_WARN};"
 
     source = entry.get("source")
-    source_line = (
-        f'<div style="font:400 12px/1.5 {_FONT};color:{_MUTED};padding-top:2px;">'
-        f"via {escape(str(source))}</div>"
-        if source
-        else ""
-    )
+    timing = _timing_phrase(entry) if scheduled else ""
+    # One muted line under the title carries both, so a row stays three lines tall
+    # however much we know about it.
+    meta = " · ".join(part for part in (f"via {escape(str(source))}" if source else "", escape(timing)) if part)
+    source_line = ""
+    if meta:
+        source_line = f'<div style="font:400 12px/1.5 {_FONT};color:{_MUTED};padding-top:2px;">{meta}</div>'
     slot_cell = (
         f'<td align="right" valign="top" style="padding:14px 18px 14px 8px;white-space:nowrap;">'
         f"{_pill(slot, _GOOD if scheduled else _WARN, _GOOD_BG if scheduled else _WARN_BG)}</td>"
@@ -211,6 +262,9 @@ def _format_text(summary: dict[str, Any]) -> str:
             source = f" via {entry['source']}" if entry.get("source") else ""
             title = entry.get("video_title") or "Untitled"
             lines.append(f"  - {_label(entry)} @ {entry.get('slot', '')} — {title}{source}")
+            timing = _timing_phrase(entry)
+            if timing:
+                lines.append(f"      {timing}")
     else:
         lines.append("  (none)")
 

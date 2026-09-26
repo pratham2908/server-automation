@@ -77,7 +77,14 @@ async def test_the_linked_copy_is_scheduled_at_the_same_time(monkeypatch):
 
     assert calls == [("geo_ig", "sib", _AT)]
     assert out == [
-        {"channel_id": "geo_ig", "channel_name": "Geo Ranking", "state": "scheduled", "video_id": "sib"}
+        {
+            "channel_id": "geo_ig",
+            "channel_name": "Geo Ranking",
+            "state": "scheduled",
+            "video_id": "sib",
+            # Recorded so the summary can tell an on-time copy from a late one.
+            "scheduled_at": _AT,
+        }
     ]
 
 
