@@ -15,6 +15,7 @@ from typing import Any
 from app.database import is_channel_paused, update_channel_task_status
 from app.logger import get_logger
 from app.services.errors import get_error_service
+from app.services.first_comment import post_and_record
 from app.services.publish_failure import build_failure_marker
 from app.services.schedule_operation import _build_instagram_caption
 from app.timezone import now_ist
@@ -116,6 +117,17 @@ async def _publish_one_reel(
         )
 
         await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
+
+        # The reel is live either way: a comment that fails to post is recorded
+        # on the video and retried later, never bounced back onto the publish.
+        if video_doc.get("first_comment"):
+            await post_and_record(
+                db=db,
+                post=instagram_service.post_comment,
+                channel_id=channel_id,
+                video_doc={**video_doc, "instagram_media_id": media_id},
+                platform="instagram",
+            )
 
         logger.success(
             "[Instagram] Auto-published reel '%s' (media_id=%s) for channel '%s'",

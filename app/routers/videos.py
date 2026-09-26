@@ -75,6 +75,14 @@ class ExpandChannelsRequest(BaseModel):
 
 class ScheduleRequest(BaseModel):
     scheduled_at: datetime | None = None
+    first_comment: str | None = Field(
+        None,
+        description="Comment to post from the channel's own account as soon as the video goes live",
+    )
+
+
+class CommentRequest(BaseModel):
+    message: str = Field(..., description="Comment text to post from the channel's own account")
 
 
 class SyncRequest(BaseModel):
@@ -448,7 +456,12 @@ async def schedule_video(
 ):
     """Schedule video(s) on the platform."""
     try:
-        return await service.schedule_video(channel_id, video_id, body.scheduled_at if body else None)
+        return await service.schedule_video(
+            channel_id,
+            video_id,
+            body.scheduled_at if body else None,
+            body.first_comment if body else None,
+        )
     except Exception as e:
         error_service = get_error_service(service.db)
         await error_service.log_error(
@@ -462,6 +475,29 @@ async def schedule_video(
         raise e
 
 
+@router.post("/{video_id}/comment")
+async def post_video_comment(
+    channel_id: str,
+    video_id: str,
+    body: CommentRequest,
+    service: VideoService = Depends(get_video_service),
+):
+    """Post a comment on a video already live on its platform."""
+    try:
+        return await service.post_video_comment(channel_id, video_id, body.message)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        error_service = get_error_service(service.db)
+        await error_service.log_error(
+            feature="Video Comment",
+            message=str(e),
+            exception=e,
+            context={"channel_id": channel_id, "video_id": video_id},
+        )
+        raise e
+
+
 @router.patch("/{video_id}/reschedule")
 async def reschedule_video(
     channel_id: str,
@@ -471,7 +507,7 @@ async def reschedule_video(
 ):
     """Reschedule a queued video."""
     try:
-        return await service.reschedule_video(channel_id, video_id, body.scheduled_at)
+        return await service.reschedule_video(channel_id, video_id, body.scheduled_at, body.first_comment)
     except Exception as e:
         error_service = get_error_service(service.db)
         await error_service.log_error(

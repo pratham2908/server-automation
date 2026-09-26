@@ -398,6 +398,22 @@ class InstagramService:
 
         return new_comments
 
+    def post_comment(self, media_id: str, message: str) -> str:
+        """Post a top-level comment on a media item we own.
+
+        Requires ``instagram_business_manage_comments`` (Instagram Login) or
+        ``instagram_manage_comments`` (Facebook Login). Returns the new
+        comment's id.
+
+        Note for callers hoping to *pin* this: Instagram has no API for that.
+        The IG Comment node supports only read, delete, and hide — pinning
+        exists solely as a manual action in the app. Posting first is the
+        closest thing available.
+        """
+        from typing import cast
+
+        return cast(str, self._post(f"{media_id}/comments", {"message": message}).get("id", ""))
+
     def reply_to_comment(self, comment_id: str, message: str) -> str:
         """Reply to a comment on an owned media item.
 
