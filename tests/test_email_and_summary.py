@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.auto_scheduler_summary import format_summary_email
+from app.services.auto_scheduler_summary import format_duration, format_summary_email
 from app.services.email_service import build_message, send_email
 
 
@@ -202,3 +202,99 @@ def test_the_html_is_self_contained():
     assert "<style" not in html
     assert "<script" not in html
     assert "class=" not in html
+
+
+# ------------------------------------------------------------------
+# per-video timing
+# ------------------------------------------------------------------
+#
+# The digest says what was posted; these say how long it took to make. That is the
+# question the near-misses kept raising — a video that made its slot by seconds
+# looks identical to a comfortable one until the time is on the page.
+
+
+def test_format_duration_reads_naturally_at_every_scale():
+    assert format_duration(0) == "0s"
+    assert format_duration(48) == "48s"
+    assert format_duration(59.4) == "59s"
+    # Seconds are kept below the hour: a 40s import and a 4m one are different stories.
+    assert format_duration(60) == "1m 00s"
+    assert format_duration(544) == "9m 04s"
+    assert format_duration(3599) == "59m 59s"
+    # ...and dropped past it, where they stop mattering.
+    assert format_duration(3600) == "1h 00m"
+    assert format_duration(4329) == "1h 12m"
+
+
+def _scheduled(**over):
+    row = {"channel_id": "geo", "channel_name": "Geo Ranking", "slot": "19:00", "video_title": "Raisi"}
+    row.update(over)
+    return {"date": "2026-09-24", "scheduled": [row], "skipped": []}
+
+
+def test_a_rendered_video_reports_its_total_and_the_split():
+    summary = _scheduled(
+        source="rendered by GeoRank renderer",
+        timing={"total_seconds": 750.0, "render_seconds": 544.0, "import_seconds": 206.0},
+    )
+    email = format_summary_email(summary)
+    for body in (email.text, email.html):
+        assert "Ready in 12m 30s" in body
+        assert "render 9m 04s" in body
+        assert "import 3m 26s" in body
+
+
+def test_a_split_that_is_only_half_known_shows_the_total_alone():
+    """A bare total beats a breakdown that does not add up."""
+    summary = _scheduled(source="GeoRank", timing={"total_seconds": 206.0, "import_seconds": 206.0})
+    email = format_summary_email(summary)
+    assert "Ready in 3m 26s" in email.text
+    assert "render" not in email.text
+
+
+def test_a_late_linked_copy_says_how_long_it_was_held_up():
+    """The Instagram gap in plain sight: the copy went out, and this is the lag."""
+    summary = _scheduled(
+        source="linked to Geo Ranking",
+        timing={"total_seconds": 750.0, "render_seconds": 544.0, "import_seconds": 206.0},
+        waited_seconds=372.0,
+    )
+    email = format_summary_email(summary)
+    for body in (email.text, email.html):
+        assert "waited 6m 12s to be postable" in body
+
+
+def test_an_on_time_copy_is_not_labelled_as_having_waited():
+    summary = _scheduled(source="linked to Geo Ranking", timing={"total_seconds": 750.0}, waited_seconds=0.0)
+    assert "waited" not in format_summary_email(summary).text
+
+
+def test_a_video_taken_from_ready_says_so_rather_than_showing_a_blank():
+    """It was produced on an earlier day, so reporting the days it sat waiting as
+    generation time would be worse than saying nothing — but silence reads like a
+    missing number, so the absence is named."""
+    summary = _scheduled(timing=None)
+    email = format_summary_email(summary)
+    assert "Picked from Ready" in email.text
+    assert "Ready in" not in email.text
+
+
+def test_an_untimed_import_row_stays_quiet_rather_than_guessing():
+    """Rows scheduled before timing was recorded have a source but no stamps."""
+    summary = _scheduled(source="GeoRank renderer", timing=None)
+    email = format_summary_email(summary)
+    assert "Picked from Ready" not in email.text
+    assert "Ready in" not in email.text
+    assert "via GeoRank renderer" in email.text  # the row itself still renders
+
+
+def test_timing_never_appears_on_a_skipped_row():
+    """A skipped slot has a reason, not a duration; the row shows the reason."""
+    summary = {
+        "date": "2026-09-24",
+        "scheduled": [],
+        "skipped": [{"channel_id": "geo", "slot": "19:00", "reason": "import not ready in time", "timing": None}],
+    }
+    email = format_summary_email(summary)
+    assert "import not ready in time" in email.text
+    assert "Picked from Ready" not in email.html

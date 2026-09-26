@@ -86,6 +86,22 @@ def wait_exhausted(awaiting_since: datetime, now: datetime, max_wait_minutes: in
     return now - awaiting_since >= timedelta(minutes=max_wait_minutes)
 
 
+def elapsed_seconds(start: Any, end: Any) -> float | None:
+    """Seconds between two stored timestamps, or ``None`` if either is missing/bad.
+
+    Both sides go through ``_as_datetime``, so a naive Mongo value and an aware one
+    can be compared without the 5h30m skew that relabelling would introduce. A
+    negative result means the two were written out of order (a clock step, or a
+    re-run); ``None`` is returned rather than a duration that reads as instant.
+    """
+    first = _as_datetime(start)
+    second = _as_datetime(end)
+    if first is None or second is None:
+        return None
+    seconds = (second - first).total_seconds()
+    return seconds if seconds >= 0 else None
+
+
 def _as_datetime(value: Any) -> datetime | None:
     """Coerce a Mongo datetime or ISO string to an *aware* datetime; ``None`` if absent/bad.
 

@@ -301,6 +301,7 @@ async def test_recheck_schedules_once_import_is_ready(monkeypatch):
 
     slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
     assert slot["state"] == cron._SCHEDULED
+    assert slot["ready_at"] == now  # what every duration is measured to
     assert scheduled == ["imp-1"]
 
 
@@ -535,6 +536,9 @@ async def test_nothing_to_import_asks_a_capable_source_to_render(monkeypatch):
     assert slot["state"] == cron._GENERATING
     assert slot["job_id"] == "job-1"
     assert service.requested == ["s-geo"]
+    # The only durable record of when the render was commissioned: the import
+    # phase overwrites awaiting_since with its own start.
+    assert slot["generation_requested_at"] == now
 
 
 @pytest.mark.asyncio
@@ -611,6 +615,7 @@ async def test_a_render_that_lands_is_imported_for_its_slot(monkeypatch):
     assert slot["video_id"] == "rendered-1"
     # Flagged so the import is watched on the tick, not the 35-minute recheck.
     assert slot["from_generation"] is True
+    assert slot["import_started_at"] == now  # end of the render leg, start of the import
     assert service.enqueued == [("s-geo", ["src-vid-1"])]
 
 
@@ -843,3 +848,119 @@ async def test_the_sweep_only_reaches_back_a_bounded_window(monkeypatch):
 
     assert runs.docs[("2026-08-01", "histriphy")]["slots"]["19:00"]["state"] == cron._IMPORTING
     assert sends == []
+
+
+# ------------------------------------------------------------------
+# Per-video timing
+# ------------------------------------------------------------------
+#
+# The stamps are laid down as the scheduler watches the pipeline, because nothing
+# else records them: `awaiting_since` is overwritten when the import starts, so
+# without `generation_requested_at` the render's start time is simply lost.
+
+
+def test_the_render_start_survives_the_import_overwriting_awaiting_since():
+    """The exact trap: both phases use ``awaiting_since`` for their own wait, so
+    the generation stamp has to live under its own key or it is gone."""
+    doc = {
+        "state": cron._IMPORTING,
+        "generation_requested_at": datetime(2026, 9, 24, 13, 3, 22),
+        "awaiting_since": datetime(2026, 9, 24, 13, 12, 26),  # overwritten by the import
+        "import_started_at": datetime(2026, 9, 24, 13, 12, 26),
+        "ready_at": datetime(2026, 9, 24, 13, 15, 52),
+    }
+    assert cron._slot_timing(doc) == {
+        "total_seconds": 750.0,
+        "render_seconds": 544.0,
+        "import_seconds": 206.0,
+    }
+
+
+def test_an_imported_video_is_timed_from_the_import_alone():
+    """Nothing was rendered, so there is no render leg — the total is the import."""
+    doc = {
+        "import_started_at": datetime(2026, 9, 24, 13, 12, 26),
+        "ready_at": datetime(2026, 9, 24, 13, 15, 52),
+    }
+    assert cron._slot_timing(doc) == {"total_seconds": 206.0, "import_seconds": 206.0}
+
+
+def test_a_ready_pool_video_has_no_production_time():
+    """It was produced on an earlier day. Reporting the days it sat waiting as
+    generation time would be actively misleading, so there is no timing at all."""
+    assert cron._slot_timing({"ready_at": datetime(2026, 9, 24, 13, 15, 52)}) is None
+    assert cron._slot_timing({}) is None
+
+
+def test_a_slot_still_in_flight_is_not_timed():
+    """No ``ready_at`` yet: the video is not finished, so neither is the number."""
+    assert cron._slot_timing({"import_started_at": datetime(2026, 9, 24, 13, 12, 26)}) is None
+
+
+@pytest.mark.asyncio
+async def test_the_pipeline_stamps_reach_the_summary_rows(monkeypatch):
+    """End to end over the assembler: what the slot recorded is what the email gets,
+    for the primary and for a linked copy posted late."""
+    req = datetime(2026, 9, 24, 13, 3, 22)
+    imp = req + timedelta(minutes=9, seconds=4)
+    ready = imp + timedelta(minutes=3, seconds=26)
+    run_docs = {
+        "geo": {
+            "channel_id": "geo",
+            "channel_name": "Geo Ranking",
+            "slots": {
+                "19:00": {
+                    "state": cron._SCHEDULED,
+                    "video_id": "v-yt",
+                    "source": "GeoRank renderer",
+                    "from_generation": True,
+                    "generation_requested_at": req,
+                    "import_started_at": imp,
+                    "ready_at": ready,
+                    "linked": [
+                        {
+                            "channel_id": "geo_ig",
+                            "state": cron._SCHEDULED,
+                            "video_id": "v-ig",
+                            "awaiting_since": ready,
+                            "scheduled_at": ready + timedelta(minutes=6, seconds=12),
+                        }
+                    ],
+                }
+            },
+        }
+    }
+    summary = cron._assemble_summary(date(2026, 9, 24), run_docs)
+
+    primary, linked = summary["scheduled"]
+    assert primary["timing"] == {"total_seconds": 750.0, "render_seconds": 544.0, "import_seconds": 206.0}
+    assert primary.get("waited_seconds") is None
+    # The linked copy shares the render and import; what differs is its own wait.
+    assert linked["timing"] == primary["timing"]
+    assert linked["waited_seconds"] == 372.0
+
+
+@pytest.mark.asyncio
+async def test_scheduling_a_ready_video_records_when_it_became_ready(monkeypatch):
+    """``ready_at`` is what every duration is measured to, so the fill path must
+    write it even though nothing was imported or rendered."""
+
+    async def fake_committed(db_, cid, day):
+        return []
+
+    async def fake_ready(db_, cid):
+        return [{"video_id": "pool-1", "status": "ready", "created_at": "2026-08-18T00:00:00+05:30"}]
+
+    async def fake_schedule(db_, channel, video_doc, schedule_at, now_=None):
+        return {"status": "queued"}
+
+    monkeypatch.setattr(cron, "_channel_videos_today", fake_committed)
+    monkeypatch.setattr(cron, "_ready_videos", fake_ready)
+    monkeypatch.setattr(cron, "_schedule_video", fake_schedule)
+
+    db = FakeDB()
+    now = _dt(2026, 8, 24, 18, 30)
+    await cron.process_channel(db, _channel(["19:00"]), service=None, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["ready_at"] == now
