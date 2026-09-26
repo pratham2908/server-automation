@@ -17,6 +17,7 @@ from typing import Any
 
 from app.logger import get_logger
 from app.services.errors import get_error_service
+from app.services.first_comment import PENDING, is_due, post_and_record
 from app.services.publish_failure import build_failure_marker
 from app.timezone import UTC, now_ist
 
@@ -111,6 +112,18 @@ async def _upload_one_video(
         )
 
         await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
+
+        # A video held for a future publishAt is private, and YouTube rejects a
+        # comment on a private video — that one waits for the sweep below. One
+        # publishing immediately can be commented on right now.
+        if video_doc.get("first_comment") and not publish_at_str:
+            await post_and_record(
+                db=db,
+                post=youtube_service.post_comment,
+                channel_id=channel_id,
+                video_doc={**video_doc, "youtube_video_id": yt_id},
+                platform="youtube",
+            )
 
         logger.success(
             "[YouTube] Uploaded '%s' (yt_id=%s) for channel '%s' scheduled for %s",
@@ -275,6 +288,50 @@ async def _poll_and_upload(db: Any, r2_service: Any) -> None:
         )
 
 
+async def _post_due_first_comments(db: Any) -> None:
+    """Post first comments for videos whose scheduled publish time has passed.
+
+    These are uploads that YouTube held private behind a ``publishAt``; the
+    comment could not go up at upload time. Driven off ``scheduled_at`` rather
+    than our own ``published`` status, which only moves when a sync happens to
+    run and would leave the comment hours late.
+    """
+    import app.main as main_app  # Lazy import to avoid circular dependency
+
+    now = now_ist()
+    pending = await db.videos.find(
+        {
+            "first_comment_status": PENDING,
+            "youtube_video_id": {"$ne": None},
+            "scheduled_at": {"$lte": now},
+        }
+    ).to_list(length=None)
+
+    for video_doc in pending:
+        channel_id = video_doc.get("channel_id", "")
+        if not is_due(video_doc, "youtube", now):
+            continue
+
+        if not main_app.youtube_service_manager:
+            return
+
+        yt_service = await main_app.youtube_service_manager.get_service(channel_id)
+        if not yt_service:
+            logger.warning(
+                "[FirstComment] No YouTube service for channel '%s' — will retry next poll",
+                channel_id,
+            )
+            continue
+
+        await post_and_record(
+            db=db,
+            post=yt_service.post_comment,
+            channel_id=channel_id,
+            video_doc=video_doc,
+            platform="youtube",
+        )
+
+
 async def run_youtube_uploader(db: Any, r2_service: Any) -> None:
     """Long-running loop that uploads queued YouTube videos every 5 minutes."""
     logger.info("[YouTube] YouTube uploader started (poll interval: %ds)", _POLL_INTERVAL_SECONDS)
@@ -282,6 +339,7 @@ async def run_youtube_uploader(db: Any, r2_service: Any) -> None:
     while True:
         try:
             await _poll_and_upload(db, r2_service)
+            await _post_due_first_comments(db)
         except asyncio.CancelledError:
             logger.info("[YouTube] YouTube uploader shutting down")
             break

@@ -24,6 +24,7 @@ from app.services.downloader import (
     download_youtube_video_to_r2,
 )
 from app.services.error_reporting import create_monitored_task, report_error
+from app.services.first_comment import pending_fields, platform_id_field, validate_comment
 from app.services.r2 import R2Service
 from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
 from app.services.schedule_operation import (
@@ -1310,7 +1311,11 @@ class VideoService:
         }
 
     async def schedule_video(
-        self, channel_id: str, video_id: str, scheduled_at: datetime | None = None
+        self,
+        channel_id: str,
+        video_id: str,
+        scheduled_at: datetime | None = None,
+        first_comment: str | None = None,
     ) -> dict[str, Any]:
 
         settings = get_settings()
@@ -1318,6 +1323,11 @@ class VideoService:
         if not channel:
             raise ValueError("Channel not found")
         platform = channel.get("platform", "youtube")
+        comment = validate_comment(first_comment, platform)
+        if comment and video_id.lower() == "all":
+            # One comment across a whole queue is far more likely to be a
+            # mistake than an intention, and it would be tedious to undo.
+            raise ValueError("A first comment can only be set when scheduling a single video")
         if video_id.lower() == "all":
             entries = (
                 await self.db.posting_queue.find({"channel_id": channel_id}).sort("position", 1).to_list(length=None)
@@ -1351,6 +1361,11 @@ class VideoService:
             raise ValueError("Not enough slots")
         res = []
         for v_doc, slot in zip(vids, slots, strict=False):
+            if comment:
+                fields = pending_fields(comment)
+                await self.db.videos.update_one({"_id": v_doc["_id"]}, {"$set": fields})
+                # The workers read the doc handed to them, not a re-fetch.
+                v_doc.update(fields)
             if platform == "youtube":
                 r = await enqueue_video_for_youtube(
                     db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot
@@ -1362,16 +1377,66 @@ class VideoService:
             res.append(r)
         return {"ok": True, "videos": res}
 
+    async def post_video_comment(self, channel_id: str, video_id: str, message: str) -> dict[str, Any]:
+        """Post a comment from the channel's own account on one of its videos.
+
+        Works on anything already live on the platform, whether or not it was
+        scheduled with a first comment — this is the manual equivalent.
+
+        Neither platform can pin a comment through its API, so an early comment
+        is as close as this gets.
+        """
+        channel = await self.db.channels.find_one({"channel_id": channel_id})
+        if not channel:
+            raise ValueError("Channel not found")
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+        if not video:
+            raise ValueError("Video not found")
+
+        platform = get_channel_platform(channel)
+        comment = validate_comment(message, platform)
+        if not comment:
+            raise ValueError("Comment is empty")
+
+        id_field = platform_id_field(platform)
+        platform_video_id = video.get(id_field) if id_field else None
+        if not platform_video_id:
+            raise ValueError(f"This video is not live on {platform} yet, so it cannot be commented on")
+
+        if platform == "youtube":
+            service = await self._get_youtube_service(channel_id)
+        else:
+            service = await self._get_instagram_service(channel_id)
+        if not service:
+            raise ChannelNotConnectedError(f"Channel '{channel_id}' is not connected to {platform}")
+
+        # Both platform clients are blocking, so they go off the event loop.
+        comment_id = await asyncio.to_thread(service.post_comment, platform_video_id, comment)
+        logger.success("Posted a comment on %s video '%s' (comment_id=%s)", platform, video_id, comment_id)
+        return {"ok": True, "video_id": video_id, "platform": platform, "comment_id": comment_id}
+
     async def reschedule_video(
-        self, channel_id: str, video_id: str, new_time: datetime | None = None
+        self,
+        channel_id: str,
+        video_id: str,
+        new_time: datetime | None = None,
+        first_comment: str | None = None,
     ) -> dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
             raise ValueError("Video not found")
         if video.get("status") != "queued":
             raise ValueError("Video not queued")
+        channel = await self.db.channels.find_one({"channel_id": channel_id})
+        platform = get_channel_platform(channel) if channel else "youtube"
+        comment = validate_comment(first_comment, platform)
         now = now_ist()
-        await self.db.videos.update_one({"_id": video["_id"]}, {"$set": {"scheduled_at": new_time, "updated_at": now}})
+        upd: dict[str, Any] = {"scheduled_at": new_time, "updated_at": now}
+        # Only touched when the caller says something about it: a reschedule that
+        # omits the field must not silently wipe a comment set when scheduling.
+        if first_comment is not None:
+            upd.update(pending_fields(comment))
+        await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
         await self.db.schedule_queue.update_one(
             {"channel_id": channel_id, "video_id": video_id}, {"$set": {"scheduled_at": new_time}}
         )

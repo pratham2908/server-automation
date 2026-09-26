@@ -636,6 +636,29 @@ class YouTubeService:
 
         return comments
 
+    def post_comment(self, youtube_video_id: str, text: str) -> str:
+        """Post a top-level comment on one of our own videos.
+
+        Requires the ``youtube.force-ssl`` scope, which this app already
+        requests. Returns the id of the new top-level comment.
+
+        The video has to be public: a comment on a video still private behind a
+        ``publishAt`` is rejected, which is why the caller posts only once the
+        scheduled time has passed.
+        """
+        response = self._execute(
+            self._youtube.commentThreads().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "videoId": youtube_video_id,
+                        "topLevelComment": {"snippet": {"textOriginal": text}},
+                    }
+                },
+            )
+        )
+        return cast(str, response["id"])
+
     def reply_to_comment(self, comment_id: str, text: str) -> str:
         """Post a reply to a top-level comment.
 
