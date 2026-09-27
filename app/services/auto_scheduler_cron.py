@@ -55,6 +55,7 @@ from app.services.schedule_operation import (
     schedule_single_video_instagram,
 )
 from app.services.video_source_service import MAX_PAGE_LIMIT, VideoSourceService
+from app.services.video_sources import TodaysVideo
 from app.timezone import IST, assume_utc, now_ist
 
 logger = get_logger(__name__)
@@ -478,6 +479,16 @@ async def _recheck_linked(
 _TodayOutcome = Literal["handled", "retry", "unsupported"]
 
 
+def _remark_patch(result: TodaysVideo) -> dict[str, Any]:
+    """The app's remark as a slot patch, or nothing at all.
+
+    Empty rather than ``{"remark": None}`` so a later, quieter answer cannot erase
+    what the app told us earlier in the same slot's life — the complaint arrives
+    once, on whichever poll happened to hear it, and has to survive to the email.
+    """
+    return {"remark": result.remark} if result.remark else {}
+
+
 async def _ask_todays_video(
     db: AsyncIOMotorDatabase,
     channel: dict[str, Any],
@@ -528,6 +539,8 @@ async def _ask_todays_video(
                 slot,
                 result.reason,
             )
+            if remark := _remark_patch(result):
+                await _set_slot(db, day, channel_id, slot, remark)
             return "retry"
 
         if result.state == "generating":
@@ -547,6 +560,7 @@ async def _ask_todays_video(
                     "via_today": True,
                     "last_polled_at": now,
                     "retry_after_seconds": result.retry_after_seconds,
+                    **_remark_patch(result),
                 },
             )
             logger.info(
@@ -574,6 +588,7 @@ async def _ask_todays_video(
                     "awaiting_since": now,
                     "import_started_at": now,
                     "via_today": True,
+                    **_remark_patch(result),
                 },
             )
             logger.info(
@@ -814,7 +829,7 @@ async def _poll_todays_video(
             return
 
     result = await service.todays_video(channel_id, source_id)
-    await _set_slot(db, day, channel_id, slot, {"last_polled_at": now})
+    await _set_slot(db, day, channel_id, slot, {"last_polled_at": now, **_remark_patch(result)})
 
     if result.state == "ready" and result.video_id:
         enqueued = await service.enqueue_import(channel_id, source_id, [result.video_id])
@@ -835,6 +850,7 @@ async def _poll_todays_video(
                     # import is watched on the tick rather than the recheck interval.
                     "from_generation": True,
                     "via_today": True,
+                    **_remark_patch(result),
                 },
             )
             logger.info(
@@ -1052,6 +1068,7 @@ def _slot_timing(data: dict[str, Any]) -> dict[str, float] | None:
 def _assemble_summary(day: date, run_docs: dict[str, dict[str, Any]]) -> dict[str, Any]:
     scheduled: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    remarks: list[dict[str, Any]] = []
     for doc in run_docs.values():
         name = doc.get("channel_name") or doc.get("channel_id")
         for slot, data in (doc.get("slots") or {}).items():
@@ -1084,6 +1101,21 @@ def _assemble_summary(day: date, run_docs: dict[str, dict[str, Any]]) -> dict[st
                     }
                 )
 
+            # The app complaining about itself. Kept top-level rather than tucked
+            # into a row: it is the one thing in this email that wants acting on,
+            # and a video can be posted perfectly while the app is still telling us
+            # something upstream went wrong.
+            if (data or {}).get("remark"):
+                remarks.append(
+                    {
+                        "channel_id": doc.get("channel_id"),
+                        "channel_name": name,
+                        "slot": slot,
+                        "source": (data or {}).get("source"),
+                        "remark": (data or {}).get("remark"),
+                    }
+                )
+
             # Linked channels post from the primary's slot, so they have no slot
             # row of their own. Without this they would post silently — the email
             # would say one channel was scheduled while two actually were.
@@ -1109,7 +1141,7 @@ def _assemble_summary(day: date, run_docs: dict[str, dict[str, Any]]) -> dict[st
                 else:
                     skipped.append({**row, "reason": link.get("reason", link.get("state", _SKIPPED))})
 
-    return {"date": _day_key(day), "scheduled": scheduled, "skipped": skipped}
+    return {"date": _day_key(day), "scheduled": scheduled, "skipped": skipped, "remarks": remarks}
 
 
 async def _enrich_summary(db: AsyncIOMotorDatabase, summary: dict[str, Any]) -> dict[str, Any]:

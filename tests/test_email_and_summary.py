@@ -298,3 +298,95 @@ def test_timing_never_appears_on_a_skipped_row():
     email = format_summary_email(summary)
     assert "import not ready in time" in email.text
     assert "Picked from Ready" not in email.html
+
+
+# ------------------------------------------------------------------
+# The app's remarks
+# ------------------------------------------------------------------
+#
+# Everything else in this digest records what happened. A remark means something
+# needs fixing at the other end — a format with no episode left to air keeps
+# falling back to a standard video silently and indefinitely, and every post looks
+# fine while it does. So it gets the top of the email and the only red on the page.
+
+_NO_EPISODE = "Scheduled format has no next episode to air (no ideated series) — serving the best available video."
+
+
+def _with_remarks(*remarks):
+    return {
+        "date": "2026-09-27",
+        "scheduled": [{"channel_id": "geo", "channel_name": "Geo Ranking", "slot": "19:00", "video_title": "Hormuz"}],
+        "skipped": [],
+        "remarks": list(remarks),
+    }
+
+
+def _remark(**over):
+    base = {"channel_id": "geo", "channel_name": "Geo Ranking", "slot": "19:00", "source": "GeoRank renderer"}
+    base.update(over)
+    return base
+
+
+def test_a_remark_is_announced_in_the_subject_line():
+    """Visible in the inbox list, before anything is opened."""
+    email = format_summary_email(_with_remarks(_remark(remark=_NO_EPISODE)))
+    assert email.subject.startswith("⚠️")
+    assert "1 remark" in email.subject
+
+
+def test_several_remarks_are_counted_and_pluralised():
+    email = format_summary_email(_with_remarks(_remark(remark="a"), _remark(remark="b", slot="21:00")))
+    assert "2 remarks" in email.subject
+
+
+def test_a_clean_day_keeps_the_plain_subject_and_shows_no_banner():
+    """The signal only works if a quiet day is visibly quiet."""
+    email = format_summary_email(_with_remarks())
+    assert email.subject == "Auto-scheduler: 1 scheduled, 0 skipped (2026-09-27)"
+    assert "⚠" not in email.subject
+    assert "from the app" not in email.html
+    assert "FROM THE APP" not in email.text
+
+
+def test_the_remark_appears_in_both_bodies_with_who_it_concerns():
+    email = format_summary_email(_with_remarks(_remark(remark=_NO_EPISODE)))
+    for body in (email.text, email.html):
+        assert "no next episode to air" in body
+        assert "Geo Ranking" in body
+        assert "19:00" in body
+        assert "GeoRank renderer" in body
+
+
+def test_the_banner_comes_before_the_counts_it_would_otherwise_hide_behind():
+    html = format_summary_email(_with_remarks(_remark(remark=_NO_EPISODE))).html
+    assert html.index("from the app") < html.index("Scheduled</div>")
+
+
+def test_the_banner_is_the_only_red_and_not_the_amber_used_for_a_skip():
+    """A skipped slot is amber; this is red, because it is the one thing asking the
+    reader to go and fix something."""
+    html = format_summary_email(_with_remarks(_remark(remark=_NO_EPISODE))).html
+    assert "#fee2e2" in html  # alert background
+    assert "#b91c1c" in html  # alert ink
+
+
+def test_a_remark_is_not_lost_when_the_video_posted_perfectly():
+    """The case a per-row note would hide: nothing was skipped, so the reader has
+    no reason to look past the counts — the banner has to reach them anyway."""
+    summary = _with_remarks(_remark(remark=_NO_EPISODE))
+    email = format_summary_email(summary)
+    assert summary["skipped"] == []
+    assert "no next episode to air" in email.text
+
+
+def test_a_remark_is_escaped_rather_than_trusted():
+    """It is text from another service, rendered into our HTML."""
+    html = format_summary_email(_with_remarks(_remark(remark="<script>alert(1)</script>"))).html
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_a_remark_without_a_channel_name_still_renders():
+    email = format_summary_email(_with_remarks({"channel_id": "geo", "slot": "19:00", "remark": "terse"}))
+    assert "terse" in email.text
+    assert "geo" in email.text

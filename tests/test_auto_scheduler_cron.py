@@ -1241,3 +1241,98 @@ async def test_a_transient_answer_while_waiting_keeps_waiting(monkeypatch):
     slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
     assert slot["state"] == cron._GENERATING
     assert slot["last_polled_at"] == now  # pacing advances even on a non-answer
+
+
+# ---------- the app's remarks reach the summary ----------
+#
+# The complaint arrives once, on whichever answer happened to carry it, and has to
+# survive every later quiet answer to reach the email.
+
+_REMARK = "Scheduled format has no next episode to air (no ideated series) — serving the best available video."
+
+
+@pytest.mark.asyncio
+async def test_a_remark_on_a_ready_answer_is_recorded_on_the_slot(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = _today_service(TodaysVideo(state="ready", video_id="r-1", remark=_REMARK))
+
+    now = _dt(2026, 8, 24, 18, 30)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    assert db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]["remark"] == _REMARK
+
+
+@pytest.mark.asyncio
+async def test_a_remark_is_kept_even_when_the_slot_only_stayed_pending(monkeypatch):
+    """An unavailable answer leaves the slot pending, but the complaint still stands."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = _today_service(TodaysVideo(state="unavailable", reason="later", remark=_REMARK))
+
+    now = _dt(2026, 8, 24, 18, 0)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._PENDING
+    assert slot["remark"] == _REMARK
+
+
+@pytest.mark.asyncio
+async def test_a_later_quiet_answer_does_not_erase_an_earlier_remark(monkeypatch):
+    """The trap: the app explains itself once, then the next poll says nothing. A
+    patch of {"remark": None} would wipe it before anyone read it."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    _seed_today_generating(db)
+    db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]["remark"] = _REMARK
+    service = _today_service(TodaysVideo(state="ready", video_id="r-2"))  # no remark this time
+
+    now = _dt(2026, 8, 24, 18, 20)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._IMPORTING
+    assert slot["remark"] == _REMARK
+
+
+def test_a_remark_is_assembled_top_level_not_buried_in_a_row():
+    """A video can post perfectly while the app is still complaining, so the remark
+    cannot live only on a scheduled or skipped row — nobody would look."""
+    run_docs = {
+        "geo": {
+            "channel_id": "geo",
+            "channel_name": "Geo Ranking",
+            "slots": {
+                "19:00": {
+                    "state": cron._SCHEDULED,
+                    "video_id": "v1",
+                    "source": "GeoRank renderer",
+                    "remark": _REMARK,
+                }
+            },
+        }
+    }
+    summary = cron._assemble_summary(date(2026, 8, 24), run_docs)
+
+    assert summary["skipped"] == []
+    assert summary["remarks"] == [
+        {
+            "channel_id": "geo",
+            "channel_name": "Geo Ranking",
+            "slot": "19:00",
+            "source": "GeoRank renderer",
+            "remark": _REMARK,
+        }
+    ]
+
+
+def test_a_day_with_nothing_to_complain_about_assembles_no_remarks():
+    run_docs = {
+        "geo": {
+            "channel_id": "geo",
+            "channel_name": "Geo Ranking",
+            "slots": {"19:00": {"state": cron._SCHEDULED, "video_id": "v1"}},
+        }
+    }
+    assert cron._assemble_summary(date(2026, 8, 24), run_docs)["remarks"] == []

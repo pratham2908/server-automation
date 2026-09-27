@@ -16,7 +16,12 @@ from pydantic import ValidationError
 import app.services.video_sources.base as base_module
 from app.models.video_source import GenerationConfig, GeoRankConfig, VideoSource, VidForgeConfig
 from app.services.video_source_service import parse_source, to_public
-from app.services.video_sources import SourceUnavailableError, adapter_for, known_kinds
+from app.services.video_sources import (
+    SourceUnavailableError,
+    adapter_for,
+    is_noteworthy_remark,
+    known_kinds,
+)
 from app.services.video_sources.base import (
     GENERATION_ATTEMPTS,
     GENERATION_CREATE_TIMEOUT_S,
@@ -821,3 +826,104 @@ async def test_an_unavailable_answer_keeps_the_apps_reason():
 
     assert result.state == "unavailable"
     assert "topic" in (result.reason or "")
+
+
+# ------------------------------------------------- the app's remarks
+
+# GeoRank explains itself when it could not do what it meant to: it served a
+# standard video because today's scheduled format had no next episode, say. Those
+# explanations are the only part of the daily digest that asks the reader to go
+# and fix something, so they must not be lost — and a plain open day, which is
+# normal, must not be dressed up as one.
+
+
+# Verbatim from gerorank-visualizer-2 lib/videoFeed/today.ts.
+_OPEN_DAY = "No format is scheduled today — serving the best available video."
+_NO_EPISODE = "Scheduled format has no next episode to air (no ideated series) — serving the best available video."
+_RENDER_GONE = "Scheduled format's render was unavailable — serving the best available video."
+
+
+def test_an_open_day_is_not_a_complaint():
+    """Most days are open days. Surfacing this one would put a red banner on the
+    email every morning and teach the reader to ignore it."""
+    assert is_noteworthy_remark(_OPEN_DAY) is False
+
+
+def test_the_two_things_that_actually_went_wrong_are_complaints():
+    assert is_noteworthy_remark(_NO_EPISODE) is True
+    assert is_noteworthy_remark(_RENDER_GONE) is True
+
+
+def test_a_remark_nobody_has_seen_before_is_surfaced_not_swallowed():
+    """We match the benign case, not the problems. Listing the problems would mean
+    the next thing the app learns to report arrives silently."""
+    assert is_noteworthy_remark("The series ran out of episodes and nobody noticed.") is True
+    assert is_noteworthy_remark("Something entirely new.") is True
+
+
+def test_nothing_said_is_not_a_complaint():
+    assert is_noteworthy_remark(None) is False
+    assert is_noteworthy_remark("") is False
+    assert is_noteworthy_remark("   ") is False
+
+
+@pytest.mark.asyncio
+async def test_a_ready_video_can_still_carry_a_complaint():
+    """The post goes out fine and the app is still telling us something is wrong —
+    which is exactly the case a per-video row would hide."""
+    adapter = GeoRankAdapter()
+    _today_stub(
+        adapter,
+        _FakeResponse({"status": "ready", "source": "auto", "reason": _NO_EPISODE, "video": {"id": "r-1"}}),
+    )
+
+    result = await adapter.request_todays_video(georank_source())
+
+    assert result.state == "ready"
+    assert result.video_id == "r-1"
+    assert result.remark == _NO_EPISODE
+
+
+@pytest.mark.asyncio
+async def test_an_open_day_answer_carries_no_remark():
+    adapter = GeoRankAdapter()
+    _today_stub(
+        adapter,
+        _FakeResponse({"status": "ready", "source": "auto", "reason": _OPEN_DAY, "video": {"id": "r-2"}}),
+    )
+    assert (await adapter.request_todays_video(georank_source())).remark is None
+
+
+@pytest.mark.asyncio
+async def test_a_generating_answer_carries_a_complaint_too():
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, _FakeResponse({"status": "generating", "reason": _RENDER_GONE, "retryAfterSeconds": 180}))
+
+    result = await adapter.request_todays_video(georank_source())
+
+    assert result.state == "generating"
+    assert result.remark == _RENDER_GONE
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_answer_is_both_a_reason_and_a_remark():
+    """The app folds its explanation into the failure text there, so the same
+    string tells us why we are retrying and what went wrong upstream."""
+    adapter = GeoRankAdapter()
+    combined = f"{_NO_EPISODE} Couldn't pick a topic right now — retry shortly."
+    _today_stub(adapter, _FakeResponse({"status": "unavailable", "reason": combined}))
+
+    result = await adapter.request_todays_video(georank_source())
+
+    assert result.state == "unavailable"
+    assert result.reason and "retry shortly" in result.reason
+    assert result.remark == combined
+
+
+@pytest.mark.asyncio
+async def test_a_very_long_remark_is_trimmed_not_dropped():
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, _FakeResponse({"status": "generating", "reason": "x" * 900}))
+    result = await adapter.request_todays_video(georank_source())
+    assert result.remark is not None
+    assert len(result.remark) == 400

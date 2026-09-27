@@ -73,6 +73,29 @@ class TodaysVideo:
     # The app's own pacing hint for the next poll, honoured rather than guessed.
     retry_after_seconds: int | None = None
     reason: str | None = None
+    # The app telling us something it wanted to do did not happen — see
+    # ``is_noteworthy_remark``. Set only when it is worth a person's attention, so
+    # anything here belongs in the daily email rather than a log line.
+    remark: str | None = None
+
+
+# The one thing an app tells us that is not a complaint: no format was scheduled
+# for today, so a standard video is exactly right. Anything else it says — a
+# scheduled format with no next episode to air, a render that went missing, or
+# some case we have not seen yet — means something it meant to do did not happen.
+#
+# The match is against the BENIGN case on purpose. Listing the problems instead
+# would silently swallow the next one the app learns to report, and an unfamiliar
+# remark is precisely the kind worth reading. So: recognise "normal", surface the
+# rest. A reworded benign message would over-report, which is the safe direction.
+BENIGN_REMARK_MARKER = "no format is scheduled"
+
+
+def is_noteworthy_remark(remark: str | None) -> bool:
+    """Whether an app's remark is worth putting in front of a person."""
+    if not remark or not remark.strip():
+        return False
+    return BENIGN_REMARK_MARKER not in remark.lower()
 
 
 class SourceUnavailableError(Exception):
@@ -209,13 +232,21 @@ class SourceAdapter(abc.ABC):
 
         # The body's own status is authoritative; the HTTP code mirrors it.
         state = str(data.get("status") or "").strip().lower()
+
+        # The app explains itself when it could not do the thing it meant to — it
+        # served a standard video because today's scheduled format had no next
+        # episode, say. Only the noteworthy ones travel; a plain open day is normal
+        # and would be daily noise in the summary.
+        said = data.get("reason")
+        remark = str(said).strip()[:400] if said else None
+        remark = remark if is_noteworthy_remark(remark) else None
         if state == "ready":
             video = data.get("video")
             video_id = str(video.get("id")) if isinstance(video, dict) and video.get("id") else ""
             if not video_id:
                 raise SourceUnavailableError(f"'{source.name}' said ready but named no video")
             title = video.get("title") if isinstance(video, dict) else None
-            return TodaysVideo(state="ready", video_id=video_id, title=str(title) if title else None)
+            return TodaysVideo(state="ready", video_id=video_id, title=str(title) if title else None, remark=remark)
 
         if state == "generating":
             retry = data.get("retryAfterSeconds")
@@ -223,10 +254,17 @@ class SourceAdapter(abc.ABC):
                 state="generating",
                 title=str(data["title"]) if data.get("title") else None,
                 retry_after_seconds=int(retry) if isinstance(retry, int | float) and retry > 0 else None,
+                remark=remark,
             )
 
         if state == "unavailable":
-            return TodaysVideo(state="unavailable", reason=str(data.get("reason") or "the app is not ready")[:200])
+            # Here the app folds its explanation into the failure text, so the same
+            # string is both why we are retrying and, when noteworthy, the remark.
+            return TodaysVideo(
+                state="unavailable",
+                reason=str(data.get("reason") or "the app is not ready")[:200],
+                remark=remark,
+            )
 
         raise SourceUnavailableError(f"'{source.name}' answered an unknown today status {state!r}")
 
