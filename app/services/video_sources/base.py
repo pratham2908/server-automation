@@ -51,6 +51,30 @@ class SourcePage:
 GenerationState = Literal["pending", "completed", "failed"]
 
 
+# What came back from asking an app for the one video to publish now.
+#
+#   ready       — a finished render is waiting; ``video_id`` says which.
+#   generating  — nothing was ready, so the app started one. Poll again.
+#   unavailable — transient on the app's side (it could not pick a topic). Retry.
+#   unsupported — this app has no such endpoint; use the catalogue instead.
+TodaysVideoState = Literal["ready", "generating", "unavailable", "unsupported"]
+
+
+@dataclass(slots=True)
+class TodaysVideo:
+    """The app's answer to "what should we publish now?"."""
+
+    state: TodaysVideoState
+    # The app's own id for the render, set only when state is "ready". It is the
+    # same id the catalogue lists, which is what lets an ordinary import take it.
+    video_id: str | None = None
+    # What the app is making, when it told us. Only ever for a log or an email.
+    title: str | None = None
+    # The app's own pacing hint for the next poll, honoured rather than guessed.
+    retry_after_seconds: int | None = None
+    reason: str | None = None
+
+
 class SourceUnavailableError(Exception):
     """The app could not be reached, or refused us. Upstream, not our caller."""
 
@@ -122,6 +146,89 @@ class SourceAdapter(abc.ABC):
         render gains the capability from its config alone — no new adapter code
         beyond whatever authenticating it already required.
         """
+
+    # ------------------------------------------------------------------
+    # Today's video — optional capability: the app decides what to publish
+    # ------------------------------------------------------------------
+
+    def todays_video_path(self, source: VideoSource) -> str:
+        """Where to ask this app for the one video to publish now; "" if it cannot.
+
+        Base returns "" because this is the georank feed contract, not something
+        every app speaks. An adapter whose app serves it overrides this and reads
+        the path off its own config.
+        """
+        return ""
+
+    def supports_todays_video(self, source: VideoSource) -> bool:
+        return bool(self.todays_video_path(source))
+
+    async def request_todays_video(self, source: VideoSource) -> TodaysVideo:
+        """Ask the app what to publish now; it returns one ready or starts one.
+
+        This replaces two of our decisions with one of theirs. We used to scan the
+        catalogue for anything unimported and, finding nothing, ask for a render —
+        which meant we chose the video and they only chose the topic. The app knows
+        its own schedule (which format belongs to which day, what it has pre-made,
+        what is already in flight), so it is better placed to answer than we are.
+
+        Safe to call repeatedly: the contract guarantees the app reports work
+        already in flight rather than starting a second one, so a poll cannot fan
+        out spend. That guarantee is what lets the scheduler treat this as both the
+        request and the status check.
+        """
+        path = self.todays_video_path(source)
+        if not path:
+            return TodaysVideo(state="unsupported", reason="this app has no today endpoint")
+
+        try:
+            # The same generous budget as a create call, and for the same reason:
+            # when nothing is ready this request *starts* a video, drafting a topic
+            # with grounded model calls inline before it answers. A listing-sized
+            # 30s budget cut exactly that work off twice before.
+            resp = await self.authed_request(source, "GET", path, timeout=GENERATION_CREATE_TIMEOUT_S)
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code
+            if code in (404, 405, 501):
+                # Deployed without the endpoint. Not an error — the caller falls
+                # back to the catalogue, which is how this app used to work.
+                return TodaysVideo(state="unsupported", reason=f"HTTP {code} at {path}")
+            if code == 503:
+                # The app's documented "transient, retry shortly", and also what
+                # its gate answers when the feed is unconfigured. Both want a retry
+                # rather than a skipped slot.
+                return TodaysVideo(state="unavailable", reason=describe_http_error(exc))
+            raise
+
+        try:
+            data = resp.json()
+        except ValueError:
+            raise SourceUnavailableError(f"'{source.name}' answered the today call with no JSON") from None
+        if not isinstance(data, dict):
+            raise SourceUnavailableError(f"'{source.name}' answered with {type(data).__name__}, not an object")
+
+        # The body's own status is authoritative; the HTTP code mirrors it.
+        state = str(data.get("status") or "").strip().lower()
+        if state == "ready":
+            video = data.get("video")
+            video_id = str(video.get("id")) if isinstance(video, dict) and video.get("id") else ""
+            if not video_id:
+                raise SourceUnavailableError(f"'{source.name}' said ready but named no video")
+            title = video.get("title") if isinstance(video, dict) else None
+            return TodaysVideo(state="ready", video_id=video_id, title=str(title) if title else None)
+
+        if state == "generating":
+            retry = data.get("retryAfterSeconds")
+            return TodaysVideo(
+                state="generating",
+                title=str(data["title"]) if data.get("title") else None,
+                retry_after_seconds=int(retry) if isinstance(retry, int | float) and retry > 0 else None,
+            )
+
+        if state == "unavailable":
+            return TodaysVideo(state="unavailable", reason=str(data.get("reason") or "the app is not ready")[:200])
+
+        raise SourceUnavailableError(f"'{source.name}' answered an unknown today status {state!r}")
 
     # ------------------------------------------------------------------
     # Generation — optional capability, entirely config-driven

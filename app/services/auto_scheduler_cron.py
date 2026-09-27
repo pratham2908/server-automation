@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime, time, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -471,6 +471,135 @@ async def _recheck_linked(
             await _set_slot(db, day, channel_id, slot, {"linked": updated})
 
 
+# What asking an app for today's video did for a slot.
+#   handled     — the slot now holds an import or a started video; move on.
+#   retry       — nothing wrong, nothing yet; leave the slot pending for a later tick.
+#   unsupported — no app here speaks this contract; fall back to the catalogue.
+_TodayOutcome = Literal["handled", "retry", "unsupported"]
+
+
+async def _ask_todays_video(
+    db: AsyncIOMotorDatabase,
+    channel: dict[str, Any],
+    service: VideoSourceService,
+    day: date,
+    now: datetime,
+    slot: str,
+    asked: set[str],
+) -> _TodayOutcome:
+    """Ask a capable app what to publish now, and act on its answer.
+
+    This is one question in place of two decisions we used to make ourselves: scan
+    the catalogue for anything unimported, and failing that ask for a render. The
+    app owns a content calendar we cannot see — which format belongs to which day,
+    what it pre-made overnight, what is already rendering — so it answers better
+    than a catalogue scan can. We either import what it hands us or wait for what
+    it started.
+
+    ``asked`` carries the sources already asked in this pass. "Today's video" is
+    singular: a second slot asking again would be handed the same render and then
+    refused as a duplicate, so it waits a tick instead — by then the import ack has
+    retired that video and the app moves on to the next one.
+    """
+    channel_id = channel["channel_id"]
+    capable = False
+
+    for source in await service.list_sources(channel_id):
+        if not source.enabled:
+            continue
+
+        if source.source_id in asked:
+            capable = True
+            return "retry"
+
+        result = await service.todays_video(channel_id, source.source_id)
+        if result.state == "unsupported":
+            continue  # this app works the old way; try the next one
+        capable = True
+        asked.add(source.source_id)
+
+        if result.state == "unavailable":
+            # The app's own "transient, retry shortly". Leaving the slot pending
+            # costs nothing: the next tick asks again.
+            logger.info(
+                "Auto-scheduler: %s cannot answer for %s slot %s yet (%s)",
+                source.name,
+                channel_id,
+                slot,
+                result.reason,
+            )
+            return "retry"
+
+        if result.state == "generating":
+            await _set_slot(
+                db,
+                day,
+                channel_id,
+                slot,
+                {
+                    "state": _GENERATING,
+                    "source_id": source.source_id,
+                    "source": source.name,
+                    "awaiting_since": now,
+                    "generation_requested_at": now,
+                    # No job id: this contract has none. Re-asking the same endpoint
+                    # IS the status check, which is why it must be idempotent.
+                    "via_today": True,
+                    "last_polled_at": now,
+                    "retry_after_seconds": result.retry_after_seconds,
+                },
+            )
+            logger.info(
+                "Auto-scheduler: %s started today's video for %s slot %s%s",
+                source.name,
+                channel_id,
+                slot,
+                f" ({result.title})" if result.title else "",
+            )
+            return "handled"
+
+        # Ready: take exactly the video the app named, not whatever a scan liked.
+        enqueued = await service.enqueue_import(channel_id, source.source_id, [result.video_id or ""])
+        queued = enqueued.get("queued") or []
+        if queued:
+            await _set_slot(
+                db,
+                day,
+                channel_id,
+                slot,
+                {
+                    "state": _IMPORTING,
+                    "video_id": queued[0]["video_id"],
+                    "source": source.name,
+                    "awaiting_since": now,
+                    "import_started_at": now,
+                    "via_today": True,
+                },
+            )
+            logger.info(
+                "Auto-scheduler: importing today's video from %s for %s slot %s",
+                source.name,
+                channel_id,
+                slot,
+            )
+            return "handled"
+
+        # It named a video we cannot take — most often one we already hold, whose
+        # ack has not reached the app yet. Retry rather than burn the slot.
+        reason = (enqueued.get("skipped") or [{}])[0].get("reason", "import could not be queued")
+        logger.warning(
+            "Auto-scheduler: %s offered %s for %s slot %s but it could not be imported: %s",
+            source.name,
+            result.video_id,
+            channel_id,
+            slot,
+            reason,
+        )
+        return "retry"
+
+    return "retry" if capable else "unsupported"
+
+
 async def _fill_pending_slots(
     db: AsyncIOMotorDatabase,
     channel: dict[str, Any],
@@ -479,7 +608,13 @@ async def _fill_pending_slots(
     day: date,
     now: datetime,
 ) -> None:
-    """Phase A: for slots still needing a video, schedule from Ready, import, or render."""
+    """Phase A: for slots still needing a video, schedule from Ready, or get one from an app.
+
+    An app that can answer "what should we publish now?" is asked that and nothing
+    else — it returns a ready video or starts one. Only an app that cannot answer
+    falls back to the older two-step: scan its catalogue for something unimported,
+    and failing that ask it for a render.
+    """
     channel_id = channel["channel_id"]
     schedule_times = _schedule_times(channel)
 
@@ -490,6 +625,7 @@ async def _fill_pending_slots(
 
     ready_pool = await _ready_videos(db, channel_id)
     used_ids: set[str] = set()
+    asked_today: set[str] = set()
 
     for slot in to_fill:
         # Ensure the slot exists as pending before we act on it.
@@ -516,7 +652,13 @@ async def _fill_pending_slots(
                 )
             continue
 
-        # Ready is empty — trigger an import and re-check later.
+        # Ready is empty. Ask whoever can answer what to publish now; only fall
+        # through to the catalogue scan for an app that does not speak that.
+        outcome = await _ask_todays_video(db, channel, service, day, now, slot, asked_today)
+        if outcome != "unsupported":
+            continue
+
+        # Legacy path: trigger an import and re-check later.
         pick = await _pick_import_across_sources(service, channel_id)
         if pick is None:
             # Nothing finished anywhere: ask an app to render one, if any can
@@ -641,6 +783,87 @@ async def _try_generation(
     return None
 
 
+async def _poll_todays_video(
+    db: AsyncIOMotorDatabase,
+    channel: dict[str, Any],
+    service: VideoSourceService,
+    slot: str,
+    data: dict[str, Any],
+    day: date,
+    now: datetime,
+) -> None:
+    """A slot waiting on a video the app started: ask again until it is ready.
+
+    There is no job id to poll — this contract has none. Re-asking the same
+    endpoint is the status check, which works only because the app is idempotent
+    about it: work already in flight comes back as ``generating`` rather than
+    starting a second video. That is the guarantee the whole approach rests on.
+    """
+    channel_id = channel["channel_id"]
+    _run_at, schedule_at = slot_datetimes(slot, day)
+    source_id = str(data.get("source_id") or "")
+    source_name = str(data.get("source") or source_id)
+
+    # Honour the app's own pacing hint. Polling faster is safe but impolite, and
+    # the hint is the only thing it tells us about how long its pipeline takes —
+    # ignoring it would quietly break if it ever asked for a longer gap.
+    retry_after = data.get("retry_after_seconds")
+    if isinstance(retry_after, int | float) and retry_after > 0:
+        waited = elapsed_seconds(data.get("last_polled_at"), now)
+        if waited is not None and waited < float(retry_after):
+            return
+
+    result = await service.todays_video(channel_id, source_id)
+    await _set_slot(db, day, channel_id, slot, {"last_polled_at": now})
+
+    if result.state == "ready" and result.video_id:
+        enqueued = await service.enqueue_import(channel_id, source_id, [result.video_id])
+        queued = enqueued.get("queued") or []
+        if queued:
+            await _set_slot(
+                db,
+                day,
+                channel_id,
+                slot,
+                {
+                    "state": _IMPORTING,
+                    "video_id": queued[0]["video_id"],
+                    "source": source_name,
+                    "awaiting_since": now,
+                    "import_started_at": now,
+                    # This slot has already spent most of its hour waiting, so the
+                    # import is watched on the tick rather than the recheck interval.
+                    "from_generation": True,
+                    "via_today": True,
+                },
+            )
+            logger.info(
+                "Auto-scheduler: today's video from %s landed, importing for %s slot %s",
+                source_name,
+                channel_id,
+                slot,
+            )
+            return
+        logger.warning(
+            "Auto-scheduler: %s offered %s for %s slot %s but it could not be imported: %s",
+            source_name,
+            result.video_id,
+            channel_id,
+            slot,
+            (enqueued.get("skipped") or [{}])[0].get("reason", "unknown"),
+        )
+
+    if generation_expired(now, schedule_at):
+        await _set_slot(
+            db,
+            day,
+            channel_id,
+            slot,
+            {"state": _SKIPPED, "reason": f"{source_name} did not have today's video ready before the slot"},
+        )
+        logger.info("Auto-scheduler: today's video for %s slot %s missed the slot", channel_id, slot)
+
+
 async def _recheck_generations(
     db: AsyncIOMotorDatabase,
     channel: dict[str, Any],
@@ -658,6 +881,11 @@ async def _recheck_generations(
     channel_id = channel["channel_id"]
     for slot, data in (run_doc.get("slots") or {}).items():
         if (data or {}).get("state") != _GENERATING:
+            continue
+        if (data or {}).get("via_today"):
+            # Started through the today endpoint, so it is polled there rather than
+            # by job id and catalogue scan.
+            await _poll_todays_video(db, channel, service, slot, data or {}, day, now)
             continue
         _run_at, schedule_at = slot_datetimes(slot, day)
         source_id = data.get("source_id") or ""

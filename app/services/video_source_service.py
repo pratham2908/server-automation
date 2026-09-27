@@ -26,7 +26,7 @@ from app.models.video_source import (
     VideoSource,
     VideoSourcePublic,
 )
-from app.services.video_sources import GenerationState, adapter_for, describe_http_error
+from app.services.video_sources import GenerationState, TodaysVideo, adapter_for, describe_http_error
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -218,6 +218,39 @@ class VideoSourceService:
         return await self.db.source_generations.count_documents(
             {"channel_id": channel_id, "source_id": source_id, "created_at": {"$gte": since}}
         )
+
+    async def todays_video(self, channel_id: str, source_id: str) -> TodaysVideo:
+        """Ask a source what to publish now. Never raises.
+
+        An app that cannot be reached is reported as ``unavailable`` rather than
+        ``unsupported``: the difference decides whether the scheduler retries this
+        source next tick or gives up on the capability and scans the catalogue, and
+        a network blip must not be read as "this app has no such endpoint".
+        """
+        source = await self._require_source(channel_id, source_id)
+        adapter = adapter_for(source)
+        if not adapter.supports_todays_video(source):
+            return TodaysVideo(state="unsupported", reason=f"source '{source.name}' has no today endpoint")
+
+        try:
+            result = await adapter.request_todays_video(source)
+        except Exception as exc:
+            message = describe_http_error(exc)
+            await self._record_health(source_id, ok=False, error=message)
+            logger.warning("Video source %s could not answer for today: %s", source_id, message)
+            return TodaysVideo(state="unavailable", reason=message)
+
+        # An "unsupported" answer is the app telling us the route is absent, which
+        # says nothing bad about the source itself, so it is not a health failure.
+        if result.state != "unsupported":
+            await self._record_health(source_id, ok=True)
+        logger.info(
+            "Source %s says today is '%s'%s",
+            source.name,
+            result.state,
+            f" ({result.video_id})" if result.video_id else "",
+        )
+        return result
 
     async def request_generation(self, channel_id: str, source_id: str) -> dict[str, Any]:
         """Ask a source for one new render, recording the job. Never raises.
