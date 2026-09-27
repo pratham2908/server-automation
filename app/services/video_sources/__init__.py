@@ -1,6 +1,7 @@
 """Per-kind adapters for the content apps channels pull their videos from."""
 
 from app.services.video_sources.base import (
+    BENIGN_REMARK_MARKER,
     GenerationState,
     SourceAdapter,
     SourcePage,
@@ -8,11 +9,13 @@ from app.services.video_sources.base import (
     TodaysVideo,
     TodaysVideoState,
     describe_http_error,
+    is_noteworthy_remark,
     mask_secret,
 )
 from app.services.video_sources.registry import adapter_for, adapter_for_kind, known_kinds
 
 __all__ = [
+    "BENIGN_REMARK_MARKER",
     "GenerationState",
     "SourceAdapter",
     "SourcePage",
@@ -22,6 +25,7 @@ __all__ = [
     "adapter_for",
     "adapter_for_kind",
     "describe_http_error",
+    "is_noteworthy_remark",
     "known_kinds",
     "mask_secret",
 ]

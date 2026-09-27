@@ -11,6 +11,7 @@ stays trivially testable. The summary dict is assembled by the worker; shape::
                      "waited_seconds"?}],
       "skipped":   [{"channel_id", "channel_name"?, "channel_thumbnail"?,
                      "slot"?, "reason"}],
+      "remarks":   [{"channel_id", "channel_name"?, "slot", "source"?, "remark"}],
     }
 
 Two bodies come out: HTML for reading, and plain text for clients that refuse
@@ -37,6 +38,12 @@ _GOOD = "#15803d"
 _GOOD_BG = "#dcfce7"
 _WARN = "#b45309"
 _WARN_BG = "#fef3c7"
+# Louder than _WARN, and used for one thing only: the app telling us something it
+# meant to do did not happen. A skipped slot is amber; this is red, because it is
+# the only part of the digest that asks the reader to go and fix something.
+_ALERT = "#b91c1c"
+_ALERT_BG = "#fee2e2"
+_ALERT_EDGE = "#f19c9c"
 
 _FONT = (
     "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif"
@@ -200,6 +207,54 @@ def _section(title: str, entries: list[dict[str, Any]], *, scheduled: bool, empt
     return heading + "".join(rows)
 
 
+def _remark_rows(remarks: list[dict[str, Any]]) -> str:
+    """One block per remark: who it concerns, then the app's own words."""
+    blocks = []
+    for entry in remarks:
+        where = " · ".join(
+            escape(str(part))
+            for part in (entry.get("channel_name") or entry.get("channel_id"), entry.get("slot"), entry.get("source"))
+            if part
+        )
+        blocks.append(
+            f'<div style="padding-top:8px;">'
+            f'<div style="font:700 11px/1.4 {_FONT};letter-spacing:.06em;text-transform:uppercase;'
+            f'color:{_ALERT};opacity:.75;">{where}</div>'
+            f'<div style="font:600 14px/1.5 {_FONT};color:{_ALERT};padding-top:2px;">'
+            f"{escape(str(entry.get('remark') or ''))}</div>"
+            f"</div>"
+        )
+    return "".join(blocks)
+
+
+def _alert_banner(remarks: list[dict[str, Any]]) -> str:
+    """The app's complaints, first thing and impossible to mistake for a row.
+
+    Everything else in this digest is a record of what happened. This is the one
+    part that means something needs fixing at the other end — a format with no
+    episode left to air will keep falling back to a standard video, silently and
+    indefinitely, and the posts all look fine while it does. So it gets the top of
+    the email and the only red on the page.
+    """
+    if not remarks:
+        return ""
+    count = len(remarks)
+    heading = f"{count} remark{'s' if count > 1 else ''} from the app"
+    return (
+        f'<tr><td style="padding:14px 18px 0;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="background:{_ALERT_BG};border:1px solid {_ALERT_EDGE};border-radius:10px;">'
+        f'<tr><td style="padding:12px 14px 14px;">'
+        f'<div style="font:800 12px/1.4 {_FONT};letter-spacing:.08em;text-transform:uppercase;color:{_ALERT};">'
+        f"&#9888;&#65039; {escape(heading)}</div>"
+        f'<div style="font:400 12px/1.5 {_FONT};color:{_ALERT};opacity:.8;padding-top:3px;">'
+        f"Something the app meant to do did not happen. Posting carried on regardless."
+        f"</div>"
+        f"{_remark_rows(remarks)}"
+        f"</td></tr></table></td></tr>"
+    )
+
+
 def _stat(value: int, label: str, colour: str) -> str:
     return (
         f'<td width="50%" align="center" style="padding:14px 8px;">'
@@ -226,8 +281,10 @@ def _format_html(summary: dict[str, Any]) -> str:
         f'<div style="font:700 17px/1.3 {_FONT};color:{_INK};">Auto-scheduler</div>'
         f'<div style="font:400 13px/1.5 {_FONT};color:{_MUTED};padding-top:2px;">{day}</div>'
         f"</td></tr>"
+        # The app's complaints, before anything that could bury them.
+        + _alert_banner(summary.get("remarks", []))
         # Counts, so the whole day reads at a glance
-        f'<tr><td style="padding:14px 18px 0;">'
+        + f'<tr><td style="padding:14px 18px 0;">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'style="background:{_PAGE};border-radius:10px;"><tr>'
         f"{_stat(len(scheduled), 'Scheduled', _GOOD)}"
@@ -255,6 +312,24 @@ def _format_text(summary: dict[str, Any]) -> str:
     skipped = summary.get("skipped", [])
 
     lines: list[str] = [f"Auto-scheduler run for {day}", ""]
+
+    remarks = summary.get("remarks", [])
+    if remarks:
+        lines.append(f"!! {len(remarks)} REMARK{'S' if len(remarks) > 1 else ''} FROM THE APP")
+        lines.append("   Something the app meant to do did not happen. Posting carried on regardless.")
+        for entry in remarks:
+            where = " · ".join(
+                str(part)
+                for part in (
+                    entry.get("channel_name") or entry.get("channel_id"),
+                    entry.get("slot"),
+                    entry.get("source"),
+                )
+                if part
+            )
+            lines.append(f"   - {where}")
+            lines.append(f"     {entry.get('remark', '')}")
+        lines.append("")
 
     lines.append(f"Scheduled ({len(scheduled)}):")
     if scheduled:
@@ -285,5 +360,14 @@ def format_summary_email(summary: dict[str, Any]) -> SummaryEmail:
     day = summary.get("date", "")
     scheduled = summary.get("scheduled", [])
     skipped = summary.get("skipped", [])
-    subject = f"Auto-scheduler: {len(scheduled)} scheduled, {len(skipped)} skipped ({day})"
+    remarks = summary.get("remarks", [])
+
+    # The remark count and its warning sign go in the subject, so a day that needs
+    # attention is distinguishable in the inbox list without opening anything.
+    counts = f"{len(scheduled)} scheduled, {len(skipped)} skipped"
+    if remarks:
+        plural = "s" if len(remarks) > 1 else ""
+        subject = f"\u26a0\ufe0f Auto-scheduler: {counts}, {len(remarks)} remark{plural} ({day})"
+    else:
+        subject = f"Auto-scheduler: {counts} ({day})"
     return SummaryEmail(subject=subject, text=_format_text(summary), html=_format_html(summary))
