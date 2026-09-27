@@ -645,3 +645,179 @@ async def test_exhausted_retries_surface_the_last_server_error(slept):
 
     assert caught.value.response.status_code == 503
     assert calls["n"] == GENERATION_ATTEMPTS
+
+
+# ------------------------------------------------- today's video
+
+# The app decides what to publish now — one call in place of our catalogue scan
+# plus a render request. Three answers matter (ready / generating / unavailable)
+# and a fourth, "unsupported", is how a deployment without the route degrades
+# back to the old behaviour instead of failing the slot.
+
+
+def _today_stub(adapter, response=None, *, raises=None):
+    """Canned answer for the today call, recording the timeout it was given."""
+    calls = []
+
+    async def fake(source, method, path, *, json_body=None, timeout=None):
+        calls.append((method, path, timeout))
+        if raises is not None:
+            raise raises
+        return response
+
+    adapter.authed_request = fake  # type: ignore[method-assign]
+    return calls
+
+
+def _status_error(code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://geo.example.com/api/ext/videos/today")
+    return httpx.HTTPStatusError(
+        f"HTTP {code}", request=request, response=httpx.Response(code, request=request, text="nope")
+    )
+
+
+def test_the_today_capability_comes_from_the_feed_contract_not_every_app():
+    """georank-kind apps serve it by default; VidForge has no such route at all."""
+    assert GeoRankAdapter().supports_todays_video(georank_source()) is True
+    assert VidForgeAdapter().supports_todays_video(vidforge_source()) is False
+
+
+def test_blanking_the_path_turns_the_capability_off():
+    source = VideoSource(
+        source_id="s-geo",
+        channel_id="ch",
+        name="Renderer",
+        base_url="https://geo.example.com",
+        config=GeoRankConfig(api_key=SECRET, today_path=""),
+    )
+    assert GeoRankAdapter().supports_todays_video(source) is False
+
+
+@pytest.mark.asyncio
+async def test_a_ready_answer_names_the_video_to_import():
+    adapter = GeoRankAdapter()
+    calls = _today_stub(
+        adapter,
+        _FakeResponse(
+            {
+                "status": "ready",
+                "source": "format",
+                "formatId": "665f",
+                "video": {"id": "ec2render-abc123", "title": "Strait of Hormuz"},
+            }
+        ),
+    )
+
+    result = await adapter.request_todays_video(georank_source())
+
+    assert result.state == "ready"
+    assert result.video_id == "ec2render-abc123"
+    assert result.title == "Strait of Hormuz"
+    assert calls[0][:2] == ("GET", "/api/ext/videos/today")
+
+
+@pytest.mark.asyncio
+async def test_the_today_call_gets_the_generous_budget_not_the_listing_one():
+    """When nothing is ready this request *starts* a video, drafting a topic with
+    grounded model calls inline. A 30s listing budget cut exactly that off twice."""
+    adapter = GeoRankAdapter()
+    calls = _today_stub(adapter, _FakeResponse({"status": "generating", "retryAfterSeconds": 180}))
+
+    await adapter.request_todays_video(georank_source())
+
+    assert calls[0][2] == GENERATION_CREATE_TIMEOUT_S
+    assert calls[0][2] > REQUEST_TIMEOUT_S
+
+
+@pytest.mark.asyncio
+async def test_a_generating_answer_carries_the_apps_own_retry_pacing():
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, _FakeResponse({"status": "generating", "title": "Kashmir", "retryAfterSeconds": 240}))
+
+    result = await adapter.request_todays_video(georank_source())
+
+    assert result.state == "generating"
+    assert result.retry_after_seconds == 240
+    assert result.title == "Kashmir"
+    assert result.video_id is None
+
+
+@pytest.mark.asyncio
+async def test_a_nonsense_retry_hint_is_dropped_rather_than_obeyed():
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, _FakeResponse({"status": "generating", "retryAfterSeconds": 0}))
+    assert (await adapter.request_todays_video(georank_source())).retry_after_seconds is None
+
+    _today_stub(adapter, _FakeResponse({"status": "generating", "retryAfterSeconds": "soon"}))
+    assert (await adapter.request_todays_video(georank_source())).retry_after_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_a_503_is_transient_and_keeps_the_source_in_play():
+    """The app's documented "couldn't pick a topic, retry shortly" — and also what
+    its gate answers when the feed is unconfigured. Both want another try."""
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, raises=_status_error(503))
+
+    result = await adapter.request_todays_video(georank_source())
+
+    assert result.state == "unavailable"
+    assert result.reason
+
+
+@pytest.mark.asyncio
+async def test_a_404_means_the_app_predates_the_endpoint_not_that_it_is_broken():
+    """The distinction that keeps an older deployment working: unsupported sends
+    the scheduler back to the catalogue, unavailable would just retry forever."""
+    adapter = GeoRankAdapter()
+    for code in (404, 405, 501):
+        _today_stub(adapter, raises=_status_error(code))
+        result = await adapter.request_todays_video(georank_source())
+        assert result.state == "unsupported", code
+
+
+@pytest.mark.asyncio
+async def test_other_http_failures_still_surface():
+    """A 500 is neither transient-by-contract nor a missing route; swallowing it
+    would hide a broken app behind a quiet fallback."""
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, raises=_status_error(500))
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.request_todays_video(georank_source())
+
+
+@pytest.mark.asyncio
+async def test_ready_without_a_video_id_is_an_error_not_a_silent_skip():
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, _FakeResponse({"status": "ready", "video": {"title": "no id here"}}))
+    with pytest.raises(SourceUnavailableError):
+        await adapter.request_todays_video(georank_source())
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_status_is_refused_rather_than_guessed():
+    """If the contract grows a fourth state, failing loudly beats treating it as
+    'not ready' forever and quietly never publishing."""
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, _FakeResponse({"status": "queued"}))
+    with pytest.raises(SourceUnavailableError):
+        await adapter.request_todays_video(georank_source())
+
+
+@pytest.mark.asyncio
+async def test_a_non_json_body_is_refused():
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, _FakeResponse(None, json_error=True))
+    with pytest.raises(SourceUnavailableError):
+        await adapter.request_todays_video(georank_source())
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_answer_keeps_the_apps_reason():
+    adapter = GeoRankAdapter()
+    _today_stub(adapter, _FakeResponse({"status": "unavailable", "reason": "Couldn't pick a topic right now."}))
+
+    result = await adapter.request_todays_video(georank_source())
+
+    assert result.state == "unavailable"
+    assert "topic" in (result.reason or "")

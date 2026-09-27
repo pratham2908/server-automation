@@ -88,6 +88,13 @@ class GeoRankConfig(BaseModel):
 
     Cursor-paginated, authenticated with one static shared secret, and able to
     report and accept delivery state.
+
+    ``today_path`` is the newer half of that contract and the one the scheduler
+    prefers: rather than us scanning the catalogue for something unimported and
+    then asking for a render when we find nothing, we ask the app for the one
+    video to publish now and it decides — returning a ready one or starting one.
+    Defaulted to the contract's path so an existing source gains it without a
+    migration; an app that does not serve it answers 404 and we fall back.
     """
 
     kind: Literal["georank"] = "georank"
@@ -97,6 +104,11 @@ class GeoRankConfig(BaseModel):
     mark_imported_path: str = Field(
         "/api/ext/videos/{id}/imported",
         description="POSTed after ingest to close the pull loop; empty disables it",
+    )
+
+    today_path: str = Field(
+        "/api/ext/videos/today",
+        description="Ask the app for the one video to publish now; it answers with a ready one or starts making one. Empty ⇒ unsupported",
     )
 
     api_key: str = Field(..., description="Shared secret (never returned by the API)")

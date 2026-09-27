@@ -49,6 +49,23 @@ NOTIFY_BACKOFF_S = 2.0
 #
 # Note the vocabularies differ by design: a finished render is "ready" here and
 # "completed" in the pull feed, which is why both are per-source config.
+# The newer, preferred call (gerorank-visualizer-2: routes/externalVideos.ts,
+# lib/videoFeed/today.ts, docs/automation-today-contract.md):
+#
+#   GET /api/ext/videos/today
+#     200 {status:"ready", source, formatId?, video:{id, title, ...}}
+#     202 {status:"generating", source, title?, retryAfterSeconds}  + Retry-After
+#     503 {status:"unavailable", reason}
+#
+# It collapses "find something unimported in the catalogue" and "failing that, ask
+# for a render" into one question the app answers itself, using a content calendar
+# we cannot see: a scheduled day serves that day's format, an open day serves the
+# freshest standard video, and either branch starts one when the pool is empty. It
+# is idempotent across polls — work already in flight is reported, never restarted
+# — which is what lets the scheduler poll it as a status check too.
+#
+# The generation block below stays as the fallback for a deployment that predates
+# the endpoint and answers 404.
 GEORANK_AUTO_GENERATION: dict[str, Any] = {
     "create_path": "/api/videos",
     "create_body": {"auto": True},
@@ -83,6 +100,9 @@ class GeoRankAdapter(SourceAdapter):
 
     def supports_mark_imported(self, source: VideoSource) -> bool:
         return bool(self._cfg(source).mark_imported_path)
+
+    def todays_video_path(self, source: VideoSource) -> str:
+        return self._cfg(source).today_path
 
     async def authed_request(
         self,

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import app.services.auto_scheduler_cron as cron
+from app.services.video_sources import TodaysVideo
 from app.timezone import IST
 
 
@@ -187,6 +188,9 @@ async def test_empty_ready_triggers_import_and_marks_slot_importing(monkeypatch)
         return ("src1", "GeoRank", "sv-1")
 
     class Service:
+        async def list_sources(self, _cid):
+            return []  # no source speaks the today contract, so the catalogue is used
+
         async def enqueue_import(self, cid, source_id, ids):
             enqueue_calls.append((cid, source_id, ids))
             return {"queued": [{"video_id": "imp-1", "source_video_id": "sv-1"}], "skipped": []}
@@ -461,16 +465,24 @@ def _source(source_id="s-geo", name="GeoRank", eta=15, per_day=4, enabled=True, 
 class FakeService:
     """Stands in for VideoSourceService across the generation calls."""
 
-    def __init__(self, sources=None, already_today=0, state="pending", request_ok=True):
+    def __init__(self, sources=None, already_today=0, state="pending", request_ok=True, today=None):
         self._sources = sources if sources is not None else [_source()]
         self._already_today = already_today
         self._state = state
         self._request_ok = request_ok
+        # Default: an app with no today endpoint, so a test that says nothing about
+        # it exercises the legacy catalogue-then-render path it was written for.
+        self._today = today or TodaysVideo(state="unsupported")
         self.requested: list[str] = []
         self.enqueued: list[tuple[str, list[str]]] = []
+        self.today_calls: list[str] = []
 
     async def list_sources(self, _channel_id):
         return list(self._sources)
+
+    async def todays_video(self, _channel_id, source_id):
+        self.today_calls.append(source_id)
+        return self._today
 
     async def generations_today(self, _channel_id, _source_id, _since):
         return self._already_today
@@ -964,3 +976,268 @@ async def test_scheduling_a_ready_video_records_when_it_became_ready(monkeypatch
 
     slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
     assert slot["ready_at"] == now
+
+
+# ------------------------------------------------------------------
+# Today's video — the app decides, we publish
+# ------------------------------------------------------------------
+#
+# We used to make two decisions the app is better placed to make: scan its
+# catalogue for anything unimported, then failing that ask for a render. It owns a
+# content calendar we cannot see, so now we ask one question — "what should we
+# publish now?" — and it answers ready / generating / unavailable.
+
+
+def _today_service(today, **kw):
+    """A service whose single source answers the today call with `today`."""
+    return FakeService(today=today, **kw)
+
+
+@pytest.mark.asyncio
+async def test_a_ready_answer_imports_exactly_the_video_the_app_named(monkeypatch):
+    """Not "whatever a catalogue scan liked" — the app chose this one."""
+    db = FakeDB()
+    _no_ready(monkeypatch, pick=("s-other", "Other", "should-not-be-used"))
+    service = _today_service(TodaysVideo(state="ready", video_id="ec2render-abc", title="Hormuz"))
+
+    now = _dt(2026, 8, 24, 18, 30)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._IMPORTING
+    assert slot["via_today"] is True
+    assert slot["import_started_at"] == now
+    assert service.enqueued == [("s-geo", ["ec2render-abc"])]
+
+
+@pytest.mark.asyncio
+async def test_the_catalogue_scan_is_not_even_reached_for_a_capable_app(monkeypatch):
+    """The whole point of the change: one question instead of scanning 20 pages."""
+    db = FakeDB()
+    scanned = []
+
+    async def fake_pick(service, cid):
+        scanned.append(cid)
+        return ("s-geo", "GeoRank", "from-scan")
+
+    async def fake_committed(db_, cid, day):
+        return []
+
+    async def fake_ready(db_, cid):
+        return []
+
+    monkeypatch.setattr(cron, "_channel_videos_today", fake_committed)
+    monkeypatch.setattr(cron, "_ready_videos", fake_ready)
+    monkeypatch.setattr(cron, "_pick_import_across_sources", fake_pick)
+
+    service = _today_service(TodaysVideo(state="ready", video_id="named-by-app"))
+    now = _dt(2026, 8, 24, 18, 30)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    assert scanned == []
+    assert service.enqueued == [("s-geo", ["named-by-app"])]
+
+
+@pytest.mark.asyncio
+async def test_a_generating_answer_parks_the_slot_without_a_job_id(monkeypatch):
+    """This contract has no job id; re-asking the endpoint is the status check."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = _today_service(TodaysVideo(state="generating", title="Kashmir", retry_after_seconds=240))
+
+    now = _dt(2026, 8, 24, 18, 0)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._GENERATING
+    assert slot["via_today"] is True
+    assert slot["source_id"] == "s-geo"
+    assert slot["retry_after_seconds"] == 240
+    assert slot["generation_requested_at"] == now  # so the summary can time it
+    assert "job_id" not in slot
+
+
+@pytest.mark.asyncio
+async def test_the_old_render_request_is_never_fired_for_a_capable_app(monkeypatch):
+    """Both halves of the old fallback are replaced, not just the catalogue half."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = _today_service(TodaysVideo(state="generating"))
+
+    now = _dt(2026, 8, 24, 18, 0)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    assert service.requested == []
+
+
+@pytest.mark.asyncio
+async def test_a_transient_answer_leaves_the_slot_pending_for_the_next_tick(monkeypatch):
+    """A "couldn't pick a topic right now" must not burn the slot — an hour of
+    ticks remain, and the old code would have skipped it outright."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = _today_service(TodaysVideo(state="unavailable", reason="Couldn't pick a topic"))
+
+    now = _dt(2026, 8, 24, 18, 0)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._PENDING
+    assert service.requested == []  # and we did not fall back to asking for a render
+
+
+@pytest.mark.asyncio
+async def test_an_app_without_the_endpoint_still_uses_the_catalogue(monkeypatch):
+    """A deployment that predates the endpoint keeps working exactly as before."""
+    db = FakeDB()
+    _no_ready(monkeypatch, pick=("s-geo", "GeoRank", "sv-legacy"))
+    service = _today_service(TodaysVideo(state="unsupported"))
+
+    now = _dt(2026, 8, 24, 18, 30)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._IMPORTING
+    assert service.enqueued == [("s-geo", ["sv-legacy"])]
+    assert slot.get("via_today") is None
+
+
+@pytest.mark.asyncio
+async def test_two_slots_in_one_pass_do_not_both_claim_the_same_video(monkeypatch):
+    """Today's video is singular. The second slot would be handed the same render
+    and refused as a duplicate, so it waits for the ack to retire it instead."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = _today_service(TodaysVideo(state="ready", video_id="the-one"))
+
+    now = _dt(2026, 8, 24, 20, 30)  # both 18:00 and 21:00 are due
+    await cron.process_channel(
+        db, _channel(["18:00", "21:00"]), service=service, day=now.date(), now=now, timing=TIMING
+    )
+
+    slots = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]
+    assert slots["18:00"]["state"] == cron._IMPORTING
+    assert slots["21:00"]["state"] == cron._PENDING
+    assert service.enqueued == [("s-geo", ["the-one"])]  # asked for once, not twice
+
+
+@pytest.mark.asyncio
+async def test_a_video_the_app_offers_but_we_cannot_take_is_retried_not_skipped(monkeypatch):
+    """Usually a video we already hold whose ack has not reached the app yet."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+
+    class Service(FakeService):
+        async def enqueue_import(self, _cid, source_id, ids):
+            self.enqueued.append((source_id, list(ids)))
+            return {"queued": [], "skipped": [{"id": ids[0], "reason": "already imported"}]}
+
+    service = Service(today=TodaysVideo(state="ready", video_id="dupe"))
+    now = _dt(2026, 8, 24, 18, 30)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._PENDING
+
+
+# ---------- polling a slot the app is still working on ----------
+
+
+def _seed_today_generating(db, *, last_polled_at=None, retry_after_seconds=None, slot="19:00"):
+    db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")] = {
+        "date": "2026-08-24",
+        "channel_id": "histriphy",
+        "channel_name": "Histriphy",
+        "slots": {
+            slot: {
+                "state": cron._GENERATING,
+                "source": "GeoRank",
+                "source_id": "s-geo",
+                "via_today": True,
+                "awaiting_since": _dt(2026, 8, 24, 18, 0),
+                "generation_requested_at": _dt(2026, 8, 24, 18, 0),
+                "last_polled_at": last_polled_at,
+                "retry_after_seconds": retry_after_seconds,
+            }
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_polling_imports_the_video_once_the_app_has_it(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    _seed_today_generating(db)
+    service = _today_service(TodaysVideo(state="ready", video_id="ec2render-done"))
+
+    now = _dt(2026, 8, 24, 18, 20)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._IMPORTING
+    assert slot["video_id"] == "rendered-1"
+    # Watched on the tick, not the 35-minute recheck: the slot already spent its hour.
+    assert slot["from_generation"] is True
+    assert service.enqueued == [("s-geo", ["ec2render-done"])]
+
+
+@pytest.mark.asyncio
+async def test_polling_respects_the_apps_own_retry_pacing(monkeypatch):
+    """Polling faster is safe but impolite, and the hint is the only thing the app
+    tells us about its pipeline — ignoring it would break if it asked for longer."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    _seed_today_generating(db, last_polled_at=_dt(2026, 8, 24, 18, 10), retry_after_seconds=600)
+    service = _today_service(TodaysVideo(state="ready", video_id="too-soon-to-see"))
+
+    now = _dt(2026, 8, 24, 18, 15)  # only 5 minutes since the last poll, of 10
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    assert service.today_calls == []  # not asked at all
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._GENERATING
+
+
+@pytest.mark.asyncio
+async def test_polling_resumes_once_the_pacing_gap_has_passed(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    _seed_today_generating(db, last_polled_at=_dt(2026, 8, 24, 18, 5), retry_after_seconds=180)
+    service = _today_service(TodaysVideo(state="ready", video_id="now-visible"))
+
+    now = _dt(2026, 8, 24, 18, 10)  # five minutes on, past the three-minute gap
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    assert service.today_calls == ["s-geo"]
+    assert db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]["state"] == cron._IMPORTING
+
+
+@pytest.mark.asyncio
+async def test_a_video_that_misses_its_slot_ends_terminal(monkeypatch):
+    """Unbounded waiting would hold the day's summary open forever."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    _seed_today_generating(db)
+    service = _today_service(TodaysVideo(state="generating"))
+
+    now = _dt(2026, 8, 24, 19, 5)  # the 19:00 slot has passed
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._SKIPPED
+    assert "before the slot" in slot["reason"]
+
+
+@pytest.mark.asyncio
+async def test_a_transient_answer_while_waiting_keeps_waiting(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    _seed_today_generating(db)
+    service = _today_service(TodaysVideo(state="unavailable", reason="topic unavailable"))
+
+    now = _dt(2026, 8, 24, 18, 30)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._GENERATING
+    assert slot["last_polled_at"] == now  # pacing advances even on a non-answer

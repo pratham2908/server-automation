@@ -5,6 +5,8 @@ from app.services.video_sources.base import (
     SourceAdapter,
     SourcePage,
     SourceUnavailableError,
+    TodaysVideo,
+    TodaysVideoState,
     describe_http_error,
     mask_secret,
 )
@@ -15,6 +17,8 @@ __all__ = [
     "SourceAdapter",
     "SourcePage",
     "SourceUnavailableError",
+    "TodaysVideo",
+    "TodaysVideoState",
     "adapter_for",
     "adapter_for_kind",
     "describe_http_error",
