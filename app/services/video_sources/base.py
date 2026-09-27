@@ -88,14 +88,22 @@ class TodaysVideo:
 # would silently swallow the next one the app learns to report, and an unfamiliar
 # remark is precisely the kind worth reading. So: recognise "normal", surface the
 # rest. A reworded benign message would over-report, which is the safe direction.
-BENIGN_REMARK_MARKER = "no format is scheduled"
+BENIGN_REMARK_PREFIX = "no format is scheduled"
 
 
 def is_noteworthy_remark(remark: str | None) -> bool:
-    """Whether an app's remark is worth putting in front of a person."""
+    """Whether an app's remark is worth putting in front of a person.
+
+    Anchored at the START of the string rather than searched for anywhere in it,
+    because the app builds this message as "which branch I took" followed by an
+    optional "and here is what then failed". Only the opening clause says whether
+    a scheduled format was missed, so only the opening clause can clear a remark
+    as routine — a complaint that merely mentions scheduling further along still
+    gets read out.
+    """
     if not remark or not remark.strip():
         return False
-    return BENIGN_REMARK_MARKER not in remark.lower()
+    return not remark.strip().lower().startswith(BENIGN_REMARK_PREFIX)
 
 
 class SourceUnavailableError(Exception):

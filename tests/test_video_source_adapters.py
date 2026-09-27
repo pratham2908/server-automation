@@ -861,6 +861,27 @@ def test_a_remark_nobody_has_seen_before_is_surfaced_not_swallowed():
     assert is_noteworthy_remark("Something entirely new.") is True
 
 
+def test_only_the_opening_clause_can_clear_a_remark_as_routine():
+    """The app writes "which branch I took" then optionally "what then failed", so
+    a complaint that merely mentions scheduling further along is still a complaint.
+    Searching the whole string for the benign phrase would have hidden this one."""
+    assert is_noteworthy_remark("Series exhausted, and no format is scheduled either.") is True
+
+
+def test_the_benign_opening_still_clears_when_a_transient_failure_follows_it():
+    """An open day that also could not pick a topic: the fallback was correct, and
+    if the failure persists the slot's own skip reason reports it."""
+    combined = (
+        "No format is scheduled today — serving the best available video. "
+        "Couldn't pick a topic right now — retry shortly."
+    )
+    assert is_noteworthy_remark(combined) is False
+
+
+def test_surrounding_whitespace_does_not_turn_a_routine_day_into_an_alert():
+    assert is_noteworthy_remark("   No format is scheduled today — serving the best available video.  ") is False
+
+
 def test_nothing_said_is_not_a_complaint():
     assert is_noteworthy_remark(None) is False
     assert is_noteworthy_remark("") is False
