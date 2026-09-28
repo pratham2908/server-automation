@@ -754,6 +754,154 @@ class InstagramService:
         return self.publish_container(ig_user_id, cid)
 
     # ------------------------------------------------------------------
+    # Publishing (image / carousel / story posts)
+    #
+    # Each call below creates or reads exactly one thing and returns at once —
+    # no polling. The post publisher persists every container id it gets back
+    # and checks status on its next tick, so a slow video or a restart resumes
+    # instead of creating a second container.
+    # ------------------------------------------------------------------
+
+    def _create_container(self, ig_user_id: str, params: dict[str, str]) -> str:
+        data = self._post(f"{self._user_node(ig_user_id)}/media", params)
+        container_id = str(data.get("id") or "")
+        if not container_id:
+            raise RuntimeError(f"Instagram returned no container id: {data}")
+        return container_id
+
+    def create_image_container(
+        self,
+        ig_user_id: str,
+        image_url: str,
+        *,
+        caption: str | None = None,
+        is_carousel_item: bool = False,
+        alt_text: str | None = None,
+    ) -> str:
+        """Container for a single image post, or one image slide of a carousel.
+
+        ``media_type`` is omitted on purpose: that is how the API spells "image".
+        A carousel item carries no caption — the API has no per-slide caption.
+        """
+        params: dict[str, str] = {"image_url": image_url}
+        if is_carousel_item:
+            params["is_carousel_item"] = "true"
+        elif caption:
+            params["caption"] = caption
+        if alt_text:
+            params["alt_text"] = alt_text
+        return self._create_container(ig_user_id, params)
+
+    def create_carousel_video_item(self, ig_user_id: str, video_url: str) -> str:
+        """Container for one video slide of a carousel."""
+        return self._create_container(
+            ig_user_id,
+            {"media_type": "VIDEO", "is_carousel_item": "true", "video_url": video_url},
+        )
+
+    def create_carousel_container(self, ig_user_id: str, children: list[str], caption: str) -> str:
+        """Parent container for a carousel; *children* are finished item containers, in order."""
+        params: dict[str, str] = {"media_type": "CAROUSEL", "children": ",".join(children)}
+        if caption:
+            params["caption"] = caption
+        return self._create_container(ig_user_id, params)
+
+    def create_story_container(
+        self,
+        ig_user_id: str,
+        *,
+        image_url: str | None = None,
+        video_url: str | None = None,
+    ) -> str:
+        """Story container from exactly one of an image or a video URL. Stories take no caption."""
+        if bool(image_url) == bool(video_url):
+            raise ValueError("A story needs exactly one of image_url or video_url")
+        params: dict[str, str] = {"media_type": "STORIES"}
+        if image_url:
+            params["image_url"] = image_url
+        else:
+            params["video_url"] = str(video_url)
+        return self._create_container(ig_user_id, params)
+
+    def get_permalink(self, media_id: str) -> str | None:
+        data = self._get(media_id, {"fields": "permalink"})
+        permalink = data.get("permalink")
+        return str(permalink) if permalink else None
+
+    def get_media_page(self, ig_user_id: str, *, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+        """One newest-first page of the account's media, every type.
+
+        Returns ``{"data": [...], "next_cursor": str | None}``. Unlike
+        ``get_reels`` this does not walk every page: the feed view and the
+        manual-post detector only ever want the most recent handful.
+        """
+        fields = (
+            "id,caption,media_type,media_product_type,media_url,thumbnail_url,timestamp,permalink,"
+            "like_count,comments_count,children{media_type,media_url,thumbnail_url}"
+        )
+        params: dict[str, str] = {"fields": fields, "limit": str(limit)}
+        if after:
+            params["after"] = after
+        body = self._get(f"{self._user_node(ig_user_id)}/media", params)
+        paging = body.get("paging") or {}
+        # The API returns an "after" cursor even on the last page; only a "next"
+        # link means there really is more.
+        next_cursor = (paging.get("cursors") or {}).get("after") if paging.get("next") else None
+        return {"data": list(body.get("data") or []), "next_cursor": next_cursor}
+
+    def get_media_insights(self, media_id: str, metrics: list[str]) -> tuple[dict[str, int], list[str]]:
+        """Lifetime insights for one media, and the metrics it could not report.
+
+        The insights endpoint fails the whole request when any one metric does
+        not apply to the media type (a carousel has no ``views`` on some API
+        versions, for instance). So ask for everything once, and only on an
+        error fall back to one metric at a time to find out which were refused.
+        """
+        try:
+            return self._parse_insights(self._get(f"{media_id}/insights", {"metric": ",".join(metrics)})), []
+        except requests.HTTPError as exc:
+            logger.info("Insights for %s refused as a batch (%s) — asking per metric", media_id, exc)
+
+        values: dict[str, int] = {}
+        unavailable: list[str] = []
+        for metric in metrics:
+            try:
+                values.update(self._parse_insights(self._get(f"{media_id}/insights", {"metric": metric})))
+            except requests.HTTPError as exc:
+                logger.info("Insight '%s' unavailable for %s: %s", metric, media_id, exc)
+                unavailable.append(metric)
+        return values, unavailable
+
+    @staticmethod
+    def _parse_insights(body: dict[str, Any]) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for entry in body.get("data", []):
+            name = entry.get("name")
+            if not name:
+                continue
+            # Lifetime media metrics come as ``values[0].value``; newer API
+            # versions report some as ``total_value.value`` instead.
+            values = entry.get("values") or []
+            raw = values[0].get("value", 0) if values else (entry.get("total_value") or {}).get("value", 0)
+            out[str(name)] = int(raw or 0)
+        return out
+
+    def get_publishing_limit(self, ig_user_id: str) -> dict[str, int]:
+        """The account's rolling API-publish quota: ``quota_total``, ``quota_usage``, ``quota_duration``."""
+        body = self._get(
+            f"{self._user_node(ig_user_id)}/content_publishing_limit",
+            {"fields": "config,quota_usage"},
+        )
+        rows = body.get("data") or [{}]
+        row = rows[0] if rows else {}
+        config = row.get("config") or {}
+        return {
+            "quota_total": int(config.get("quota_total", 0)),
+            "quota_usage": int(row.get("quota_usage", 0)),
+            "quota_duration": int(config.get("quota_duration", 0)),
+        }
+
+    # ------------------------------------------------------------------
     # Token refresh
     # ------------------------------------------------------------------
 

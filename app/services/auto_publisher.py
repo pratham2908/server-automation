@@ -94,7 +94,11 @@ async def _publish_one_reel(
         thumb_offset_sec = ai_packaging.get("best_thumbnail_timestamp")
         thumb_offset_ms = int(thumb_offset_sec * 1000) if thumb_offset_sec is not None else None
 
-        media_id = instagram_service.publish_reel_from_url(
+        # publish_reel_from_url polls the container with time.sleep for up to
+        # ~400 s. Run inline it froze the event loop — every API request and every
+        # other worker — for as long as a reel took to process.
+        media_id = await asyncio.to_thread(
+            instagram_service.publish_reel_from_url,
             ig_user_id=ig_user_id,
             video_url=video_url,
             caption=caption,

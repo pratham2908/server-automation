@@ -71,6 +71,22 @@ class R2Service:
                 return False
             raise
 
+    def object_size(self, key: str) -> int | None:
+        """Size in bytes of *key*, or ``None`` when it does not exist.
+
+        One HEAD answers both "did the browser's upload land?" and "how big is
+        it really?" — the size the browser declared is only a claim.
+        """
+        from botocore.exceptions import ClientError
+
+        try:
+            head = self._client.head_object(Bucket=self._bucket, Key=key)
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                return None
+            raise
+        return int(head.get("ContentLength", 0))
+
     def generate_presigned_url(self, key: str, expires_in: int = 3600) -> str:
         """Generate a temporary GET URL for *key* (default 1 hour)."""
         from typing import cast
@@ -84,12 +100,15 @@ class R2Service:
             ),
         )
 
-    def generate_presigned_put_url(self, key: str, expires_in: int = 900) -> str:
+    def generate_presigned_put_url(self, key: str, expires_in: int = 900, content_type: str = "video/mp4") -> str:
         """Generate a presigned PUT URL so the browser can upload directly to R2.
 
         NOTE: Your R2 bucket must allow CORS with PUT from the frontend origin.
         Default expiry is 15 minutes, enough for large video files on typical
         home connections.
+
+        The content type is part of the signature, so the browser must send
+        exactly this ``Content-Type`` header or R2 rejects the upload.
         """
         from typing import cast
 
@@ -97,7 +116,7 @@ class R2Service:
             str,
             self._client.generate_presigned_url(
                 "put_object",
-                Params={"Bucket": self._bucket, "Key": key, "ContentType": "video/mp4"},
+                Params={"Bucket": self._bucket, "Key": key, "ContentType": content_type},
                 ExpiresIn=expires_in,
             ),
         )

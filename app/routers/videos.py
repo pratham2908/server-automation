@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
+from app.models.post import PostDoc
 from app.services.errors import get_error_service
+from app.services.post_rules import protected_slide_keys
 from app.services.video_service import VideoService
 from app.timezone import now_ist
 
@@ -178,13 +180,18 @@ async def storage_files(
 
 
 async def _active_r2_keys(service: VideoService) -> set[str]:
-    """R2 keys for videos that still need their file (not yet published).
+    """R2 keys the storage purge must keep.
 
     Published videos have been uploaded to the platform so their R2 copy is
     safe to delete.  Everything else (ready, queued, processing, scheduled,
     todo) must be kept.
+
+    Instagram post slides live under the same ``{channel_id}/`` prefix
+    (``{channel_id}/posts/...``) but are referenced from ``posts``, not
+    ``videos`` — without them here a purge would delete the slides of every
+    draft and scheduled post older than the cutoff.
     """
-    return {
+    keys = {
         doc["r2_object_key"]
         async for doc in service.db.videos.find(
             {"r2_object_key": {"$ne": None}, "status": {"$ne": "published"}},
@@ -192,6 +199,8 @@ async def _active_r2_keys(service: VideoService) -> set[str]:
         )
         if doc.get("r2_object_key")
     }
+    posts = [PostDoc.model_validate(doc) async for doc in service.db.posts.find({})]
+    return keys | protected_slide_keys(posts)
 
 
 @router.get("/storage/purge-estimate")

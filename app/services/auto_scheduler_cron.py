@@ -48,7 +48,7 @@ from app.services.auto_scheduler_selection import (
     wait_exhausted,
 )
 from app.services.auto_scheduler_summary import format_summary_email
-from app.services.email_service import send_email
+from app.services.email_service import resolve_owner_email, send_email
 from app.services.error_reporting import report_error
 from app.services.schedule_operation import (
     enqueue_video_for_youtube,
@@ -1180,13 +1180,6 @@ async def _enrich_summary(db: AsyncIOMotorDatabase, summary: dict[str, Any]) -> 
     return summary
 
 
-async def _resolve_recipient(db: AsyncIOMotorDatabase, settings: Settings) -> str | None:
-    if settings.SUMMARY_EMAIL_TO:
-        return settings.SUMMARY_EMAIL_TO
-    profile = await db.profiles.find_one({}, {"email": 1})
-    return (profile or {}).get("email")
-
-
 async def _maybe_send_summary(
     db: AsyncIOMotorDatabase,
     settings: Settings,
@@ -1224,7 +1217,7 @@ async def _maybe_send_summary(
 
     summary = await _enrich_summary(db, _assemble_summary(day, run_docs))
     email = format_summary_email(summary)
-    recipient = await _resolve_recipient(db, settings)
+    recipient = await resolve_owner_email(db, settings)
     logger.info(
         "Auto-scheduler day complete: %d scheduled, %d skipped",
         len(summary["scheduled"]),
