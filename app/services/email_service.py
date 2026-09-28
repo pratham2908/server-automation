@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import smtplib
 from email.message import EmailMessage
+from typing import Any
 
 from app.config import Settings
 from app.logger import get_logger
@@ -86,3 +87,16 @@ async def send_email(
         # Mail is best-effort; surface the failure in logs but never break the run.
         logger.error("Failed to send email '%s' to %s: %s", subject, recipient, exc)
         return False
+
+
+async def resolve_owner_email(db: Any, settings: Settings) -> str | None:
+    """Where mail meant for the owner goes: ``SUMMARY_EMAIL_TO``, else the profile's email.
+
+    Shared by the daily summary and the Instagram post handoff so the two can
+    never disagree about who the owner is.
+    """
+    if settings.SUMMARY_EMAIL_TO:
+        return settings.SUMMARY_EMAIL_TO
+    profile = await db.profiles.find_one({}, {"email": 1})
+    email = (profile or {}).get("email")
+    return str(email) if email else None

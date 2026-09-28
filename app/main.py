@@ -35,6 +35,7 @@ _batch_analysis_task = None
 _retention_analysis_task = None
 _source_import_task = None
 _auto_scheduler_task = None
+_post_publisher_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +243,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background auto-scheduler cron started")
 
+    # ---- Instagram post publisher (image / carousel / story) ----
+    # Separate from the reel publisher so a slow carousel never holds up a reel.
+    from app.services.post_publisher import run_post_publisher
+
+    global _post_publisher_task
+    _post_publisher_task = create_monitored_task(
+        run_post_publisher(db, r2_service),
+        feature="Background: Instagram post publisher",
+    )
+    logger.info("Background Instagram post publisher started")
+
     yield
 
     # ---- Shutdown ----
@@ -268,6 +280,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _retention_analysis_task,
         _source_import_task,
         _auto_scheduler_task,
+        _post_publisher_task,
     ):
         if task and not task.done():
             task.cancel()
@@ -322,6 +335,7 @@ from app.routers import (
     errors,
     growth,
     observability,
+    posts,
     preview_analysis,
     retention_analysis,
     scorecard,
@@ -338,6 +352,7 @@ app.include_router(channels.router)
 app.include_router(channel_groups.router)
 app.include_router(errors.router)
 app.include_router(videos.router)
+app.include_router(posts.router)
 app.include_router(video_sources.router)
 app.include_router(video_sources.imports_router)
 app.include_router(video_sources.kinds_router)

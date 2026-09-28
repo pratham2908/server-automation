@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # owner's email when unset.
     SUMMARY_EMAIL_TO: str | None = None
 
+    # The analyzer UI's public origin. Emails link into it (the Instagram post
+    # handoff page), so it has to be the address the owner opens on a phone.
+    ANALYZER_PUBLIC_URL: str = "https://youtube-analyzer-p.netlify.app"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

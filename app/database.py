@@ -59,6 +59,11 @@ async def connect_db(
     # Auto-scheduler: one run doc per (day, channel); one summary latch per day.
     await _db.auto_scheduler_runs.create_index([("date", 1), ("channel_id", 1)], unique=True)
     await _db.auto_scheduler_summaries.create_index("date", unique=True)
+    # Instagram image/carousel/story posts: the UI lists by channel+status, the
+    # post publisher sweeps by status+scheduled_at every minute.
+    await _db.posts.create_index("post_id", unique=True)
+    await _db.posts.create_index([("channel_id", 1), ("status", 1)])
+    await _db.posts.create_index([("status", 1), ("scheduled_at", 1)])
     await _db.posting_queue.create_index(
         [("channel_id", 1), ("position", 1)],
     )
