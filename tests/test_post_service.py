@@ -7,6 +7,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from dateutil.parser import isoparse
 from fastapi.testclient import TestClient
 from post_fakes import FakeDB, FakeInstagram, FakeManager, FakeR2
 
@@ -393,3 +394,52 @@ def test_presigned_put_takes_a_content_type():
     r2, seen = _r2_capturing()
     r2.generate_presigned_put_url("c/posts/p/s.jpg", content_type="image/jpeg")
     assert seen["ContentType"] == "image/jpeg"
+
+
+# ---- go-live time and location ------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sending_an_in_app_post_now_keeps_its_planned_time_as_go_live():
+    planned = now_ist() + timedelta(days=1)
+    svc, *_ = make([post_doc(status="scheduled", music_mode="in_app", scheduled_at=planned)])
+    out = await svc.publish_now("c", "p")
+    assert out.go_live_at is not None
+    assert abs((isoparse(out.go_live_at) - planned).total_seconds()) < 1
+    handoff = await svc.handoff("c", "p")
+    assert handoff.go_live_at == out.go_live_at
+
+
+@pytest.mark.asyncio
+async def test_sending_now_does_not_override_a_go_live_time_already_set():
+    chosen = now_ist() + timedelta(hours=5)
+    svc, *_ = make(
+        [
+            post_doc(
+                status="scheduled", music_mode="in_app", scheduled_at=now_ist() + timedelta(days=1), go_live_at=chosen
+            )
+        ]
+    )
+    out = await svc.publish_now("c", "p")
+    assert abs((isoparse(out.go_live_at) - chosen).total_seconds()) < 1
+
+
+@pytest.mark.asyncio
+async def test_handoff_falls_back_to_the_scheduled_time_and_shows_the_location():
+    when = now_ist() + timedelta(minutes=20)
+    svc, *_ = make([post_doc(status="awaiting_manual", music_mode="in_app", scheduled_at=when, location_name="Goa")])
+    out = await svc.handoff("c", "p")
+    assert out.location_name == "Goa"
+    assert abs((isoparse(out.go_live_at) - when).total_seconds()) < 1
+
+
+@pytest.mark.asyncio
+async def test_location_and_go_live_are_editable_and_clearable():
+    svc, *_ = make([post_doc(music_mode="in_app")])
+    out = await svc.update_post(
+        "c", "p", PostUpdate(location_name="  London  ", location_id="123", go_live_at="2030-01-02T18:00:00")
+    )
+    assert out.location_name == "London" and out.location_id == "123"
+    assert out.go_live_at == "2030-01-02T18:00:00+05:30"
+    out = await svc.update_post("c", "p", PostUpdate(location_name="", location_id=None, go_live_at=""))
+    assert out.location_name is None and out.location_id is None and out.go_live_at is None

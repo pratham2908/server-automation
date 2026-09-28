@@ -7,6 +7,7 @@ only through what the fake Mongo stored.
 
 from __future__ import annotations
 
+import html
 from datetime import timedelta
 
 import pytest
@@ -15,6 +16,7 @@ from post_fakes import FakeDB, FakeInstagram, FakeManager, FakeR2
 from app.config import get_settings
 from app.models.post import PostDoc, PublishState, Slide
 from app.services import post_publisher as pub
+from app.services import post_rules as rules
 from app.timezone import UTC, now_ist
 
 NOW = now_ist().replace(microsecond=0)
@@ -309,7 +311,7 @@ async def test_handoff_email_names_the_account_and_encodes_the_link(mail):
 
     await pub.send_handoffs(db, settings, NOW)
     assert mail[0]["subject"].startswith("Post on @ai_howthingswork:")
-    assert "Post this as @ai_howthingswork" in mail[0]["body"]
+    assert "Switch to @ai_howthingswork in Instagram" in mail[0]["body"]
     assert f"{settings.ANALYZER_PUBLIC_URL}/handoff/scroll%20and%20tell/p" in mail[0]["body"]
 
 
@@ -379,3 +381,53 @@ async def test_manual_detection_reads_the_feed_at_most_every_few_minutes():
     assert ig.media_page_calls == 1
     await pub.detect_manual_posts(db, mgr, NOW + timedelta(minutes=6), last)
     assert ig.media_page_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_handoff_email_carries_everything_needed_to_post_by_hand(mail):
+    live = NOW + timedelta(hours=3)
+    post = doc(
+        kind="carousel",
+        slides=[img(1), img(2), img(3)],
+        music_mode="in_app",
+        music_note="Espresso from 0:32",
+        location_name="London, United Kingdom",
+        first_comment="Follow for more",
+        go_live_at=live,
+        scheduled_at=NOW + timedelta(minutes=5),
+    )
+    db, *_ = setup([post], channel={**CHANNEL, "instagram_username": "tryalgoviz"})
+
+    await pub.send_handoffs(db, get_settings(), NOW)
+    when = rules.format_when(live)
+    assert mail[0]["subject"] == f"Post on @tryalgoviz: carousel for Chan — {when}"
+    for expected in (
+        f"Go live: {when}",
+        "Song: Espresso from 0:32",
+        "Location: London, United Kingdom",
+        "Slides: 3 slides",
+        "Hello #world",
+        "Follow for more",
+    ):
+        assert expected in mail[0]["body"]
+        assert html.escape(expected.split(": ", 1)[-1]) in mail[0]["html"]
+
+
+@pytest.mark.asyncio
+async def test_location_id_goes_on_the_image_and_on_the_carousel_parent_only():
+    db, ig, r2, mgr = setup([doc(location_id="106078429431815", location_name="London")])
+    await tick(db, ig, r2, mgr)
+    assert ig.created[0][1]["location_id"] == "106078429431815"
+
+    db, ig, r2, mgr = setup([doc(kind="carousel", slides=[img(1), img(2)], location_id="106078429431815")])
+    await tick(db, ig, r2, mgr)
+    items, parent = ig.created[:2], ig.created[-1]
+    assert all("location_id" not in params for _, params in items)
+    assert parent[1]["location_id"] == "106078429431815"
+
+
+@pytest.mark.asyncio
+async def test_a_location_name_alone_is_not_sent_to_the_api():
+    db, ig, r2, mgr = setup([doc(location_name="London")])
+    await tick(db, ig, r2, mgr)
+    assert "location_id" not in ig.created[0][1]

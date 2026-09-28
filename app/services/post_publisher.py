@@ -134,32 +134,59 @@ def build_handoff_email(post: PostDoc, channel_name: str, username: str | None, 
 
     The account leads the subject: Instagram shares into whichever account the
     app last had open and nothing outside the app can choose it, so the owner
-    has to switch by hand — the one thing they must see before tapping.
+    has to switch by hand — the one thing they must see before tapping. The rest
+    is everything they will type into Instagram, so the email alone is enough
+    even if the page won't load.
     """
     what = {"image": "image post", "carousel": "carousel", "story": "story"}[post.kind]
-    when = to_ist_iso(post.scheduled_at) or "now"
     account = f"@{username}" if username else channel_name
-    subject = f"Post on {account}: {what} for {channel_name}"
+    live = rules.go_live_time(post)
+    when = rules.format_when(live) if live else "as soon as you can"
+    subject = f"Post on {account}: {what} for {channel_name} — {when}"
+
+    details: list[tuple[str, str]] = [("Account", account), ("Go live", when)]
+    if post.music_note:
+        details.append(("Song", post.music_note))
+    if post.location_name:
+        details.append(("Location", post.location_name))
+    count = len([s for s in post.slides if s.uploaded])
+    details.append(("Slides", f"{count} {'slide' if count == 1 else 'slides'}"))
+
     lines = [
-        f"Post this as {account} — switch to that account in Instagram before you share.",
-        f"Your {what} for {channel_name} is due at {when}.",
+        f"Switch to {account} in Instagram before you share.",
         "Instagram's API can't add a song, so this one is finished in the app.",
         "",
+        *(f"{label}: {value}" for label, value in details),
+        "",
+        f"Open the handoff page: {link}",
+        "",
+        "Caption:",
+        post.caption or "(none)",
     ]
-    if post.music_note:
-        lines.append(f"Song: {post.music_note}")
-    lines += [f"Open the handoff page: {link}", "", "Caption:", post.caption or "(none)"]
+    if post.first_comment:
+        lines += ["", "First comment:", post.first_comment]
     text = "\n".join(lines)
 
-    song = f"<p><strong>Song:</strong> {html.escape(post.music_note)}</p>" if post.music_note else ""
+    rows = "".join(
+        f'<tr><td style="padding:4px 16px 4px 0;color:#6b7280">{html.escape(label)}</td>'
+        f'<td style="padding:4px 0"><strong>{html.escape(value)}</strong></td></tr>'
+        for label, value in details
+    )
+    comment = (
+        f'<p><strong>First comment</strong></p><pre style="white-space:pre-wrap">{html.escape(post.first_comment)}</pre>'
+        if post.first_comment
+        else ""
+    )
     body = (
         f'<p style="font-size:18px"><strong>Post as {html.escape(account)}</strong> — switch to that account in '
         "Instagram before you share.</p>"
-        f"<p>Your {what} for <strong>{html.escape(channel_name)}</strong> is due at {html.escape(when)}.</p>"
         "<p>Instagram's API can't add a song, so this one is finished in the app.</p>"
-        f"{song}"
-        f'<p><a href="{html.escape(link, quote=True)}">Open the handoff page</a></p>'
+        f'<table style="border-collapse:collapse;margin:8px 0 16px">{rows}</table>'
+        f'<p><a href="{html.escape(link, quote=True)}" style="display:inline-block;padding:10px 18px;'
+        'background:#3b82f6;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">'
+        "Open the handoff page</a></p>"
         f'<p><strong>Caption</strong></p><pre style="white-space:pre-wrap">{html.escape(post.caption or "(none)")}</pre>'
+        f"{comment}"
     )
     return subject, text, body
 
@@ -476,6 +503,7 @@ async def _step(
                 ig_user_id,
                 [c.container_id for c in children],
                 post.caption,
+                location_id=rules.api_location_id(post),
             )
             state.container_created_at = now
             await _save_state(db, post, state, now)
@@ -493,6 +521,7 @@ async def _step(
                 url,
                 caption=post.caption,
                 alt_text=slide.alt_text,
+                location_id=rules.api_location_id(post),
             )
         state.container_created_at = now
         await _save_state(db, post, state, now)

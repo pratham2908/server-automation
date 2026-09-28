@@ -221,16 +221,21 @@ class FakeInstagram:
         self.created.append((cid, params))
         return cid
 
-    def create_image_container(self, ig_user_id, image_url, *, caption=None, is_carousel_item=False, alt_text=None):
+    def create_image_container(
+        self, ig_user_id, image_url, *, caption=None, is_carousel_item=False, alt_text=None, location_id=None
+    ):
+        # location_id is recorded only when sent, so existing exact-params asserts keep holding.
+        extra = {"location_id": location_id} if location_id else {}
         return self._new(
-            "img", image_url=image_url, caption=caption, is_carousel_item=is_carousel_item, alt_text=alt_text
+            "img", image_url=image_url, caption=caption, is_carousel_item=is_carousel_item, alt_text=alt_text, **extra
         )
 
     def create_carousel_video_item(self, ig_user_id, video_url):
         return self._new("vid", video_url=video_url)
 
-    def create_carousel_container(self, ig_user_id, children, caption):
-        return self._new("car", children=list(children), caption=caption)
+    def create_carousel_container(self, ig_user_id, children, caption, location_id=None):
+        extra = {"location_id": location_id} if location_id else {}
+        return self._new("car", children=list(children), caption=caption, **extra)
 
     def create_story_container(self, ig_user_id, *, image_url=None, video_url=None):
         return self._new("story", image_url=image_url, video_url=video_url)

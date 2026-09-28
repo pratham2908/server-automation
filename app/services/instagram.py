@@ -777,6 +777,7 @@ class InstagramService:
         caption: str | None = None,
         is_carousel_item: bool = False,
         alt_text: str | None = None,
+        location_id: str | None = None,
     ) -> str:
         """Container for a single image post, or one image slide of a carousel.
 
@@ -788,6 +789,9 @@ class InstagramService:
             params["is_carousel_item"] = "true"
         elif caption:
             params["caption"] = caption
+        # A location belongs to the post, never to one slide of a carousel.
+        if location_id and not is_carousel_item:
+            params["location_id"] = location_id
         if alt_text:
             params["alt_text"] = alt_text
         return self._create_container(ig_user_id, params)
@@ -799,11 +803,15 @@ class InstagramService:
             {"media_type": "VIDEO", "is_carousel_item": "true", "video_url": video_url},
         )
 
-    def create_carousel_container(self, ig_user_id: str, children: list[str], caption: str) -> str:
+    def create_carousel_container(
+        self, ig_user_id: str, children: list[str], caption: str, location_id: str | None = None
+    ) -> str:
         """Parent container for a carousel; *children* are finished item containers, in order."""
         params: dict[str, str] = {"media_type": "CAROUSEL", "children": ",".join(children)}
         if caption:
             params["caption"] = caption
+        if location_id:
+            params["location_id"] = location_id
         return self._create_container(ig_user_id, params)
 
     def create_story_container(

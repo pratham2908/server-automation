@@ -54,6 +54,9 @@ first_comment      str | None     posted after publish, like reels
 first_comment_status  None | "posted" | "failed"
 music_mode         "none" | "in_app"
 music_note         str | None     e.g. "Espresso — Sabrina Carpenter, from 0:32"
+location_name      str | None     free text, shown on the hand-off; not sent to the API
+location_id        str | None     Facebook place ID (digits); sent on image / carousel parent, never on stories
+go_live_at         datetime|None  in-app posts: when to make it live (set in Instagram's scheduler)
 slides             [Slide]        ordered; order is the carousel order
 status             see state machine
 scheduled_at       datetime | None   stored aware; Mongo returns naive UTC -> read with assume_utc
@@ -97,6 +100,16 @@ Problems:
 `music_note` is optional even with `music_mode="in_app"`: it is a reminder for the
 person finishing the post, not something Instagram receives.
 
+- `location_id`, when set, must be digits (problem otherwise).
+- Warnings for API posts (`music_mode="none"`): a `location_name` without a `location_id`
+  (the API can only tag by place ID); any location on a story (the API leaves it off);
+  a `go_live_at` (only meaningful for in-app posts).
+
+`go_live_at` vs `scheduled_at` for in-app posts: `scheduled_at` drives the hand-off
+(email at T−30 min); the page and email show `go_live_at ?? scheduled_at`. Publish-now
+on an in-app post carries a future `scheduled_at` into `go_live_at` when none is set, so
+sending it to the phone early keeps the planned time.
+
 Warnings:
 - Carousel slide N's aspect differs from slide 1's by > 2 % → "Slide N will be
   cropped to match slide 1".
@@ -136,12 +149,12 @@ Errors are `HTTPException` with a string `detail`. The channel must exist and be
 | method | path | body | returns |
 |---|---|---|---|
 | GET | `` | `?status=` one status, or omitted = everything except archived | `{"posts": [PostOut]}` newest-updated first |
-| POST | `` | `PostCreate{kind, caption="", first_comment=None, music_mode="none", music_note=None}` | `PostOut` (201) |
+| POST | `` | `PostCreate{kind, caption="", first_comment=None, music_mode="none", music_note=None, location_name=None, location_id=None, go_live_at=None}` | `PostOut` (201) |
 | GET | `/publishing-limit` | | `{"quota_total", "quota_usage", "quota_duration_seconds"}` |
 | GET | `/instagram-feed` | `?limit=24&after=<cursor>&include_reels=false` | `{"items": [FeedItem], "next_cursor"}` |
 | GET | `/instagram-feed/{media_id}/insights` | | `{"media_id", "metrics": {name: int}, "unavailable": [name]}` |
 | GET | `/{post_id}` | | `PostOut` |
-| PATCH | `/{post_id}` | `PostUpdate{kind?, caption?, first_comment?, music_mode?, music_note?, slide_order?: [slide_id], alt_texts?: {slide_id: str}}` | `PostOut` |
+| PATCH | `/{post_id}` | `PostUpdate{kind?, caption?, first_comment?, music_mode?, music_note?, location_name?, location_id?, go_live_at?, slide_order?: [slide_id], alt_texts?: {slide_id: str}}` | `PostOut` |
 | DELETE | `/{post_id}` | | `{"deleted": true}` |
 | POST | `/{post_id}/slides` | `SlideCreate{media_type, content_type, size_bytes, width?, height?, duration_seconds?}` | `{"slide": SlideOut, "upload_url", "upload_headers": {"Content-Type": ...}}` |
 | POST | `/{post_id}/slides/{slide_id}/complete` | | `PostOut` |
@@ -166,6 +179,7 @@ Register the fixed paths (`/publishing-limit`, `/instagram-feed…`) before
   "status": "draft" | "scheduled" | "publishing" | "published" | "failed" | "awaiting_manual" | "archived",
   "caption": "…", "first_comment": null, "first_comment_status": null,
   "music_mode": "none" | "in_app", "music_note": null,
+  "location_name": null, "location_id": null, "go_live_at": null,
   "slides": [SlideOut],
   "scheduled_at": "2026-09-28T19:00:00+05:30" | null,
   "published_at": null, "instagram_media_id": null, "permalink": null,
@@ -193,7 +207,8 @@ Register the fixed paths (`/publishing-limit`, `/instagram-feed…`) before
 }
 // HandoffOut
 {
-  "post_id", "channel_id", "kind", "caption", "first_comment", "music_note",
+  "post_id", "channel_id", "channel_name", "instagram_username", "kind", "caption",
+  "first_comment", "music_note", "location_name", "go_live_at",  // go_live_at ?? scheduled_at
   "status", "scheduled_at", "permalink",
   "slides": [{"slide_id", "media_type", "content_type", "filename", "download_url"}]  // presigned GET, 24 h
 }
