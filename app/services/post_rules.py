@@ -18,7 +18,7 @@ from dateutil.parser import isoparse
 
 from app.models.post import PostDoc, Slide, SlideCreate
 from app.services.first_comment import validate_comment
-from app.timezone import assume_utc
+from app.timezone import IST, assume_utc
 
 IMAGE_CONTENT_TYPE = "image/jpeg"
 VIDEO_CONTENT_TYPE = "video/mp4"
@@ -237,6 +237,9 @@ def validate(post: PostDoc) -> Validation:
     except ValueError as exc:
         result.problems.append(f"First comment: {exc}")
 
+    if post.location_id and not post.location_id.isdigit():
+        result.problems.append("Location place ID must be a number (a Facebook place ID)")
+
     # ---- warnings ----
     if post.kind == "carousel" and slides:
         first = _aspect(slides[0])
@@ -257,7 +260,50 @@ def validate(post: PostDoc) -> Validation:
         if slide.media_type == "image" and slide.width is not None and slide.width < SOFT_IMAGE_WIDTH:
             result.warnings.append(f"Slide {n} is narrower than {SOFT_IMAGE_WIDTH} px and may look soft on Instagram")
 
+    # Posts finished in the app take the location as typed; only API publishes
+    # depend on the place ID, and stories can't carry one through the API.
+    if post.music_mode == "none":
+        if post.kind == "story" and (post.location_id or post.location_name):
+            result.warnings.append("Stories can't carry a location through the API; it will be left off")
+        elif post.location_name and not post.location_id:
+            result.warnings.append(
+                "The API can only tag a location by its place ID; without one this post goes out with no location"
+            )
+        if post.go_live_at is not None:
+            result.warnings.append("Go-live time only applies to posts finished in the Instagram app")
+
     return result
+
+
+def api_location_id(post: PostDoc) -> str | None:
+    """The place ID to send with the container, or ``None``. Stories take none."""
+    if post.kind == "story" or not post.location_id or not post.location_id.isdigit():
+        return None
+    return post.location_id
+
+
+def go_live_time(post: PostDoc) -> datetime | None:
+    """When the owner should make the post live: the go-live time, else the schedule."""
+    return post.go_live_at or post.scheduled_at
+
+
+def go_live_after_send_now(post: PostDoc, now: datetime) -> datetime | None:
+    """The go-live time to keep when an in-app post is sent to the phone early.
+
+    Sending now resets scheduled_at to *now*; without this the planned time — the
+    one the owner will set in Instagram's own scheduler — would be lost.
+    """
+    if post.music_mode != "in_app" or post.go_live_at is not None:
+        return None
+    if post.scheduled_at is not None and post.scheduled_at > now:
+        return post.scheduled_at
+    return None
+
+
+def format_when(dt: datetime) -> str:
+    """'Tue 29 Sep 2026, 6:00 PM IST' — date and time, for people rather than parsers."""
+    local = dt.astimezone(IST)
+    return f"{local.strftime('%a')} {local.day} {local.strftime('%b %Y')}, {local.strftime('%I:%M %p').lstrip('0')} IST"
 
 
 def max_slides(kind: str) -> int:

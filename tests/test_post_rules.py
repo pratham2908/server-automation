@@ -286,3 +286,50 @@ def test_protected_slide_keys():
         ),
     ]
     assert rules.protected_slide_keys(posts) == {"c/posts/p/s1.jpg", "c/posts/p/s4.jpg"}
+
+
+# ---- location and go-live -------------------------------------------------------------------
+
+
+def test_location_place_id_must_be_numeric():
+    assert "Location place ID must be a number (a Facebook place ID)" in problems(post(location_id="london"))
+    assert problems(post(location_id="106078429431815")) == []
+
+
+def test_a_location_name_without_an_id_warns_only_for_api_posts():
+    assert any("place ID" in w for w in warnings(post(location_name="London")))
+    assert warnings(post(location_name="London", music_mode="in_app")) == []
+    assert warnings(post(location_name="London", location_id="1")) == []
+
+
+def test_stories_warn_that_the_api_leaves_the_location_off():
+    story = post(kind="story", slides=[img(w=1080, h=1920)], location_id="1")
+    assert "Stories can't carry a location through the API; it will be left off" in warnings(story)
+    assert rules.api_location_id(story) is None
+
+
+def test_api_location_id_is_sent_only_when_valid():
+    assert rules.api_location_id(post(location_id="42")) == "42"
+    assert rules.api_location_id(post(location_id="x42")) is None
+    assert rules.api_location_id(post()) is None
+
+
+def test_go_live_time_prefers_the_explicit_time():
+    sched = datetime(2030, 1, 1, 12, tzinfo=UTC)
+    live = datetime(2030, 1, 1, 18, tzinfo=UTC)
+    assert rules.go_live_time(post(scheduled_at=sched)) == sched
+    assert rules.go_live_time(post(scheduled_at=sched, go_live_at=live)) == live
+
+
+def test_go_live_after_send_now_keeps_only_a_future_schedule_of_an_in_app_post():
+    now = datetime(2030, 1, 1, 12, tzinfo=UTC)
+    later = now + timedelta(hours=2)
+    assert rules.go_live_after_send_now(post(music_mode="in_app", scheduled_at=later), now) == later
+    assert rules.go_live_after_send_now(post(music_mode="in_app", scheduled_at=now - timedelta(hours=1)), now) is None
+    assert rules.go_live_after_send_now(post(music_mode="none", scheduled_at=later), now) is None
+    assert rules.go_live_after_send_now(post(music_mode="in_app", scheduled_at=later, go_live_at=now), now) is None
+
+
+def test_format_when_shows_date_and_time_in_ist():
+    assert rules.format_when(datetime(2026, 9, 29, 12, 30, tzinfo=UTC)) == "Tue 29 Sep 2026, 6:00 PM IST"
+    assert rules.format_when(datetime(2026, 9, 29, 3, 35, tzinfo=UTC)) == "Tue 29 Sep 2026, 9:05 AM IST"

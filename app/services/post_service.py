@@ -105,6 +105,12 @@ def _clean_note(text: str | None) -> str | None:
     return text.strip() or None
 
 
+def _parse_go_live(raw: str | None) -> datetime | None:
+    if raw is None or not raw.strip():
+        return None
+    return parse_scheduled_at(raw)
+
+
 class PostService:
     def __init__(
         self,
@@ -167,6 +173,9 @@ class PostService:
             first_comment_status=post.first_comment_status,
             music_mode=post.music_mode,
             music_note=post.music_note,
+            location_name=post.location_name,
+            location_id=post.location_id,
+            go_live_at=to_ist_iso(post.go_live_at),
             slides=[self._slide_out(s) for s in post.slides],
             scheduled_at=to_ist_iso(post.scheduled_at),
             published_at=to_ist_iso(post.published_at),
@@ -232,6 +241,9 @@ class PostService:
             first_comment=_clean_comment(body.first_comment),
             music_mode=body.music_mode,
             music_note=_clean_note(body.music_note),
+            location_name=_clean_note(body.location_name),
+            location_id=_clean_note(body.location_id),
+            go_live_at=_parse_go_live(body.go_live_at),
             status="draft",
             created_at=now,
             updated_at=now,
@@ -245,7 +257,15 @@ class PostService:
     async def update_post(self, channel_id: str, post_id: str, body: PostUpdate) -> PostOut:
         post = await self._load(channel_id, post_id)
         sent = body.model_fields_set
-        text_fields = {"caption", "first_comment", "music_mode", "music_note"} & sent
+        text_fields = {
+            "caption",
+            "first_comment",
+            "music_mode",
+            "music_note",
+            "location_name",
+            "location_id",
+            "go_live_at",
+        } & sent
         slide_fields = {"kind", "slide_order", "alt_texts"} & sent
         if text_fields:
             self._require(rules.can_edit_text(post.status), post, "edit the caption or music of")
@@ -261,6 +281,11 @@ class PostService:
             fields["music_mode"] = body.music_mode
         if "music_note" in sent:
             fields["music_note"] = _clean_note(body.music_note)
+        for key in ("location_name", "location_id"):
+            if key in sent:
+                fields[key] = _clean_note(getattr(body, key))
+        if "go_live_at" in sent:
+            fields["go_live_at"] = _parse_go_live(body.go_live_at)
         if "kind" in sent and body.kind is not None:
             fields["kind"] = body.kind
 
@@ -438,7 +463,12 @@ class PostService:
         post = await self._load(channel_id, post_id)
         self._require(rules.can_publish_now(post.status), post, "publish")
         self._refuse_if_problems(post, "publish")
-        out = await self._write(post, self._fresh_run(now_ist()))
+        now = now_ist()
+        fields = self._fresh_run(now)
+        carried = rules.go_live_after_send_now(post, now)
+        if carried is not None:
+            fields["go_live_at"] = carried
+        out = await self._write(post, fields)
         self._wake()
         return out
 
@@ -496,6 +526,8 @@ class PostService:
             caption=post.caption,
             first_comment=post.first_comment,
             music_note=post.music_note,
+            location_name=post.location_name,
+            go_live_at=to_ist_iso(rules.go_live_time(post)),
             status=post.status,
             scheduled_at=to_ist_iso(post.scheduled_at),
             permalink=post.permalink,

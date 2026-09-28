@@ -93,6 +93,14 @@ class PostDoc(BaseModel):
     first_comment_status: FirstCommentStatus | None = None
     music_mode: MusicMode = "none"
     music_note: str | None = None
+    # Free text for the owner to type into Instagram; only location_id (a
+    # Facebook place ID) can be attached through the API.
+    location_name: str | None = None
+    location_id: str | None = None
+    # When a post finished in the Instagram app should go live. Kept apart from
+    # scheduled_at, which for those posts drives when the hand-off is sent —
+    # "send to my phone now" must not wipe the time it is meant to go out.
+    go_live_at: AwareDatetime | None = None
     slides: list[Slide] = Field(default_factory=list)
     status: PostStatus = "draft"
     scheduled_at: AwareDatetime | None = None
@@ -119,6 +127,10 @@ class PostCreate(BaseModel):
     first_comment: str | None = None
     music_mode: MusicMode = "none"
     music_note: str | None = None
+    location_name: str | None = None
+    location_id: str | None = None
+    # ISO datetime; naive means IST, as for scheduled_at.
+    go_live_at: str | None = None
 
 
 class PostUpdate(BaseModel):
@@ -127,6 +139,9 @@ class PostUpdate(BaseModel):
     first_comment: str | None = None
     music_mode: MusicMode | None = None
     music_note: str | None = None
+    location_name: str | None = None
+    location_id: str | None = None
+    go_live_at: str | None = None
     slide_order: list[str] | None = None
     alt_texts: dict[str, str] | None = None
 
@@ -178,6 +193,9 @@ class PostOut(BaseModel):
     first_comment_status: FirstCommentStatus | None
     music_mode: MusicMode
     music_note: str | None
+    location_name: str | None
+    location_id: str | None
+    go_live_at: str | None
     slides: list[SlideOut]
     scheduled_at: str | None
     published_at: str | None
@@ -260,6 +278,9 @@ class HandoffOut(BaseModel):
     caption: str
     first_comment: str | None
     music_note: str | None
+    location_name: str | None
+    # When to post it: the go-live time if one was set, else the scheduled time.
+    go_live_at: str | None
     status: PostStatus
     scheduled_at: str | None
     permalink: str | None
