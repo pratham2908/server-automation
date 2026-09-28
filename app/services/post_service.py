@@ -471,6 +471,7 @@ class PostService:
         return await self._write(post, fields)
 
     async def handoff(self, channel_id: str, post_id: str) -> HandoffOut:
+        channel = await self._channel(channel_id)
         post = await self._load(channel_id, post_id)
         if self.r2 is None:
             raise UpstreamError("Storage is not available")
@@ -489,6 +490,8 @@ class PostService:
         return HandoffOut(
             post_id=post.post_id,
             channel_id=post.channel_id,
+            channel_name=str(channel.get("name") or channel_id),
+            instagram_username=channel.get("instagram_username") or None,
             kind=post.kind,
             caption=post.caption,
             first_comment=post.first_comment,

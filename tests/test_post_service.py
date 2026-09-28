@@ -293,6 +293,14 @@ async def test_handoff_lists_uploaded_slides_with_day_long_links():
     assert out.slides[0].filename == "post-p-01.jpg"
 
 
+@pytest.mark.asyncio
+async def test_handoff_names_the_instagram_account_to_post_from():
+    svc, db, *_ = make([post_doc()])
+    db.channels.docs[0]["instagram_username"] = "tryalgoviz"
+    out = await svc.handoff("c", "p")
+    assert out.channel_name == "Chan" and out.instagram_username == "tryalgoviz"
+
+
 # ---- routes -----------------------------------------------------------------------------
 
 
