@@ -253,6 +253,9 @@ class HandoffSlide(BaseModel):
 class HandoffOut(BaseModel):
     post_id: str
     channel_id: str
+    # Which Instagram account to post from — the share sheet can't pick it.
+    channel_name: str
+    instagram_username: str | None
     kind: PostKind
     caption: str
     first_comment: str | None

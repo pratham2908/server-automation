@@ -24,6 +24,7 @@ import html
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 from app.config import Settings, get_settings
 from app.database import is_channel_paused
@@ -128,12 +129,19 @@ async def _channel(db: Any, channel_id: str) -> dict[str, Any] | None:
 # ------------------------------------------------------------------
 
 
-def build_handoff_email(post: PostDoc, channel_name: str, link: str) -> tuple[str, str, str]:
-    """(subject, text, html) for the "time to post" email. Pure."""
+def build_handoff_email(post: PostDoc, channel_name: str, username: str | None, link: str) -> tuple[str, str, str]:
+    """(subject, text, html) for the "time to post" email. Pure.
+
+    The account leads the subject: Instagram shares into whichever account the
+    app last had open and nothing outside the app can choose it, so the owner
+    has to switch by hand — the one thing they must see before tapping.
+    """
     what = {"image": "image post", "carousel": "carousel", "story": "story"}[post.kind]
     when = to_ist_iso(post.scheduled_at) or "now"
-    subject = f"Time to post: {what} for {channel_name}"
+    account = f"@{username}" if username else channel_name
+    subject = f"Post on {account}: {what} for {channel_name}"
     lines = [
+        f"Post this as {account} — switch to that account in Instagram before you share.",
         f"Your {what} for {channel_name} is due at {when}.",
         "Instagram's API can't add a song, so this one is finished in the app.",
         "",
@@ -145,6 +153,8 @@ def build_handoff_email(post: PostDoc, channel_name: str, link: str) -> tuple[st
 
     song = f"<p><strong>Song:</strong> {html.escape(post.music_note)}</p>" if post.music_note else ""
     body = (
+        f'<p style="font-size:18px"><strong>Post as {html.escape(account)}</strong> — switch to that account in '
+        "Instagram before you share.</p>"
         f"<p>Your {what} for <strong>{html.escape(channel_name)}</strong> is due at {html.escape(when)}.</p>"
         "<p>Instagram's API can't add a song, so this one is finished in the app.</p>"
         f"{song}"
@@ -182,8 +192,11 @@ async def send_handoffs(db: Any, settings: Settings, now: datetime) -> int:
         if claimed.matched_count == 0:
             continue
 
-        link = f"{settings.ANALYZER_PUBLIC_URL.rstrip('/')}/handoff/{post.channel_id}/{post.post_id}"
-        subject, text, body = build_handoff_email(post, str(channel.get("name") or post.channel_id), link)
+        # Channel ids can contain spaces ("scroll and tell"), which break a bare link in mail clients.
+        link = f"{settings.ANALYZER_PUBLIC_URL.rstrip('/')}/handoff/{quote(post.channel_id)}/{post.post_id}"
+        subject, text, body = build_handoff_email(
+            post, str(channel.get("name") or post.channel_id), channel.get("instagram_username"), link
+        )
         recipient = await resolve_owner_email(db, settings)
         if not await send_email(settings, recipient, subject, text, body):
             # The post still shows as "awaiting manual" in the app, which is the

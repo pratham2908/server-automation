@@ -301,6 +301,19 @@ async def test_handoff_at_t_minus_30_sets_awaiting_manual_and_emails_once(mail):
 
 
 @pytest.mark.asyncio
+async def test_handoff_email_names_the_account_and_encodes_the_link(mail):
+    channel = {**CHANNEL, "channel_id": "scroll and tell", "instagram_username": "ai_howthingswork"}
+    post = {**doc(music_mode="in_app", scheduled_at=NOW + timedelta(minutes=5)), "channel_id": "scroll and tell"}
+    db, *_ = setup([post], channel=channel)
+    settings = get_settings()
+
+    await pub.send_handoffs(db, settings, NOW)
+    assert mail[0]["subject"].startswith("Post on @ai_howthingswork:")
+    assert "Post this as @ai_howthingswork" in mail[0]["body"]
+    assert f"{settings.ANALYZER_PUBLIC_URL}/handoff/scroll%20and%20tell/p" in mail[0]["body"]
+
+
+@pytest.mark.asyncio
 async def test_handoff_waits_until_the_lead_window(mail):
     db, ig, r2, mgr = setup([doc(music_mode="in_app", scheduled_at=NOW + timedelta(minutes=45))])
     await pub.send_handoffs(db, get_settings(), NOW)
