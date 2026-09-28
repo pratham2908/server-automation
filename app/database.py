@@ -13,6 +13,23 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 _client: AsyncIOMotorClient | None = None
 _db: AsyncIOMotorDatabase | None = None
 
+# Unique on (channel_id, youtube_channel_id) for every document. Instagram competitors store a null
+# YouTube id, so under this index a channel could hold only one of them.
+LEGACY_COMPETITOR_INDEX = "channel_id_1_youtube_channel_id_1"
+
+
+async def ensure_competitor_indexes(competitors) -> None:
+    """One YouTube channel id, or one Instagram username, per channel — each enforced only where it is set."""
+    if LEGACY_COMPETITOR_INDEX in await competitors.index_information():
+        await competitors.drop_index(LEGACY_COMPETITOR_INDEX)
+    for field in ("youtube_channel_id", "instagram_username"):
+        await competitors.create_index(
+            [("channel_id", 1), (field, 1)],
+            name=f"competitor_unique_{field}",
+            unique=True,
+            partialFilterExpression={field: {"$type": "string"}},
+        )
+
 
 async def connect_db(
     mongodb_uri: str,
@@ -89,10 +106,7 @@ async def connect_db(
         [("channel_id", 1), ("name", 1)],
         unique=True,
     )
-    await _db.competitors.create_index(
-        [("channel_id", 1), ("youtube_channel_id", 1)],
-        unique=True,
-    )
+    await ensure_competitor_indexes(_db.competitors)
     await _db.comment_analysis.create_index(
         [("channel_id", 1), ("platform_video_id", 1)],
         unique=True,
