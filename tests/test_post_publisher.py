@@ -283,7 +283,9 @@ async def test_handoff_at_t_minus_30_sets_awaiting_manual_and_emails_once(mail):
     db, ig, r2, mgr = setup(
         [doc(music_mode="in_app", music_note="Espresso from 0:32", scheduled_at=NOW + timedelta(minutes=25))]
     )
-    settings = get_settings()
+    # The profile email is the fallback recipient; clear the override so a developer's
+    # .env (SUMMARY_EMAIL_TO) can't change who this test expects the mail to reach.
+    settings = get_settings().model_copy(update={"SUMMARY_EMAIL_TO": None})
 
     await pub.send_handoffs(db, settings, NOW)
     post = stored(db)
