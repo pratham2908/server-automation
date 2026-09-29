@@ -235,6 +235,70 @@ class InstagramService:
             "biography": disc.get("biography", ""),
         }
 
+    def discover_all_media(
+        self, own_ig_user_id: str, target_username: str, limit: int = 250, page_size: int = 50
+    ) -> list[dict[str, Any]]:
+        """Every recent media item on *target_username*, raw, with no filtering.
+
+        Distinct from :meth:`discover_competitor_media`, which keeps only reels
+        and shapes rows for the topic-discovery tables. This one is for callers
+        that want the account's actual output — for a photo-led account, reels
+        are a rounding error and dropping carousels loses almost everything.
+
+        Paged rather than fetched in one shot, because asking for ``children``
+        (the individual frames of a carousel) past about 50 items makes Meta
+        answer "Please reduce the amount of data you're asking for" as a 500.
+        A bare query tolerates a much larger limit, but then every carousel comes
+        back as a single cover image — useless to a caller whose job is to
+        download the post. So: small pages, followed by cursor.
+
+        Videos still carry no ``media_url`` at any page size; only
+        ``thumbnail_url`` and the permalink. That is Instagram's rule for other
+        people's media, not a consequence of paging.
+        """
+        self._require_business_discovery()
+
+        collected: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        after: str | None = None
+
+        # Bounded so a cursor that never terminates cannot spin forever against
+        # a shared app-level rate limit.
+        max_pages = max(1, -(-limit // page_size)) + 2
+
+        for _ in range(max_pages):
+            cursor = f".after({after})" if after else ""
+            fields = (
+                f"business_discovery.username({target_username})"
+                f"{{media.limit({page_size}){cursor}"
+                f"{{id,caption,media_type,media_product_type,media_url,thumbnail_url,"
+                f"permalink,timestamp,like_count,comments_count,"
+                f"children{{id,media_type,media_url,thumbnail_url}}}}}}"
+            )
+            data = self._get(own_ig_user_id, {"fields": fields})
+            media = data.get("business_discovery", {}).get("media", {})
+            page = media.get("data", [])
+            if not page:
+                break
+
+            for item in page:
+                # Posting during pagination shifts every item down a slot, so one
+                # can arrive on two consecutive pages — the same seam that once
+                # imported a reel twice.
+                media_id = item.get("id", "")
+                if media_id and media_id not in seen:
+                    seen.add(media_id)
+                    collected.append(item)
+
+            if len(collected) >= limit:
+                break
+
+            after = (media.get("paging") or {}).get("cursors", {}).get("after")
+            if not after:
+                break
+
+        return collected[:limit]
+
     def discover_competitor_media(
         self, own_ig_user_id: str, target_username: str, max_results: int = 50
     ) -> list[dict[str, Any]]:
