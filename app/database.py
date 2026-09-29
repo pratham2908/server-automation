@@ -76,6 +76,10 @@ async def connect_db(
     # Auto-scheduler: one run doc per (day, channel); one summary latch per day.
     await _db.auto_scheduler_runs.create_index([("date", 1), ("channel_id", 1)], unique=True)
     await _db.auto_scheduler_summaries.create_index("date", unique=True)
+    # Competitor profile cache: one doc per target account, read on every feed
+    # request. Not a TTL index — an expired entry is kept so a failing Instagram
+    # call can still be answered with a stale profile rather than nothing.
+    await _db.competitor_profiles.create_index("username", unique=True)
     # Instagram image/carousel/story posts: the UI lists by channel+status, the
     # post publisher sweeps by status+scheduled_at every minute.
     await _db.posts.create_index("post_id", unique=True)

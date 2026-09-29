@@ -10,6 +10,7 @@ a truncated history is labelled as truncated.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -18,11 +19,15 @@ from fastapi import HTTPException, status
 from app.routers import competitor_feed as feed_router
 from app.services.competitor_feed import (
     is_business_discovery_capable,
+    is_profile_fresh,
     normalise_post,
+    read_cached_profile,
     select_source_channel,
     summarise,
     trim_to_new,
+    write_cached_profile,
 )
+from app.timezone import UTC, now_ist
 
 # --- the auth gate ------------------------------------------------------------
 
@@ -231,3 +236,80 @@ def test_an_id_marker_wins_when_both_are_sent():
     trimmed, found = trim_to_new(posts, since_id="b", since_timestamp="2020-01-01")
     assert [p["id"] for p in trimmed] == ["c"]
     assert found is True
+
+
+# --- the profile cache --------------------------------------------------------
+
+
+class TestProfileFreshness:
+    """A daily poller re-reads the same follower count and bio every time. Those
+    move slowly, so serving them from cache saves a Graph call against a budget
+    shared with publishing — but only while the entry is genuinely fresh."""
+
+    def test_a_recent_entry_is_fresh(self):
+        cached = {"fetched_at": now_ist() - timedelta(hours=2)}
+        assert is_profile_fresh(cached, now_ist(), ttl_hours=24)
+
+    def test_an_entry_past_the_ttl_is_not(self):
+        cached = {"fetched_at": now_ist() - timedelta(hours=25)}
+        assert not is_profile_fresh(cached, now_ist(), ttl_hours=24)
+
+    def test_nothing_cached_is_not_fresh(self):
+        assert not is_profile_fresh(None, now_ist())
+
+    def test_an_entry_with_no_timestamp_is_not_fresh(self):
+        """A doc written by an older shape must not be served forever."""
+        assert not is_profile_fresh({"profile": {}}, now_ist())
+
+    def test_a_naive_timestamp_from_mongo_is_read_as_utc(self):
+        """Mongo hands back naive datetimes that are UTC. Relabelling one as IST
+        shifts it 5h30m into the past — enough to expire an entry written
+        moments ago."""
+        naive_utc = (now_ist() - timedelta(minutes=5)).astimezone(UTC).replace(tzinfo=None)
+        assert is_profile_fresh({"fetched_at": naive_utc}, now_ist(), ttl_hours=1)
+
+    def test_the_boundary_expires_rather_than_lingers(self):
+        cached = {"fetched_at": now_ist() - timedelta(hours=24, seconds=1)}
+        assert not is_profile_fresh(cached, now_ist(), ttl_hours=24)
+
+
+class _CacheCollection:
+    def __init__(self) -> None:
+        self.docs: dict[str, dict] = {}
+
+    async def find_one(self, query):
+        return self.docs.get(query["username"])
+
+    async def update_one(self, query, update, upsert=False):
+        self.docs[query["username"]] = dict(update["$set"])
+
+
+class _CacheDB:
+    def __init__(self) -> None:
+        self.col = _CacheCollection()
+
+    def __getitem__(self, _name):
+        return self.col
+
+
+def test_a_written_profile_reads_back():
+    db = _CacheDB()
+    asyncio.run(write_cached_profile(db, "someone", {"username": "someone", "followers_count": 10}))
+    got = asyncio.run(read_cached_profile(db, "someone"))
+    assert got is not None
+    assert got["profile"]["followers_count"] == 10
+    assert is_profile_fresh(got, now_ist())
+
+
+def test_an_unknown_account_has_nothing_cached():
+    assert asyncio.run(read_cached_profile(_CacheDB(), "nobody")) is None
+
+
+def test_a_second_write_replaces_the_first():
+    """The account's follower count moves; the cache must not accumulate rows."""
+    db = _CacheDB()
+    asyncio.run(write_cached_profile(db, "someone", {"followers_count": 10}))
+    asyncio.run(write_cached_profile(db, "someone", {"followers_count": 20}))
+    got = asyncio.run(read_cached_profile(db, "someone"))
+    assert got is not None and got["profile"]["followers_count"] == 20
+    assert len(db.col.docs) == 1
