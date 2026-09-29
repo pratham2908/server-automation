@@ -22,11 +22,16 @@ from app.logger import get_logger
 from app.services.competitor_feed import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
+    PROFILE_TTL_HOURS,
+    is_profile_fresh,
     normalise_post,
+    read_cached_profile,
     select_source_channel,
     summarise,
     trim_to_new,
+    write_cached_profile,
 )
+from app.timezone import now_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
@@ -103,6 +108,10 @@ class CompetitorFeed(BaseModel):
         "and every post is returned, so the caller must de-duplicate",
     )
     source_channel_id: str = Field(description="Which of our channels' tokens ran the query")
+    profile_cached: bool = Field(
+        False, description="True when the profile came from cache rather than a fresh Instagram call"
+    )
+    profile_fetched_at: str | None = Field(None, description="When the profile block was actually read from Instagram")
 
 
 async def _load_service(db: AsyncIOMotorDatabase, via_channel_id: str | None) -> tuple[Any, dict[str, Any]]:
@@ -143,6 +152,9 @@ async def get_competitor_feed(
     ),
     limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     via_channel_id: str | None = Query(None, description="Force a specific source channel's token"),
+    refresh_profile: bool = Query(
+        False, description=f"Bypass the {PROFILE_TTL_HOURS}h profile cache and re-read from Instagram"
+    ),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Every post on a public Business/Creator account, newest first.
@@ -154,9 +166,21 @@ async def get_competitor_feed(
     service, channel = await _load_service(db, via_channel_id)
     target = username.lstrip("@").strip()
 
+    cached = await read_cached_profile(db, target)
+    use_cache = not refresh_profile and is_profile_fresh(cached, now_ist())
+    profile_cached = False
+    profile_fetched_at: str | None = None
+
     try:
-        # The Instagram client is blocking, so it goes off the event loop.
-        profile = await asyncio.to_thread(service.discover_business_account, channel["instagram_user_id"], target)
+        # The Instagram client is blocking, so these calls go off the event loop.
+        if use_cache and cached:
+            profile = cached["profile"]
+            profile_cached = True
+            profile_fetched_at = to_ist_iso(cached.get("fetched_at"))
+        else:
+            profile = await asyncio.to_thread(service.discover_business_account, channel["instagram_user_id"], target)
+            profile_fetched_at = to_ist_iso(await write_cached_profile(db, target, profile))
+
         raw = await asyncio.to_thread(service.discover_all_media, channel["instagram_user_id"], target, limit)
     except ValueError as exc:
         # Raised when the source token is Instagram Login rather than Facebook.
@@ -181,8 +205,12 @@ async def get_competitor_feed(
         returned=len(posts),
         media_type_counts=summarise(posts),
         oldest_returned=posts[-1]["timestamp"] if posts else None,
-        # Compared against what Meta gave us, not what we then trimmed.
+        # Compared against what Meta gave us, not what we then trimmed. With a
+        # cached profile, media_count can lag by up to the TTL, so this flag can
+        # be a post or two out on an account that has just published.
         history_truncated=fetched_total < int(profile.get("media_count", 0)),
         since_id_found=since_found,
         source_channel_id=channel["channel_id"],
+        profile_cached=profile_cached,
+        profile_fetched_at=profile_fetched_at,
     )
