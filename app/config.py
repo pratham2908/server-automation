@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     # is disabled entirely (fail closed) — set this to enable the feature.
     CHANNEL_REGISTER_PASSWORD: str | None = None
 
+    # Pre-shared secret for the admin competitor-feed API, which serves another
+    # application rather than this one's dashboard. Deliberately separate from
+    # API_KEY so that app can read competitor media without holding a key that
+    # can publish, delete or reconfigure channels. Unset = the feed is disabled.
+    COMPETITOR_FEED_KEY: str | None = None
+
     # MongoDB
     MONGODB_URI: str
     MONGODB_DB_NAME: str = "youtube_automation"
