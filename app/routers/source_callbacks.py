@@ -30,6 +30,9 @@ async def receive_today_callback(
     authorization: str | None = Header(None),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> TodayCallbackReceipt:
+    if body.callback_id is not None and body.callback_id != callback_id:
+        # Checked before claiming, so a mix-up does not use up the password.
+        raise HTTPException(422, "callbackId does not match the callback URL")
     now = now_ist()
     outcome, record = await today_callbacks.claim(db, callback_id, today_callbacks.bearer_token(authorization), now)
     if outcome == "not_found":

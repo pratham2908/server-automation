@@ -14,6 +14,7 @@ Every `/today` request now includes two extra **headers**:
 
 | Header | Value |
 |---|---|
+| `X-Callback-Id` | the callback's unique id (32 hex characters). Also the URL's last segment, so you never need to parse the URL. Use it as your key and in your logs. |
 | `X-Callback-Url` | `https://automation-server.tryalgoviz.com/api/v1/source-callbacks/{callback_id}` |
 | `X-Callback-Token` | a random one-time password (43 URL-safe characters) |
 
@@ -51,8 +52,11 @@ Content-Type: application/json
 object; extra fields are ignored:
 
 ```json
-{ "status": "ready", "video": { "id": "<renderId>", "title": "optional" }, "reason": "optional, as on /today" }
+{ "status": "ready", "callbackId": "<X-Callback-Id>", "video": { "id": "<renderId>", "title": "optional" }, "reason": "optional, as on /today" }
 ```
+
+`callbackId` is optional. If you send it, it must equal the id in the URL,
+otherwise you get `422`. That catches a result posted to the wrong ask's URL.
 
 `video.id` must be the id `/api/ext/videos/{renderId}` serves, because we import
 through that route as usual.
@@ -60,7 +64,7 @@ through that route as usual.
 **Failed** — you will not produce a video for this ask:
 
 ```json
-{ "status": "failed", "error": "Render timed out 9 times: waiting for the page to render the React component" }
+{ "status": "failed", "callbackId": "<X-Callback-Id>", "error": "Render timed out 9 times: waiting for the page to render the React component" }
 ```
 
 The error text goes into the daily email, so make it say what went wrong.
@@ -74,7 +78,7 @@ The error text goes into the daily email, so make it say what went wrong.
 | `404` | Unknown callback id. | No |
 | `409` | Already delivered. The token is single-use. | No |
 | `410` | No longer wanted: the slot passed, a final ask already found the video, or the day is over. The video stays in your catalogue and a later slot can take it. | No |
-| `422` | Body didn't match the schema above. The token is **not** used up, so fix the body and send it again. | Yes, fixed |
+| `422` | Body didn't match the schema above, or `callbackId` doesn't match the URL. The token is **not** used up, so fix the body and send it again. | Yes, fixed |
 | `5xx` / network error | Our side had a problem. | Yes, with backoff |
 
 ## 5. Lifetime

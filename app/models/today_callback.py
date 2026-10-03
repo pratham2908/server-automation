@@ -22,9 +22,12 @@ class CallbackVideo(BaseModel):
 
 
 class TodayCallbackBody(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     status: Literal["ready", "failed"]
+    # Optional echo of the X-Callback-Id we sent. When present it must match the
+    # URL's id, which catches an app posting one ask's result to another's URL.
+    callback_id: str | None = Field(None, alias="callbackId", max_length=64)
     video: CallbackVideo | None = None
     # Why it failed, for the daily email. Required in spirit, defaulted in practice.
     error: str | None = Field(None, max_length=2000)
