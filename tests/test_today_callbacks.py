@@ -135,7 +135,12 @@ async def test_only_a_hash_of_the_token_is_stored():
     assert offer.token not in str(stored)
     assert cb.token_matches(offer.token, stored["token_hash"])
     assert offer.url == f"https://us.example/api/v1/source-callbacks/{offer.callback_id}"
-    assert offer.headers() == {"X-Callback-Url": offer.url, "X-Callback-Token": offer.token}
+    assert offer.headers() == {
+        "X-Callback-Id": offer.callback_id,
+        "X-Callback-Url": offer.url,
+        "X-Callback-Token": offer.token,
+    }
+    assert offer.url.endswith(offer.callback_id)
 
 
 @pytest.mark.asyncio
@@ -484,3 +489,17 @@ async def test_route_says_gone_for_a_closed_callback(client_and_db):
     offer = await cb.issue(db, _today_slot(), "s-geo", datetime.now(IST))
     await cb.close(db, offer.callback_id, datetime.now(IST), "slot passed")
     assert _post(client, offer.callback_id, offer.token, READY).status_code == 410
+
+
+@pytest.mark.asyncio
+async def test_an_echoed_callback_id_must_match_the_url(client_and_db):
+    client, db, settled = client_and_db
+    offer = await cb.issue(db, _today_slot(), "s-geo", datetime.now(IST))
+
+    wrong = _post(client, offer.callback_id, offer.token, {**READY, "callbackId": "someone-elses"})
+    assert wrong.status_code == 422
+    assert db.source_callbacks.docs[0]["status"] == "pending"  # the mix-up did not burn the password
+
+    right = _post(client, offer.callback_id, offer.token, {**READY, "callbackId": offer.callback_id})
+    assert right.status_code == 200
+    assert settled == ["ready", "woken"]

@@ -30,8 +30,9 @@ from app.timezone import IST, assume_utc
 
 logger = get_logger(__name__)
 
-# Request headers the offer travels in. The receiving app echoes nothing back but
-# ``callbackAccepted: true`` in its body.
+# Request headers the offer travels in. The id is also the URL's last segment; it
+# travels on its own so the app can key and log the callback without parsing a URL.
+CALLBACK_ID_HEADER = "X-Callback-Id"
 CALLBACK_URL_HEADER = "X-Callback-Url"
 CALLBACK_TOKEN_HEADER = "X-Callback-Token"
 CALLBACK_PATH = "/api/v1/source-callbacks"
@@ -48,7 +49,11 @@ class CallbackOffer:
     token: str
 
     def headers(self) -> dict[str, str]:
-        return {CALLBACK_URL_HEADER: self.url, CALLBACK_TOKEN_HEADER: self.token}
+        return {
+            CALLBACK_ID_HEADER: self.callback_id,
+            CALLBACK_URL_HEADER: self.url,
+            CALLBACK_TOKEN_HEADER: self.token,
+        }
 
 
 @dataclass(frozen=True, slots=True)
