@@ -1365,3 +1365,32 @@ async def test_summary_goes_out_as_soon_as_the_work_is_done_not_at_the_slot_time
     await cron._maybe_send_summary(db, SimpleNamespace(SUMMARY_EMAIL_TO=None), [_channel(["19:00"])], now.date(), now)
 
     assert sends == ["owner@example.com"]
+
+
+
+@pytest.mark.asyncio
+async def test_an_app_still_unavailable_at_the_slot_time_closes_the_slot(monkeypatch):
+    """Not re-asked until midnight: the day's email must not wait for the rollover."""
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = _today_service(TodaysVideo(state="unavailable", reason="Scheduled format failed 3 times today"))
+
+    now = _dt(2026, 8, 24, 19, 5)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._SKIPPED
+    assert "Scheduled format failed 3 times today" in slot["reason"]
+
+
+@pytest.mark.asyncio
+async def test_an_app_unavailable_before_the_slot_time_is_asked_again(monkeypatch):
+    db = FakeDB()
+    _no_ready(monkeypatch)
+    service = _today_service(TodaysVideo(state="unavailable", reason="busy"))
+
+    now = _dt(2026, 8, 24, 18, 30)
+    await cron.process_channel(db, _channel(["19:00"]), service=service, day=now.date(), now=now, timing=TIMING)
+
+    slot = db.auto_scheduler_runs.docs[("2026-08-24", "histriphy")]["slots"]["19:00"]
+    assert slot["state"] == cron._PENDING

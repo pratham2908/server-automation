@@ -536,6 +536,27 @@ async def _ask_todays_video(
         asked.add(source.source_id)
 
         if result.state == "unavailable":
+            _run_at, schedule_at = slot_datetimes(slot, day)
+            if generation_expired(now, schedule_at):
+                # Past the slot, "retry shortly" has no shortly left. Without this
+                # the slot stayed pending, was re-asked every tick until midnight,
+                # and held the day's email until the rollover sweep — and GeoRank
+                # now answers this way when it has given up on the day.
+                await _set_slot(
+                    db,
+                    day,
+                    channel_id,
+                    slot,
+                    {
+                        "state": _SKIPPED,
+                        "reason": f"{source.name} had no video before the slot: {result.reason or 'unavailable'}"[:300],
+                        **_remark_patch(result),
+                    },
+                )
+                logger.info(
+                    "Auto-scheduler: %s still unavailable for %s slot %s at its time", source.name, channel_id, slot
+                )
+                return "handled"
             # The app's own "transient, retry shortly". Leaving the slot pending
             # costs nothing: the next tick asks again.
             logger.info(
