@@ -32,6 +32,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config import Settings, get_settings
 from app.database import get_channel_platform, not_paused_query
 from app.logger import get_logger
+from app.models.today_callback import CallbackAction, TodayCallbackBody
+from app.services import today_callbacks
 from app.services.auto_scheduler_selection import (
     GenerationCandidate,
     due_slots,
@@ -54,8 +56,9 @@ from app.services.schedule_operation import (
     enqueue_video_for_youtube,
     schedule_single_video_instagram,
 )
+from app.services.today_callbacks import CallbackSlot
 from app.services.video_source_service import MAX_PAGE_LIMIT, VideoSourceService
-from app.services.video_sources import TodaysVideo
+from app.services.video_sources import TodaysVideo, is_noteworthy_remark
 from app.timezone import IST, assume_utc, now_ist
 
 logger = get_logger(__name__)
@@ -523,7 +526,10 @@ async def _ask_todays_video(
             capable = True
             return "retry"
 
-        result = await service.todays_video(channel_id, source.source_id)
+        offer_for = CallbackSlot(
+            channel_id=channel_id, day=day, slot=slot, public_base_url=get_settings().PUBLIC_API_URL
+        )
+        result = await service.todays_video(channel_id, source.source_id, callback_slot=offer_for)
         if result.state == "unsupported":
             continue  # this app works the old way; try the next one
         capable = True
@@ -560,15 +566,18 @@ async def _ask_todays_video(
                     "via_today": True,
                     "last_polled_at": now,
                     "retry_after_seconds": result.retry_after_seconds,
+                    # Set when the app will call us back instead of being polled.
+                    "callback_id": result.callback_id,
                     **_remark_patch(result),
                 },
             )
             logger.info(
-                "Auto-scheduler: %s started today's video for %s slot %s%s",
+                "Auto-scheduler: %s started today's video for %s slot %s%s%s",
                 source.name,
                 channel_id,
                 slot,
                 f" ({result.title})" if result.title else "",
+                " — it will call back" if result.callback_id else "",
             )
             return "handled"
 
@@ -818,58 +827,37 @@ async def _poll_todays_video(
     _run_at, schedule_at = slot_datetimes(slot, day)
     source_id = str(data.get("source_id") or "")
     source_name = str(data.get("source") or source_id)
+    callback_id = str(data.get("callback_id") or "")
+    expired = generation_expired(now, schedule_at)
 
-    # Honour the app's own pacing hint. Polling faster is safe but impolite, and
-    # the hint is the only thing it tells us about how long its pipeline takes —
-    # ignoring it would quietly break if it ever asked for a longer gap.
-    retry_after = data.get("retry_after_seconds")
-    if isinstance(retry_after, int | float) and retry_after > 0:
-        waited = elapsed_seconds(data.get("last_polled_at"), now)
-        if waited is not None and waited < float(retry_after):
+    if callback_id:
+        # The app will call when the video is done. Asking meanwhile would only
+        # nudge its work again, so wait — until the deadline, where one last ask
+        # covers a callback that was lost on the way.
+        if not expired:
             return
+    else:
+        # Honour the app's own pacing hint. Polling faster is safe but impolite, and
+        # the hint is the only thing it tells us about how long its pipeline takes —
+        # ignoring it would quietly break if it ever asked for a longer gap.
+        retry_after = data.get("retry_after_seconds")
+        if isinstance(retry_after, int | float) and retry_after > 0:
+            waited = elapsed_seconds(data.get("last_polled_at"), now)
+            if waited is not None and waited < float(retry_after):
+                return
 
     result = await service.todays_video(channel_id, source_id)
     await _set_slot(db, day, channel_id, slot, {"last_polled_at": now, **_remark_patch(result)})
 
     if result.state == "ready" and result.video_id:
-        enqueued = await service.enqueue_import(channel_id, source_id, [result.video_id])
-        queued = enqueued.get("queued") or []
-        if queued:
-            await _set_slot(
-                db,
-                day,
-                channel_id,
-                slot,
-                {
-                    "state": _IMPORTING,
-                    "video_id": queued[0]["video_id"],
-                    "source": source_name,
-                    "awaiting_since": now,
-                    "import_started_at": now,
-                    # This slot has already spent most of its hour waiting, so the
-                    # import is watched on the tick rather than the recheck interval.
-                    "from_generation": True,
-                    "via_today": True,
-                    **_remark_patch(result),
-                },
-            )
-            logger.info(
-                "Auto-scheduler: today's video from %s landed, importing for %s slot %s",
-                source_name,
-                channel_id,
-                slot,
-            )
+        if await _import_todays_video(
+            db, service, channel_id, slot, day, source_id, source_name, result.video_id, now, _remark_patch(result)
+        ):
+            if callback_id:
+                await today_callbacks.close(db, callback_id, now, "the final ask found the video")
             return
-        logger.warning(
-            "Auto-scheduler: %s offered %s for %s slot %s but it could not be imported: %s",
-            source_name,
-            result.video_id,
-            channel_id,
-            slot,
-            (enqueued.get("skipped") or [{}])[0].get("reason", "unknown"),
-        )
 
-    if generation_expired(now, schedule_at):
+    if expired:
         await _set_slot(
             db,
             day,
@@ -877,7 +865,101 @@ async def _poll_todays_video(
             slot,
             {"state": _SKIPPED, "reason": f"{source_name} did not have today's video ready before the slot"},
         )
+        if callback_id:
+            await today_callbacks.close(db, callback_id, now, "the slot passed")
         logger.info("Auto-scheduler: today's video for %s slot %s missed the slot", channel_id, slot)
+
+
+async def _import_todays_video(
+    db: AsyncIOMotorDatabase,
+    service: VideoSourceService,
+    channel_id: str,
+    slot: str,
+    day: date,
+    source_id: str,
+    source_name: str,
+    video_id: str,
+    now: datetime,
+    remark: dict[str, Any],
+) -> bool:
+    """Queue the video the app finished for a waiting slot. False if it could not be queued."""
+    enqueued = await service.enqueue_import(channel_id, source_id, [video_id])
+    queued = enqueued.get("queued") or []
+    if not queued:
+        logger.warning(
+            "Auto-scheduler: %s offered %s for %s slot %s but it could not be imported: %s",
+            source_name,
+            video_id,
+            channel_id,
+            slot,
+            (enqueued.get("skipped") or [{}])[0].get("reason", "unknown"),
+        )
+        return False
+    await _set_slot(
+        db,
+        day,
+        channel_id,
+        slot,
+        {
+            "state": _IMPORTING,
+            "video_id": queued[0]["video_id"],
+            "source": source_name,
+            "awaiting_since": now,
+            "import_started_at": now,
+            # This slot has already spent most of its hour waiting, so the
+            # import is watched on the tick rather than the recheck interval.
+            "from_generation": True,
+            "via_today": True,
+            **remark,
+        },
+    )
+    logger.info("Auto-scheduler: today's video from %s landed, importing for %s slot %s", source_name, channel_id, slot)
+    return True
+
+
+async def settle_today_callback(
+    db: AsyncIOMotorDatabase,
+    record: dict[str, Any],
+    body: TodayCallbackBody,
+    now: datetime,
+) -> CallbackAction:
+    """Apply an app's callback to the slot that is waiting on it.
+
+    ``slot_closed`` when the slot has moved on (its deadline passed, or a final ask
+    already found the video): the video stays in the app's catalogue for a later
+    slot, exactly as a late render always has.
+    """
+    day = date.fromisoformat(str(record["day"]))
+    channel_id = str(record["channel_id"])
+    slot = str(record["slot"])
+    run_doc = await db.auto_scheduler_runs.find_one({"date": _day_key(day), "channel_id": channel_id}) or {}
+    data = (run_doc.get("slots") or {}).get(slot) or {}
+    if data.get("state") != _GENERATING or data.get("callback_id") != record["callback_id"]:
+        return "slot_closed"
+
+    source_id = str(record["source_id"])
+    source_name = str(data.get("source") or source_id)
+    if body.status == "failed":
+        error = (body.error or "no reason given").strip()[:300]
+        await _set_slot(
+            db, day, channel_id, slot, {"state": _FAILED, "reason": f"{source_name} could not make the video: {error}"}
+        )
+        logger.warning(
+            "Auto-scheduler: %s reported today's video for %s slot %s failed: %s", source_name, channel_id, slot, error
+        )
+        return "failed_recorded"
+
+    remark = body.reason.strip()[:400] if body.reason else None
+    patch = {"remark": remark} if is_noteworthy_remark(remark) else {}
+    video_id = body.video.id if body.video else ""
+    if await _import_todays_video(
+        db, VideoSourceService(db), channel_id, slot, day, source_id, source_name, video_id, now, patch
+    ):
+        return "importing"
+    # Named a video we could not take (most often one we already hold). Go back to
+    # asking, which is what the slot did before callbacks existed.
+    await _set_slot(db, day, channel_id, slot, {"callback_id": None, "last_polled_at": now})
+    return "polling"
 
 
 async def _recheck_generations(
@@ -1326,6 +1408,8 @@ async def _tick(db: AsyncIOMotorDatabase) -> None:
     # Settle yesterday before touching today: a day left mid-flight at midnight can
     # never resolve itself, and its summary is held hostage until it does.
     await _resolve_stale_days(db, settings, channels, day, now)
+    # And any callback an app promised for a day that is over will never be wanted.
+    await today_callbacks.expire_overdue(db, now)
 
     # Only do per-channel work once a slot is actually due, but always evaluate the
     # end-of-day summary so it fires even on a quiet day.
@@ -1334,6 +1418,15 @@ async def _tick(db: AsyncIOMotorDatabase) -> None:
             await process_channel(db, channel, service, day, now, timing)
 
     await _maybe_send_summary(db, settings, channels, day, now)
+
+
+# Set by a source callback so a finished video is acted on now rather than at the
+# next five-minute tick.
+_wake = asyncio.Event()
+
+
+def wake_auto_scheduler() -> None:
+    _wake.set()
 
 
 async def run_auto_scheduler(db: AsyncIOMotorDatabase) -> None:
@@ -1352,4 +1445,8 @@ async def run_auto_scheduler(db: AsyncIOMotorDatabase) -> None:
                 message=f"Auto-scheduler tick error: {exc!s}",
                 exception=exc,
             )
-        await asyncio.sleep(_TICK_SECONDS)
+        try:
+            await asyncio.wait_for(_wake.wait(), timeout=_TICK_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+        _wake.clear()

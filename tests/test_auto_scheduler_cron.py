@@ -478,12 +478,14 @@ class FakeService:
         self.requested: list[str] = []
         self.enqueued: list[tuple[str, list[str]]] = []
         self.today_calls: list[str] = []
+        self.callback_slots: list = []
 
     async def list_sources(self, _channel_id):
         return list(self._sources)
 
-    async def todays_video(self, _channel_id, source_id):
+    async def todays_video(self, _channel_id, source_id, callback_slot=None):
         self.today_calls.append(source_id)
+        self.callback_slots.append(callback_slot)
         return self._today
 
     async def generations_today(self, _channel_id, _source_id, _since):

@@ -664,8 +664,8 @@ def _today_stub(adapter, response=None, *, raises=None):
     """Canned answer for the today call, recording the timeout it was given."""
     calls = []
 
-    async def fake(source, method, path, *, json_body=None, timeout=None):
-        calls.append((method, path, timeout))
+    async def fake(source, method, path, *, json_body=None, timeout=None, extra_headers=None):
+        calls.append((method, path, timeout, extra_headers))
         if raises is not None:
             raise raises
         return response
@@ -948,3 +948,58 @@ async def test_a_very_long_remark_is_trimmed_not_dropped():
     result = await adapter.request_todays_video(georank_source())
     assert result.remark is not None
     assert len(result.remark) == 400
+
+
+# ---------- callbacks instead of polling ----------
+
+
+@pytest.mark.asyncio
+async def test_the_callback_offer_travels_in_headers_never_the_url():
+    """URLs land in access logs on both sides; the one-time password must not."""
+    adapter = GeoRankAdapter()
+    calls = _today_stub(adapter, _FakeResponse({"status": "generating", "callbackAccepted": True}))
+    offer = {"X-Callback-Url": "https://us.example/api/v1/source-callbacks/abc", "X-Callback-Token": "secret"}
+
+    result = await adapter.request_todays_video(georank_source(), offer)
+
+    method, path, _timeout, headers = calls[0]
+    assert headers == offer
+    assert "secret" not in path
+    assert result.callback_accepted is True
+
+
+@pytest.mark.asyncio
+async def test_only_a_literal_true_counts_as_accepting_the_callback():
+    """A confused app saying "yes" must not silence the polling it would still need."""
+    adapter = GeoRankAdapter()
+    for said in ("true", 1, None):
+        _today_stub(adapter, _FakeResponse({"status": "generating", "callbackAccepted": said}))
+        assert (await adapter.request_todays_video(georank_source())).callback_accepted is False
+
+
+@pytest.mark.asyncio
+async def test_callback_headers_cannot_override_the_api_key(monkeypatch):
+    """Extra headers go in first, so our own auth always wins."""
+    sent = {}
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def request(self, method, url, json=None, headers=None):
+            sent.update(headers or {})
+            return httpx.Response(200, request=httpx.Request(method, url), json={})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    adapter = GeoRankAdapter()
+    source = georank_source()
+    await adapter.authed_request(source, "GET", "/x", extra_headers={"X-Api-Key": "forged", "X-Callback-Token": "t"})
+
+    assert sent["X-Api-Key"] != "forged"
+    assert sent["X-Callback-Token"] == "t"

@@ -131,6 +131,12 @@ async def promote_processing_to_ready(
             "added_at": now,
         }
     )
+    # A slot may be waiting on exactly this import; wake the scheduler so it is
+    # scheduled now rather than at the next five-minute tick. Imported here, not at
+    # the top: the scheduler module imports half the services this one does.
+    from app.services.auto_scheduler_cron import wake_auto_scheduler
+
+    wake_auto_scheduler()
 
 
 async def run_retention_analysis(

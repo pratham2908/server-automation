@@ -26,6 +26,8 @@ from app.models.video_source import (
     VideoSource,
     VideoSourcePublic,
 )
+from app.services import today_callbacks
+from app.services.today_callbacks import CallbackSlot
 from app.services.video_sources import GenerationState, TodaysVideo, adapter_for, describe_http_error
 from app.timezone import now_ist
 
@@ -219,8 +221,15 @@ class VideoSourceService:
             {"channel_id": channel_id, "source_id": source_id, "created_at": {"$gte": since}}
         )
 
-    async def todays_video(self, channel_id: str, source_id: str) -> TodaysVideo:
+    async def todays_video(
+        self, channel_id: str, source_id: str, callback_slot: CallbackSlot | None = None
+    ) -> TodaysVideo:
         """Ask a source what to publish now. Never raises.
+
+        With ``callback_slot`` the ask also offers a one-time callback. It is minted
+        only once the source is known to speak this contract, and closed again
+        unless the app answered "generating" and accepted it — so the only pending
+        records are ones an app has actually promised to call.
 
         An app that cannot be reached is reported as ``unavailable`` rather than
         ``unsupported``: the difference decides whether the scheduler retries this
@@ -232,13 +241,24 @@ class VideoSourceService:
         if not adapter.supports_todays_video(source):
             return TodaysVideo(state="unsupported", reason=f"source '{source.name}' has no today endpoint")
 
+        offer: today_callbacks.CallbackOffer | None = None
         try:
-            result = await adapter.request_todays_video(source)
+            if callback_slot:
+                offer = await today_callbacks.issue(self.db, callback_slot, source_id, now_ist())
+            result = await adapter.request_todays_video(source, offer.headers() if offer else None)
         except Exception as exc:
             message = describe_http_error(exc)
             await self._record_health(source_id, ok=False, error=message)
             logger.warning("Video source %s could not answer for today: %s", source_id, message)
+            if offer:
+                await today_callbacks.close(self.db, offer.callback_id, now_ist(), "the ask failed")
             return TodaysVideo(state="unavailable", reason=message)
+
+        if offer:
+            if result.state == "generating" and result.callback_accepted:
+                result.callback_id = offer.callback_id
+            else:
+                await today_callbacks.close(self.db, offer.callback_id, now_ist(), f"app answered {result.state}")
 
         # An "unsupported" answer is the app telling us the route is absent, which
         # says nothing bad about the source itself, so it is not a health failure.

@@ -85,6 +85,8 @@ async def connect_db(
     await _db.posts.create_index("post_id", unique=True)
     await _db.posts.create_index([("channel_id", 1), ("status", 1)])
     await _db.posts.create_index([("status", 1), ("scheduled_at", 1)])
+    await _db.source_callbacks.create_index("callback_id", unique=True)
+    await _db.source_callbacks.create_index([("status", 1), ("expires_at", 1)])
     await _db.posting_queue.create_index(
         [("channel_id", 1), ("position", 1)],
     )
