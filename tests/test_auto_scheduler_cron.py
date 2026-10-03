@@ -356,22 +356,24 @@ async def test_recheck_fails_the_slot_after_max_wait(monkeypatch):
 # ------------------------------------------------------------------
 
 
-def test_all_slots_terminal_is_false_before_slot_time():
-    ch = _channel(["19:00"])
-    run_docs = {"histriphy": {"slots": {"19:00": {"state": cron._SCHEDULED}}}}
-    assert cron._all_slots_terminal([ch], run_docs, _dt(2026, 8, 24, 18, 0), date(2026, 8, 24)) is False
-
-
-def test_all_slots_terminal_true_when_every_slot_done_and_past():
+def test_all_slots_terminal_true_as_soon_as_every_slot_is_done():
+    # Scheduled at 18:02 for a 19:00 slot: the day's work is done, so the summary
+    # need not wait for 19:00 to pass.
     ch = _channel(["19:00", "21:00"])
     run_docs = {"histriphy": {"slots": {"19:00": {"state": cron._SCHEDULED}, "21:00": {"state": cron._SKIPPED}}}}
-    assert cron._all_slots_terminal([ch], run_docs, _dt(2026, 8, 24, 21, 30), date(2026, 8, 24)) is True
+    assert cron._all_slots_terminal([ch], run_docs) is True
+
+
+def test_all_slots_terminal_false_while_a_later_slot_is_unprocessed():
+    ch = _channel(["19:00", "21:00"])
+    run_docs = {"histriphy": {"slots": {"19:00": {"state": cron._SCHEDULED}}}}
+    assert cron._all_slots_terminal([ch], run_docs) is False
 
 
 def test_all_slots_terminal_false_while_an_import_is_pending():
     ch = _channel(["19:00"])
     run_docs = {"histriphy": {"slots": {"19:00": {"state": cron._IMPORTING}}}}
-    assert cron._all_slots_terminal([ch], run_docs, _dt(2026, 8, 24, 21, 30), date(2026, 8, 24)) is False
+    assert cron._all_slots_terminal([ch], run_docs) is False
 
 
 def test_assemble_summary_splits_scheduled_and_skipped():
@@ -1336,3 +1338,28 @@ def test_a_day_with_nothing_to_complain_about_assembles_no_remarks():
         }
     }
     assert cron._assemble_summary(date(2026, 8, 24), run_docs)["remarks"] == []
+
+
+@pytest.mark.asyncio
+async def test_summary_goes_out_as_soon_as_the_work_is_done_not_at_the_slot_time(monkeypatch):
+    runs = FakeRuns()
+    runs.docs[("2026-08-24", "histriphy")] = {
+        "date": "2026-08-24",
+        "channel_id": "histriphy",
+        "channel_name": "Histriphy",
+        "slots": {"19:00": {"state": cron._SCHEDULED, "video_id": "v1"}},
+    }
+    db = FakeDB(runs=runs, profile={"email": "owner@example.com"})
+    sends = []
+
+    async def fake_send(settings, recipient, subject, body, html_body=None):
+        sends.append(recipient)
+        return True
+
+    monkeypatch.setattr(cron, "send_email", fake_send)
+
+    # 18:05: the 19:00 slot's video is already scheduled, so the day's work is done.
+    now = _dt(2026, 8, 24, 18, 5)
+    await cron._maybe_send_summary(db, SimpleNamespace(SUMMARY_EMAIL_TO=None), [_channel(["19:00"])], now.date(), now)
+
+    assert sends == ["owner@example.com"]
