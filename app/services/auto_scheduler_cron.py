@@ -996,17 +996,14 @@ def _slot_has_awaiting_link(run_doc: dict[str, Any], slot: str) -> bool:
     return any((link or {}).get("state") == _AWAITING for link in (data.get("linked") or []))
 
 
-def _all_slots_terminal(
-    channels: list[dict[str, Any]],
-    run_docs: dict[str, dict[str, Any]],
-    now: datetime,
-    day: date,
-) -> bool:
-    """True when every enabled channel's every slot has reached a terminal state
-    and its time has passed — i.e. ``day``'s work is finished.
+def _all_slots_terminal(channels: list[dict[str, Any]], run_docs: dict[str, dict[str, Any]]) -> bool:
+    """True when every enabled channel's every slot has reached a terminal state —
+    i.e. the day's work is finished.
 
-    ``day`` is passed rather than taken from ``now`` so a day resolved late (after
-    a rollover left work stranded) is judged against its own slot times.
+    The slot's publish time is deliberately not waited for: the summary reports
+    what was scheduled, not what went live, and a slot only turns terminal once
+    its work is done (an unprocessed slot is still pending). Waiting for the time
+    held a 6 pm result back until the 7 pm slot had passed.
     """
     saw_a_slot = False
     for channel in channels:
@@ -1017,9 +1014,6 @@ def _all_slots_terminal(
         states = _slot_states(run_doc)
         for slot in times:
             saw_a_slot = True
-            _run_at, schedule_at = slot_datetimes(slot, day)
-            if now < schedule_at:
-                return False  # a slot's time has not arrived yet
             if states.get(slot, _PENDING) not in _TERMINAL:
                 return False
             if _slot_has_awaiting_link(run_doc, slot):
@@ -1187,14 +1181,14 @@ async def _maybe_send_summary(
     day: date,
     now: datetime,
 ) -> None:
-    """Send the day's summary exactly once, after all channels are done."""
+    """Send the day's summary exactly once, as soon as every channel's work is done."""
     run_docs: dict[str, dict[str, Any]] = {}
     for channel in channels:
         doc = await db.auto_scheduler_runs.find_one({"date": _day_key(day), "channel_id": channel["channel_id"]})
         if doc:
             run_docs[channel["channel_id"]] = doc
 
-    if not _all_slots_terminal(channels, run_docs, now, day):
+    if not _all_slots_terminal(channels, run_docs):
         return
 
     key = _day_key(day)

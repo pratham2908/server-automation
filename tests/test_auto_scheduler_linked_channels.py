@@ -388,9 +388,8 @@ async def test_an_awaiting_link_keeps_the_day_open(monkeypatch):
     """The summary must not declare the day finished while a copy is still coming."""
     channel = {**_PRIMARY, "automation_config": {"auto_scheduler": {"schedule_times": ["19:00"]}}}
     run_docs = {"geo_yt": {"slots": _awaiting_slot()}}
-    after = _AT + timedelta(hours=2)
 
-    assert cron._all_slots_terminal([channel], run_docs, after, _DAY) is False
+    assert cron._all_slots_terminal([channel], run_docs) is False
 
     settled = {"geo_yt": {"slots": {"19:00": {"state": cron._SCHEDULED, "linked": [{"state": cron._SCHEDULED}]}}}}
-    assert cron._all_slots_terminal([channel], settled, after, _DAY) is True
+    assert cron._all_slots_terminal([channel], settled) is True
