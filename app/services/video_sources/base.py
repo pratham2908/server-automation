@@ -77,6 +77,11 @@ class TodaysVideo:
     # ``is_noteworthy_remark``. Set only when it is worth a person's attention, so
     # anything here belongs in the daily email rather than a log line.
     remark: str | None = None
+    # A "generating" app that took our callback offer and will call when done, so
+    # the scheduler stops asking. False for an app that predates callbacks.
+    callback_accepted: bool = False
+    # Set by the service when the app accepted: which callback record it holds.
+    callback_id: str | None = None
 
 
 # The one thing an app tells us that is not a complaint: no format was scheduled
@@ -170,6 +175,7 @@ class SourceAdapter(abc.ABC):
         *,
         json_body: dict[str, Any] | None = None,
         timeout: float = REQUEST_TIMEOUT_S,
+        extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Call the app with whatever auth it uses, raising for a bad status.
 
@@ -194,7 +200,9 @@ class SourceAdapter(abc.ABC):
     def supports_todays_video(self, source: VideoSource) -> bool:
         return bool(self.todays_video_path(source))
 
-    async def request_todays_video(self, source: VideoSource) -> TodaysVideo:
+    async def request_todays_video(
+        self, source: VideoSource, callback_headers: dict[str, str] | None = None
+    ) -> TodaysVideo:
         """Ask the app what to publish now; it returns one ready or starts one.
 
         This replaces two of our decisions with one of theirs. We used to scan the
@@ -207,6 +215,9 @@ class SourceAdapter(abc.ABC):
         already in flight rather than starting a second one, so a poll cannot fan
         out spend. That guarantee is what lets the scheduler treat this as both the
         request and the status check.
+
+        ``callback_headers`` offer the app a one-time callback (see
+        ``today_callbacks``); an app that takes it says ``callbackAccepted: true``.
         """
         path = self.todays_video_path(source)
         if not path:
@@ -217,7 +228,9 @@ class SourceAdapter(abc.ABC):
             # when nothing is ready this request *starts* a video, drafting a topic
             # with grounded model calls inline before it answers. A listing-sized
             # 30s budget cut exactly that work off twice before.
-            resp = await self.authed_request(source, "GET", path, timeout=GENERATION_CREATE_TIMEOUT_S)
+            resp = await self.authed_request(
+                source, "GET", path, timeout=GENERATION_CREATE_TIMEOUT_S, extra_headers=callback_headers
+            )
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
             if code in (404, 405, 501):
@@ -263,6 +276,9 @@ class SourceAdapter(abc.ABC):
                 title=str(data["title"]) if data.get("title") else None,
                 retry_after_seconds=int(retry) if isinstance(retry, int | float) and retry > 0 else None,
                 remark=remark,
+                # Strictly ``true``: a truthy string from a confused app must not
+                # silence the polling it would still need.
+                callback_accepted=data.get("callbackAccepted") is True,
             )
 
         if state == "unavailable":

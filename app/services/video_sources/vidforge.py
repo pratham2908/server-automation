@@ -159,6 +159,7 @@ class VidForgeAdapter(SourceAdapter):
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
         timeout: float = REQUEST_TIMEOUT_S,
+        extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Call the app, re-logging in once if the token turns out to be dead."""
         for force in (False, True):
@@ -169,7 +170,11 @@ class VidForgeAdapter(SourceAdapter):
                     f"{source.base_url}{path}",
                     params=params,
                     json=json_body,
-                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    headers={
+                        **(extra_headers or {}),
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
                 )
             if resp.status_code != 401:
                 resp.raise_for_status()
@@ -185,10 +190,13 @@ class VidForgeAdapter(SourceAdapter):
         *,
         json_body: dict[str, Any] | None = None,
         timeout: float = REQUEST_TIMEOUT_S,
+        extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         # _request already handles the short-lived token, including one retry
         # after a 401, so generation inherits that for free.
-        return await self._request(source, method, path, json_body=json_body, timeout=timeout)
+        return await self._request(
+            source, method, path, json_body=json_body, timeout=timeout, extra_headers=extra_headers
+        )
 
     # ------------------------------------------------------------------
     # Reading

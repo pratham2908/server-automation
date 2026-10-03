@@ -340,6 +340,7 @@ from app.routers import (
     preview_analysis,
     retention_analysis,
     scorecard,
+    source_callbacks,
     sync_analysis,
     system,
     thumbnail_analysis,
@@ -352,6 +353,7 @@ app.include_router(auth.router)
 app.include_router(channels.router)
 app.include_router(channel_groups.router)
 app.include_router(competitor_feed.router)
+app.include_router(source_callbacks.router)
 app.include_router(errors.router)
 app.include_router(videos.router)
 app.include_router(posts.router)

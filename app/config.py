@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # handoff page), so it has to be the address the owner opens on a phone.
     ANALYZER_PUBLIC_URL: str = "https://youtube-analyzer-p.netlify.app"
 
+    # This server's own public origin. Source apps call back to it when today's
+    # video is done (see services/today_callbacks.py), so it must be reachable from
+    # their hosts — the public HTTPS address, never localhost.
+    PUBLIC_API_URL: str = "https://automation-server.tryalgoviz.com"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

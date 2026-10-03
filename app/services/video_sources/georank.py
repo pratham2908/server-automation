@@ -112,6 +112,7 @@ class GeoRankAdapter(SourceAdapter):
         *,
         json_body: dict[str, Any] | None = None,
         timeout: float = REQUEST_TIMEOUT_S,
+        extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         # X-Api-Key unconditionally, whatever auth_style the feed is configured
         # with. The read-only feed accepts either header, but the create endpoint
@@ -121,6 +122,7 @@ class GeoRankAdapter(SourceAdapter):
         # videos happily and 401 the moment it asked for one.
         cfg = self._cfg(source)
         headers = {
+            **(extra_headers or {}),
             **self._headers(source),
             "X-Api-Key": cfg.api_key,
             "Content-Type": "application/json",
