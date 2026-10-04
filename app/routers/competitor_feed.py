@@ -31,6 +31,7 @@ from app.services.competitor_feed import (
     trim_to_new,
     write_cached_profile,
 )
+from app.services.instagram import graph_error_message
 from app.timezone import now_ist, to_ist_iso
 
 logger = get_logger(__name__)
@@ -186,13 +187,16 @@ async def get_competitor_feed(
         # Raised when the source token is Instagram Login rather than Facebook.
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except Exception as exc:
-        # Surfaced, not swallowed: the usual causes are a private or personal
-        # target and an expired token, and the caller can act on both.
-        logger.warning("Competitor feed failed for '%s': %s", target, exc)
+        # Meta's own words, not our guess at them. This used to assert the target
+        # "must be a public Business or Creator account", which is only one of
+        # the causes — an expired token, a rate limit and an over-large page all
+        # land here too, and being told the wrong reason sends the caller after
+        # the wrong fix.
+        reason = graph_error_message(exc)
+        logger.warning("Competitor feed failed for '%s': %s", target, reason)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Instagram rejected the lookup for '{target}'. "
-            "It must be a public Business or Creator account. Underlying error: " + str(exc)[:200],
+            detail=f"Instagram rejected the lookup for '{target}': {reason[:300]}",
         )
 
     posts = [normalise_post(item) for item in raw]
