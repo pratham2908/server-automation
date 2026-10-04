@@ -27,6 +27,43 @@ logger = get_logger(__name__)
 PROVIDER_FACEBOOK = "facebook"
 PROVIDER_INSTAGRAM = "instagram"
 
+# Meta answers 500 "Please reduce the amount of data you're asking for" when a
+# business_discovery page asks for too much at once. Halving the page is the
+# remedy; below this floor the request is not the problem and retrying only
+# burns calls against a shared rate budget.
+MIN_MEDIA_PAGE_SIZE = 6
+
+
+def graph_error_message(exc: Exception) -> str:
+    """Meta's own words for a failed Graph call.
+
+    ``requests`` raises "500 Server Error: Internal Server Error for url: ...",
+    which says nothing about what Meta actually objected to — that lives in the
+    response body. Callers surfacing an error to a human or another service want
+    the body, not the status line.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return str(exc)
+    try:
+        error = response.json().get("error") or {}
+    except Exception:
+        # A non-JSON body (an HTML error page, a proxy timeout) leaves nothing
+        # better than the status line.
+        return str(exc)
+
+    message = error.get("message")
+    if not message:
+        return str(exc)
+
+    codes: list[str] = []
+    if error.get("code") is not None:
+        codes.append(f"code {error['code']}")
+    if error.get("error_subcode") is not None:
+        codes.append(f"subcode {error['error_subcode']}")
+    return f"{message} ({', '.join(codes)})" if codes else str(message)
+
+
 _FB_GRAPH_BASE = "https://graph.facebook.com/v25.0"
 _IG_GRAPH_BASE = "https://graph.instagram.com/v23.0"
 
@@ -235,6 +272,50 @@ class InstagramService:
             "biography": disc.get("biography", ""),
         }
 
+    def _discover_media_page(
+        self, own_ig_user_id: str, target_username: str, page_size: int, after: str | None
+    ) -> tuple[list[dict[str, Any]], dict[str, Any], int]:
+        """One page of business_discovery media, shrinking the ask if Meta balks.
+
+        A 500 here means "Please reduce the amount of data you're asking for" —
+        the page was too big, not wrong. So the same page is retried at half the
+        size (50 → 25 → 12 → 6) before giving up, rather than failing a request
+        that would have worked slightly smaller.
+
+        Returns ``(items, paging, page_size_used)``; the size is handed back so
+        the caller can keep the smaller page for the rest of the run instead of
+        rediscovering the ceiling on every page.
+        """
+        size = page_size
+        while True:
+            cursor = f".after({after})" if after else ""
+            fields = (
+                f"business_discovery.username({target_username})"
+                f"{{media.limit({size}){cursor}"
+                f"{{id,caption,media_type,media_product_type,media_url,thumbnail_url,"
+                f"permalink,timestamp,like_count,comments_count,"
+                f"children{{id,media_type,media_url,thumbnail_url}}}}}}"
+            )
+            try:
+                data = self._get(own_ig_user_id, {"fields": fields})
+            except requests.HTTPError as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                if status == 500 and size > MIN_MEDIA_PAGE_SIZE:
+                    smaller = max(MIN_MEDIA_PAGE_SIZE, size // 2)
+                    logger.warning(
+                        "business_discovery page of %d was too large for %s (%s) — retrying at %d",
+                        size,
+                        target_username,
+                        graph_error_message(exc),
+                        smaller,
+                    )
+                    size = smaller
+                    continue
+                raise
+
+            media = data.get("business_discovery", {}).get("media", {})
+            return list(media.get("data", [])), dict(media.get("paging") or {}), size
+
     def discover_all_media(
         self, own_ig_user_id: str, target_username: str, limit: int = 250, page_size: int = 50
     ) -> list[dict[str, Any]]:
@@ -246,11 +327,13 @@ class InstagramService:
         are a rounding error and dropping carousels loses almost everything.
 
         Paged rather than fetched in one shot, because asking for ``children``
-        (the individual frames of a carousel) past about 50 items makes Meta
-        answer "Please reduce the amount of data you're asking for" as a 500.
-        A bare query tolerates a much larger limit, but then every carousel comes
-        back as a single cover image — useless to a caller whose job is to
-        download the post. So: small pages, followed by cursor.
+        (the individual frames of a carousel) trips a complexity budget: Meta
+        answers "Please reduce the amount of data you're asking for" as a 500.
+        The threshold is not a fixed item count and moves with how much each
+        post carries — 60 has been served where 140 was refused — so it is
+        discovered by halving rather than hard-coded. A bare query tolerates a
+        much larger limit, but then every carousel comes back as a single cover
+        image, useless to a caller whose job is to download the post.
 
         Videos still carry no ``media_url`` at any page size; only
         ``thumbnail_url`` and the permalink. That is Instagram's rule for other
@@ -258,26 +341,23 @@ class InstagramService:
         """
         self._require_business_discovery()
 
+        # Never ask for more in one page than the caller wants in total: a
+        # limit of 3 should cost one small page, not a 50-item page we discard
+        # most of — and an oversized page is exactly what provokes the 500.
+        size = max(1, min(page_size, limit))
+
         collected: list[dict[str, Any]] = []
         seen: set[str] = set()
         after: str | None = None
 
-        # Bounded so a cursor that never terminates cannot spin forever against
-        # a shared app-level rate limit.
-        max_pages = max(1, -(-limit // page_size)) + 2
+        # A guard against a cursor that never terminates, not a call budget: the
+        # normal stop is Meta running out of pages. Keyed off the floor rather
+        # than the starting size so a run that has to shrink mid-way can still
+        # reach the caller's limit.
+        max_pages = max(1, -(-limit // MIN_MEDIA_PAGE_SIZE)) + 2
 
         for _ in range(max_pages):
-            cursor = f".after({after})" if after else ""
-            fields = (
-                f"business_discovery.username({target_username})"
-                f"{{media.limit({page_size}){cursor}"
-                f"{{id,caption,media_type,media_product_type,media_url,thumbnail_url,"
-                f"permalink,timestamp,like_count,comments_count,"
-                f"children{{id,media_type,media_url,thumbnail_url}}}}}}"
-            )
-            data = self._get(own_ig_user_id, {"fields": fields})
-            media = data.get("business_discovery", {}).get("media", {})
-            page = media.get("data", [])
+            page, paging, size = self._discover_media_page(own_ig_user_id, target_username, size, after)
             if not page:
                 break
 
@@ -293,7 +373,7 @@ class InstagramService:
             if len(collected) >= limit:
                 break
 
-            after = (media.get("paging") or {}).get("cursors", {}).get("after")
+            after = paging.get("cursors", {}).get("after")
             if not after:
                 break
 
