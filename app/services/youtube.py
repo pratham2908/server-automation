@@ -677,6 +677,43 @@ class YouTubeService:
         )
         return cast(str, response["id"])
 
+    def set_video_privacy(self, youtube_video_id: str, privacy_status: str) -> str:
+        """Change a video's visibility. Returns the privacy status now in effect.
+
+        ``unlisted`` is the reversible equivalent of retiring a video: it leaves
+        the channel page, search and recommendations, but keeps its views, likes,
+        comments and watch history, and a direct link still works.
+
+        The whole ``status`` object is read first and sent back with only
+        ``privacyStatus`` changed, because ``videos.update`` **replaces** the
+        part it is given — sending privacyStatus alone would clear every other
+        mutable status field, silently resetting things like
+        ``selfDeclaredMadeForKids``, ``embeddable`` and ``license``.
+
+        Requires the ``youtube.force-ssl`` scope, which this app already requests.
+        """
+        if privacy_status not in ("public", "unlisted", "private"):
+            raise ValueError(f"privacy_status must be public, unlisted or private (got {privacy_status!r})")
+
+        current = self._execute(self._youtube.videos().list(part="status", id=youtube_video_id))
+        items = current.get("items") or []
+        if not items:
+            raise ValueError(f"YouTube has no video {youtube_video_id}")
+
+        status = dict(items[0].get("status") or {})
+        status["privacyStatus"] = privacy_status
+        if privacy_status != "private":
+            # publishAt is only valid alongside privacyStatus=private; sending it
+            # with unlisted or public is rejected.
+            status.pop("publishAt", None)
+
+        response = self._execute(
+            self._youtube.videos().update(part="status", body={"id": youtube_video_id, "status": status})
+        )
+        applied = cast(str, (response.get("status") or {}).get("privacyStatus", privacy_status))
+        logger.info("Set YouTube video %s to %s", youtube_video_id, applied)
+        return applied
+
     def delete_video(self, youtube_video_id: str) -> None:
         """Delete a video from the channel's YouTube account.
 

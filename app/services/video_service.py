@@ -1377,6 +1377,48 @@ class VideoService:
             res.append(r)
         return {"ok": True, "videos": res}
 
+    async def set_video_privacy(self, channel_id: str, video_id: str, privacy_status: str) -> dict[str, Any]:
+        """Change a published YouTube video's visibility.
+
+        ``unlisted`` is the reversible way to retire a video: it leaves the
+        channel page, search and recommendations while keeping its views, likes
+        and comments, and nothing is destroyed — unlike a platform delete, which
+        also takes the R2 master with it.
+
+        Our own ``status`` is left alone. An unlisted video is still published;
+        what changed is who can find it, and ``metadata.youtube_privacy_status``
+        records that so the dashboard and the next sync agree.
+        """
+        channel = await self.db.channels.find_one({"channel_id": channel_id})
+        if not channel:
+            raise ValueError("Channel not found")
+        if get_channel_platform(channel) != "youtube":
+            raise ValueError("Visibility can only be changed on YouTube channels")
+
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+        if not video:
+            raise ValueError("Video not found")
+        youtube_video_id = video.get("youtube_video_id")
+        if not youtube_video_id:
+            raise ValueError("Video is not published on YouTube, so it has no visibility to change")
+
+        yt = await self._get_youtube_service(channel_id)
+        if not yt:
+            raise ChannelNotConnectedError(f"Channel '{channel_id}' has no valid YouTube token")
+
+        applied = await asyncio.to_thread(yt.set_video_privacy, youtube_video_id, privacy_status)
+
+        await self.db.videos.update_one(
+            {"_id": video["_id"]},
+            {"$set": {"metadata.youtube_privacy_status": applied, "updated_at": now_ist()}},
+        )
+        return {
+            "ok": True,
+            "video_id": video_id,
+            "youtube_video_id": youtube_video_id,
+            "privacy_status": applied,
+        }
+
     async def post_video_comment(self, channel_id: str, video_id: str, message: str) -> dict[str, Any]:
         """Post a comment from the channel's own account on one of its videos.
 
