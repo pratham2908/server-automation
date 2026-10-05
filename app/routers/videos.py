@@ -83,6 +83,10 @@ class ScheduleRequest(BaseModel):
     )
 
 
+class PrivacyRequest(BaseModel):
+    privacy_status: str = Field(..., description="public | unlisted | private")
+
+
 class CommentRequest(BaseModel):
     message: str = Field(..., description="Comment text to post from the channel's own account")
 
@@ -481,6 +485,29 @@ async def schedule_video(
         )
         if isinstance(e, ValueError):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise e
+
+
+@router.patch("/{video_id}/privacy")
+async def set_video_privacy(
+    channel_id: str,
+    video_id: str,
+    body: PrivacyRequest,
+    service: VideoService = Depends(get_video_service),
+):
+    """Change a published YouTube video's visibility (public/unlisted/private)."""
+    try:
+        return await service.set_video_privacy(channel_id, video_id, body.privacy_status)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        error_service = get_error_service(service.db)
+        await error_service.log_error(
+            feature="Video Visibility",
+            message=str(e),
+            exception=e,
+            context={"channel_id": channel_id, "video_id": video_id, "privacy_status": body.privacy_status},
+        )
         raise e
 
 
