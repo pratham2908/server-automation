@@ -13,7 +13,7 @@ from app.logger import get_logger
 from app.models.post import PostDoc
 from app.services.errors import get_error_service
 from app.services.post_rules import protected_slide_keys
-from app.services.video_service import VideoService
+from app.services.video_service import PLAYBACK_URL_TTL_SECONDS, VideoService
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -49,6 +49,11 @@ def get_video_service(db: AsyncIOMotorDatabase = Depends(get_db)) -> VideoServic
 
 class VideoStatusUpdate(BaseModel):
     status: str
+
+
+class VideoPlaybackOut(BaseModel):
+    url: str
+    expires_in_seconds: int
 
 
 class CategoryChangeRequest(BaseModel):
@@ -329,6 +334,22 @@ async def delete_video(
     except RuntimeError as e:
         # Platform deletion failed — our copy was deliberately kept for a retry.
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(e))
+
+
+@router.get("/{video_id}/playback", response_model=VideoPlaybackOut)
+async def get_video_playback(
+    channel_id: str,
+    video_id: str,
+    service: VideoService = Depends(get_video_service),
+) -> VideoPlaybackOut:
+    """A 1-hour link to the video's stored file, for the in-app player."""
+    try:
+        url = await service.playback_url(channel_id, video_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e))
+    return VideoPlaybackOut(url=url, expires_in_seconds=PLAYBACK_URL_TTL_SECONDS)
 
 
 @router.post("/{video_id}/restore")

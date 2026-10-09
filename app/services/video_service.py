@@ -37,6 +37,9 @@ from app.timezone import IST, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
+# Long enough to watch and scrub a short; short enough that a copied link soon dies.
+PLAYBACK_URL_TTL_SECONDS = 3600
+
 
 class VideoService:
     def __init__(
@@ -443,6 +446,26 @@ class VideoService:
             "platform_deleted": platform_deleted,
             "platform_error": platform_error,
         }
+
+    async def playback_url(self, channel_id: str, video_id: str) -> str:
+        """A short-lived link to play the video's stored file in the browser.
+
+        Raises ``ValueError`` for an unknown video and ``FileNotFoundError`` when
+        there is no stored file — published videos usually lose theirs to the
+        storage purge, and those play on the platform instead.
+        """
+        doc = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id}, {"r2_object_key": 1})
+        if not doc:
+            raise ValueError(f"Video '{video_id}' not found")
+        key = doc.get("r2_object_key")
+        if not key or self.r2 is None:
+            raise FileNotFoundError("This video has no stored file to play")
+        r2 = self.r2
+        # Checked rather than presigned blind: a purged file would otherwise give
+        # the browser a link that 404s inside the player with no explanation.
+        if not await asyncio.to_thread(r2.file_exists, key):
+            raise FileNotFoundError("This video's stored file has been removed (usually after publishing)")
+        return await asyncio.to_thread(r2.generate_presigned_url, key, PLAYBACK_URL_TTL_SECONDS, "video/mp4")
 
     async def restore_video(self, channel_id: str, video_id: str) -> dict[str, Any]:
         """Restore an archived (soft-deleted) video to its pre-deletion status.
