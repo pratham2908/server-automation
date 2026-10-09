@@ -87,15 +87,23 @@ class R2Service:
             raise
         return int(head.get("ContentLength", 0))
 
-    def generate_presigned_url(self, key: str, expires_in: int = 3600) -> str:
-        """Generate a temporary GET URL for *key* (default 1 hour)."""
+    def generate_presigned_url(self, key: str, expires_in: int = 3600, response_content_type: str | None = None) -> str:
+        """Generate a temporary GET URL for *key* (default 1 hour).
+
+        ``response_content_type`` overrides the stored Content-Type for this URL
+        only. Videos uploaded server-side were stored without one, and Safari will
+        not play an mp4 served as ``binary/octet-stream``.
+        """
         from typing import cast
 
+        params: dict[str, str] = {"Bucket": self._bucket, "Key": key}
+        if response_content_type:
+            params["ResponseContentType"] = response_content_type
         return cast(
             str,
             self._client.generate_presigned_url(
                 "get_object",
-                Params={"Bucket": self._bucket, "Key": key},
+                Params=params,
                 ExpiresIn=expires_in,
             ),
         )
