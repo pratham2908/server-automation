@@ -22,6 +22,7 @@ from app.services.comment_reply_review import (
 )
 from app.services.gemini import GeminiService
 from app.services.instagram import InstagramService
+from app.services.instagram_tokens import PREFER_FOR_READING_COMMENTS, PREFER_FOR_REPLYING
 from app.services.youtube import YouTubeService
 from app.timezone import now_ist
 
@@ -91,11 +92,13 @@ async def run_comment_reply_cycle(
 
     yt_svc: YouTubeService | None = None
     ig_svc: InstagramService | None = None
+    ig_reply_svc: InstagramService | None = None
 
     if platform == "youtube" and youtube_service_manager:
         yt_svc = await youtube_service_manager.get_service(channel_id)
     elif platform == "instagram" and instagram_service_manager:
-        ig_svc = await instagram_service_manager.get_service(channel_id)
+        ig_svc = await instagram_service_manager.get_service(channel_id, PREFER_FOR_READING_COMMENTS)
+        ig_reply_svc = await instagram_service_manager.get_service(channel_id, PREFER_FOR_REPLYING)
 
     if not yt_svc and not ig_svc:
         logger.warning("No platform service available for channel %s", channel_id)
@@ -279,8 +282,8 @@ async def run_comment_reply_cycle(
             try:
                 if platform == "youtube" and yt_svc:
                     reply_id = yt_svc.reply_to_comment(c["comment_id"], reply_text)
-                elif platform == "instagram" and ig_svc:
-                    reply_id = ig_svc.reply_to_comment(c["comment_id"], reply_text)
+                elif platform == "instagram" and ig_reply_svc:
+                    reply_id = ig_reply_svc.reply_to_comment(c["comment_id"], reply_text)
                 else:
                     continue
             except Exception as exc:

@@ -271,7 +271,7 @@ class _Manager:
     def __init__(self, svc: _Ig) -> None:
         self._svc = svc
 
-    async def get_service(self, channel_id: str) -> _Ig:
+    async def get_service(self, channel_id: str, prefer: str | None = None) -> _Ig:
         return self._svc
 
 
