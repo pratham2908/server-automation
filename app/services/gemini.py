@@ -14,6 +14,7 @@ from typing import Any
 
 from app.logger import get_logger
 from app.services.ai_call_logger import schedule_ai_call_log
+from app.services.comment_reply_text import humanise_reply
 from app.services.one_ai_client import get_one_ai
 
 logger = get_logger(__name__)
@@ -1064,14 +1065,20 @@ For Instagram, put the full caption in `suggested_description` and leave `sugges
     async def classify_comment_sentiment(
         self,
         comments: list[dict[str, Any]],
+        video_context: str = "",
     ) -> list[dict[str, Any]]:
         """Classify each comment's sentiment for the auto-reply system.
+
+        ``video_context`` (title and description) lets the model read a comment in light of what the
+        video is: "this is wrong" under a tutorial is criticism, but "this is wild" under a
+        mind-blowing demo is praise.
 
         Returns a list of ``{"comment_id": "...", "sentiment": "positive|negative|neutral|spam"}``.
         """
         batch = [{"comment_id": c["comment_id"], "text": c["text"], "author": c.get("author", "")} for c in comments]
+        about = f"The comments are on this video:\n{video_context}\n\n" if video_context else ""
 
-        prompt = f"""Classify the sentiment of each comment below.
+        prompt = f"""{about}Classify the sentiment of each comment below.
 
 Categories:
 - **positive**: Genuine appreciation, excitement, praise, compliments, or love for the content.
@@ -1101,41 +1108,56 @@ Classify every comment. Do not skip any."""
         video_title: str,
         platform: str = "youtube",
         sentiment: str = "positive",
+        video_context: str = "",
     ) -> str:
-        """Generate a polite, engaging reply to a comment.
+        """Generate a reply that reads like the channel owner typed it, not like a brand account.
 
-        Positive comments get an acknowledgement plus a gentle follow/subscribe nudge. Negative and
-        neutral ones (only drafted for human review) get no promotional nudge: pitching a subscription
-        at someone complaining reads as tone-deaf. Returns the raw reply string.
+        Negative and neutral comments (only drafted for human review) get no promotional nudge:
+        pitching a subscription at someone complaining reads as tone-deaf. ``video_context`` is
+        the video's title and description, so the reply can refer to what the video is actually
+        about. The result is passed through ``humanise_reply`` to strip dashes and curly quotes.
         """
         if sentiment == "negative":
-            cta = (
-                "acknowledge the concern sincerely without being defensive, and offer to help or listen "
-                "(do NOT ask them to follow or subscribe)"
+            intent = (
+                "They are unhappy or critical. Take it on the chin: agree if they have a point, "
+                "no defensiveness, no grovelling. Never ask them to follow or subscribe."
             )
         elif sentiment == "neutral":
-            cta = (
-                "answer the question or remark helpfully if you can from the video title alone; if you "
-                "cannot be sure of the answer, say thanks and invite them to say more "
-                "(do NOT ask them to follow or subscribe)"
-            )
-        elif platform == "instagram":
-            cta = (
-                "politely encourage them to follow for more reels like this or ask a question to drive more engagement"
+            intent = (
+                "They asked something or made a remark. Answer it if the video details above make "
+                "the answer clear; if you are not sure, say so briefly or ask what they mean. "
+                "Never ask them to follow or subscribe."
             )
         else:
-            cta = "politely encourage them to subscribe for more videos like this or ask a question to drive more engagement"
+            follow = "follow" if platform == "instagram" else "subscribe"
+            intent = (
+                "They liked it. Say thanks in a way that picks up the specific thing they said. "
+                f"Only mention that they could {follow} if it genuinely fits, which is rare. "
+                "Often a plain thanks, or a quick question back, is better."
+            )
 
-        prompt = f"""Generate a short, polite, and engaging reply to the following comment.
+        about = video_context or f"Title: {video_title}"
+        medium = "an Instagram comment" if platform == "instagram" else "a YouTube comment"
 
-Video Title: "{video_title}"
-Comment: "{comment_text}"
+        prompt = f"""You run this channel and are replying to {medium} on your own video.
 
-Guidelines:
-1. **Acknowledge**: Start by acknowledging the user's specific comment or sentiment.
-2. **Action Item**: {cta}.
-3. **Tone**: Be very polite, friendly, and authentic. Not generic or "bot-like".
-4. **Length**: Keep it concise (1-2 sentences).
+The video:
+{about}
+
+The comment:
+"{comment_text}"
+
+What to do: {intent}
+
+Write it the way a real person types on their phone:
+- Short. Usually one line, never more than two sentences.
+- Casual and warm. Contractions are good. Lowercase openers and small imperfections are fine.
+- Match the commenter's energy and language. If they wrote one word, reply with a few.
+- At most one emoji, and often none. No hashtags.
+- Do NOT use dashes of any kind to join clauses (no em dash, no en dash, no " - "). Use a comma or start a new sentence.
+- Do NOT use stock phrases like "Thank you for your feedback", "Glad you enjoyed it", "Great question", "I appreciate", "Feel free to", "Stay tuned".
+- Do not repeat the comment back to them, and do not start with their name or "@".
+- Do not explain that you are an AI or describe what you are doing.
 
 Return a JSON object:
 {{"reply": "..."}}"""
@@ -1145,7 +1167,7 @@ Return a JSON object:
             result = json.loads(text)
             from typing import cast
 
-            return cast(str, result.get("reply", ""))
+            return humanise_reply(cast(str, result.get("reply", "")))
         except (json.JSONDecodeError, TypeError):
             return ""
 

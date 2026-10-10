@@ -20,6 +20,7 @@ from app.services.comment_reply_review import (
     normalise_mode,
     own_identities,
 )
+from app.services.comment_reply_text import video_context
 from app.services.gemini import GeminiService
 from app.services.instagram import InstagramService
 from app.services.instagram_tokens import PREFER_FOR_READING_COMMENTS, PREFER_FOR_REPLYING
@@ -188,6 +189,8 @@ async def run_comment_reply_cycle(
         if not candidates:
             continue
 
+        context = video_context(video)
+
         # Classify sentiment in batches
         # (comment, sentiment) pairs that get a reply or a draft. Auto mode handles only positive ones;
         # review mode also drafts negative and neutral, since a person approves each before it is sent.
@@ -197,7 +200,7 @@ async def run_comment_reply_cycle(
         for i in range(0, len(candidates), _SENTIMENT_BATCH_SIZE):
             batch = candidates[i : i + _SENTIMENT_BATCH_SIZE]
             try:
-                results = await gemini_service.classify_comment_sentiment(batch)
+                results = await gemini_service.classify_comment_sentiment(batch, video_context=context)
             except Exception as exc:
                 logger.warning("Gemini sentiment classification failed: %s", exc)
                 stats["errors"] += 1
@@ -252,6 +255,7 @@ async def run_comment_reply_cycle(
                     video_title=video.get("title", ""),
                     platform=platform,
                     sentiment=sent,
+                    video_context=context,
                 )
             except Exception as exc:
                 logger.warning("AI reply generation failed: %s", exc)
