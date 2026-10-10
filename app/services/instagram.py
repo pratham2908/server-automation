@@ -559,6 +559,47 @@ class InstagramService:
 
         return comments
 
+    _THREAD_FIELDS = "id,text,timestamp,like_count,username,replies.limit(50){id,text,timestamp,like_count,username}"
+
+    @staticmethod
+    def _thread_message(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "comment_id": item.get("id", ""),
+            "text": item.get("text", ""),
+            "like_count": int(item.get("like_count", 0)),
+            "author": item.get("username", ""),
+            "published_at": item.get("timestamp", ""),
+        }
+
+    def _thread_from_node(self, item: dict[str, Any], media_id: str) -> dict[str, Any]:
+        replies = (item.get("replies") or {}).get("data", [])
+        return {
+            "top": self._thread_message(item),
+            "replies": [self._thread_message(r) for r in replies],
+            "comment_url": f"https://www.instagram.com/reels/{media_id}/",
+        }
+
+    def get_media_threads(self, media_id: str, max_threads: int = 50) -> list[dict[str, Any]]:
+        """Top-level comments on a media item, each with its replies nested, newest first.
+
+        One request returns the replies inline (``replies.limit(50){...}``), so reading a whole
+        comment section costs one call per page rather than one per thread.
+        """
+        threads: list[dict[str, Any]] = []
+        url: str | None = f"{media_id}/comments"
+        params: dict[str, str] = {"fields": self._THREAD_FIELDS, "limit": str(min(50, max_threads))}
+        while url and len(threads) < max_threads:
+            body = self._get(url, params=params)
+            threads.extend(self._thread_from_node(item, media_id) for item in body.get("data", []))
+            next_url = body.get("paging", {}).get("next")
+            params = {}
+            url = next_url.replace(f"{self._base}/", "") if next_url else None
+        return threads[:max_threads]
+
+    def get_thread(self, comment_id: str, media_id: str = "") -> dict[str, Any]:
+        """One thread by its top-level comment id, with every reply Instagram returns."""
+        return self._thread_from_node(self._get(comment_id, {"fields": self._THREAD_FIELDS}), media_id)
+
     def get_media_comments_since(
         self,
         media_id: str,

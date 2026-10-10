@@ -636,6 +636,80 @@ class YouTubeService:
 
         return comments
 
+    @staticmethod
+    def _thread_message(comment: dict[str, Any]) -> dict[str, Any]:
+        snip = comment.get("snippet", {})
+        return {
+            "comment_id": comment.get("id", ""),
+            "text": snip.get("textDisplay", ""),
+            "like_count": int(snip.get("likeCount", 0)),
+            "author": snip.get("authorDisplayName", ""),
+            "author_channel_id": (snip.get("authorChannelId") or {}).get("value", ""),
+            "published_at": snip.get("publishedAt", ""),
+            "avatar_url": snip.get("authorProfileImageUrl") or None,
+        }
+
+    def _all_replies(self, parent_id: str) -> list[dict[str, Any]]:
+        """Every reply under one top-level comment (the thread listing inlines at most five)."""
+        replies: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "part": "snippet",
+                "parentId": parent_id,
+                "maxResults": 100,
+                "textFormat": "plainText",
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            response = self._execute(self._youtube.comments().list(**kwargs))
+            replies.extend(self._thread_message(c) for c in response.get("items", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                return replies
+
+    def get_video_threads(self, youtube_video_id: str, max_threads: int = 50) -> list[dict[str, Any]]:
+        """Top-level comments on a video with their replies, newest first.
+
+        Replies come inline up to five per thread; a thread with more is read in full with one extra
+        call, so a long conversation is never shown cut off.
+        """
+        response = self._execute(
+            self._youtube.commentThreads().list(
+                part="snippet,replies",
+                videoId=youtube_video_id,
+                maxResults=min(100, max_threads),
+                order="time",
+                textFormat="plainText",
+            )
+        )
+        threads: list[dict[str, Any]] = []
+        for item in response.get("items", [])[:max_threads]:
+            top = item["snippet"]["topLevelComment"]
+            inline = [self._thread_message(c) for c in (item.get("replies") or {}).get("comments", [])]
+            total = int(item["snippet"].get("totalReplyCount", 0))
+            replies = self._all_replies(top["id"]) if total > len(inline) else inline
+            threads.append(
+                {
+                    "top": self._thread_message(top),
+                    "replies": replies,
+                    "comment_url": f"https://www.youtube.com/watch?v={youtube_video_id}&lc={top['id']}",
+                }
+            )
+        return threads
+
+    def get_thread(self, comment_id: str, youtube_video_id: str = "") -> dict[str, Any]:
+        """One thread by its top-level comment id, with every reply."""
+        response = self._execute(self._youtube.comments().list(part="snippet", id=comment_id, textFormat="plainText"))
+        items = response.get("items", [])
+        if not items:
+            raise ValueError(f"YouTube has no comment {comment_id}")
+        return {
+            "top": self._thread_message(items[0]),
+            "replies": self._all_replies(comment_id),
+            "comment_url": f"https://www.youtube.com/watch?v={youtube_video_id}&lc={comment_id}",
+        }
+
     def post_comment(self, youtube_video_id: str, text: str) -> str:
         """Post a top-level comment on one of our own videos.
 
