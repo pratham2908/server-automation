@@ -172,22 +172,42 @@ def find_business_account_id(access_token: str, usernames: set[str]) -> str | No
     """The Instagram business-account id a Facebook token reaches for one of *usernames*.
 
     A Facebook token addresses an account by its business id, which differs from
-    the Instagram-scoped id an Instagram Login channel stores. The id is found by
-    walking the Pages the token can see and matching the linked account's username.
+    the Instagram-scoped id an Instagram Login channel stores. Which route finds
+    it depends on what kind of token was generated:
+
+    * a **user** token lists its Pages at ``/me/accounts``; each Page's linked
+      account is matched by username;
+    * a **Page** token has no ``accounts`` edge, because ``/me`` *is* the Page, so
+      the linked account is read straight off it.
+
+    Either way the username must match, so a token for the wrong account is
+    refused rather than attached.
     """
-    resp = requests.get(
-        f"{_FB_GRAPH_BASE}/me/accounts",
-        params={"fields": "instagram_business_account{id,username}", "limit": "100"},
-        headers={"Authorization": f"Bearer {access_token.strip()}"},
-        timeout=30,
-    )
-    resp.raise_for_status()
     wanted = {u.lstrip("@").strip().lower() for u in usernames if u}
-    for page in resp.json().get("data", []):
-        account = page.get("instagram_business_account") or {}
-        if str(account.get("username", "")).lower() in wanted:
-            return cast(str, account["id"])
-    return None
+    headers = {"Authorization": f"Bearer {access_token.strip()}"}
+    fields = "instagram_business_account{id,username}"
+
+    def matches(account: dict[str, Any]) -> bool:
+        return str(account.get("username", "")).lower() in wanted
+
+    resp = requests.get(
+        f"{_FB_GRAPH_BASE}/me/accounts", params={"fields": fields, "limit": "100"}, headers=headers, timeout=30
+    )
+    if resp.ok:
+        for page in resp.json().get("data", []):
+            account = page.get("instagram_business_account") or {}
+            if matches(account):
+                return cast(str, account["id"])
+        return None
+
+    # Graph reports a Page token's missing edge as code 100 "nonexisting field (accounts)".
+    # Anything else (expired token, no permission) is a real failure and must surface.
+    if "nonexisting field (accounts)" not in graph_error_message(requests.HTTPError(response=resp)):
+        resp.raise_for_status()
+    page_resp = requests.get(f"{_FB_GRAPH_BASE}/me", params={"fields": fields}, headers=headers, timeout=30)
+    page_resp.raise_for_status()
+    account = page_resp.json().get("instagram_business_account") or {}
+    return cast(str, account["id"]) if matches(account) else None
 
 
 class InstagramService:
