@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.logger import get_logger
-from app.services.instagram import PROVIDER_FACEBOOK
+from app.services.instagram_tokens import PROVIDER_FACEBOOK, ig_user_id_for, provider_of, select_slot
 from app.timezone import assume_utc, now_ist
 
 logger = get_logger(__name__)
@@ -57,13 +57,11 @@ def is_business_discovery_capable(channel: dict[str, Any]) -> bool:
     before the provider field existed are Facebook-Login by default, which is
     why a missing provider counts as capable.
     """
-    tokens = channel.get("instagram_tokens") or {}
-    return bool(
-        channel.get("platform") == "instagram"
-        and tokens.get("access_token")
-        and tokens.get("provider", PROVIDER_FACEBOOK) == PROVIDER_FACEBOOK
-        and channel.get("instagram_user_id")
-    )
+    slot = select_slot(channel, PROVIDER_FACEBOOK)
+    if channel.get("platform") != "instagram" or not slot:
+        return False
+    tokens = slot[1]
+    return provider_of(tokens) == PROVIDER_FACEBOOK and bool(ig_user_id_for(channel, tokens))
 
 
 def select_source_channel(channels: list[dict[str, Any]], preferred_id: str | None = None) -> dict[str, Any] | None:

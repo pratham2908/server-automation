@@ -16,6 +16,7 @@ from app.services.comment_reply_approval import (
     reject_pending_reply,
 )
 from app.services.comment_reply_review import MODES, STATUS_PENDING, normalise_mode
+from app.services.instagram_tokens import PREFER_FOR_REPLYING
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -124,8 +125,14 @@ async def _platform_poster(channel: dict[str, Any]) -> Any:
     import app.main as main_mod
 
     platform = channel.get("platform", "youtube")
-    manager = main_mod.youtube_service_manager if platform == "youtube" else main_mod.instagram_service_manager
-    service = await manager.get_service(channel["channel_id"]) if manager else None
+    service: Any = None
+    if platform == "youtube":
+        yt_manager = main_mod.youtube_service_manager
+        service = await yt_manager.get_service(channel["channel_id"]) if yt_manager else None
+    else:
+        # Instagram can hold two tokens; the reply is a write, which the Instagram Login token handles.
+        ig_manager = main_mod.instagram_service_manager
+        service = await ig_manager.get_service(channel["channel_id"], PREFER_FOR_REPLYING) if ig_manager else None
     if not service:
         raise HTTPException(status_code=503, detail=f"No {platform} client available for '{channel['channel_id']}'")
     return service.reply_to_comment

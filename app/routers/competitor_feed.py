@@ -32,6 +32,7 @@ from app.services.competitor_feed import (
     write_cached_profile,
 )
 from app.services.instagram import graph_error_message
+from app.services.instagram_tokens import PROVIDER_FACEBOOK
 from app.timezone import now_ist, to_ist_iso
 
 logger = get_logger(__name__)
@@ -115,8 +116,12 @@ class CompetitorFeed(BaseModel):
     profile_fetched_at: str | None = Field(None, description="When the profile block was actually read from Instagram")
 
 
-async def _load_service(db: AsyncIOMotorDatabase, via_channel_id: str | None) -> tuple[Any, dict[str, Any]]:
-    """Resolve the channel whose Facebook-Login token will carry the query."""
+async def _load_service(db: AsyncIOMotorDatabase, via_channel_id: str | None) -> tuple[Any, dict[str, Any], str]:
+    """Resolve the channel and Facebook-Login token that will carry the query.
+
+    Also returns the Instagram user id that token addresses, which is not always
+    the channel's own: an Instagram Login channel's id means nothing to Facebook.
+    """
     import app.main as main_mod
 
     channels = await db.channels.find({"platform": "instagram"}).to_list(length=None)
@@ -135,13 +140,16 @@ async def _load_service(db: AsyncIOMotorDatabase, via_channel_id: str | None) ->
     if not main_mod.instagram_service_manager:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Instagram service is unavailable")
 
-    service = await main_mod.instagram_service_manager.get_service(channel["channel_id"])
-    if not service:
+    resolved = await main_mod.instagram_service_manager.get_service_and_user_id(
+        channel["channel_id"], PROVIDER_FACEBOOK
+    )
+    if not resolved:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Could not build an Instagram client for '{channel['channel_id']}'",
         )
-    return service, channel
+    service, ig_user_id = resolved
+    return service, channel, ig_user_id
 
 
 @router.get("/{username}", response_model=CompetitorFeed)
@@ -164,7 +172,7 @@ async def get_competitor_feed(
     is new. The trimming happens here because business_discovery has no "since"
     filter of its own.
     """
-    service, channel = await _load_service(db, via_channel_id)
+    service, channel, ig_user_id = await _load_service(db, via_channel_id)
     target = username.lstrip("@").strip()
 
     cached = await read_cached_profile(db, target)
@@ -179,10 +187,10 @@ async def get_competitor_feed(
             profile_cached = True
             profile_fetched_at = to_ist_iso(cached.get("fetched_at"))
         else:
-            profile = await asyncio.to_thread(service.discover_business_account, channel["instagram_user_id"], target)
+            profile = await asyncio.to_thread(service.discover_business_account, ig_user_id, target)
             profile_fetched_at = to_ist_iso(await write_cached_profile(db, target, profile))
 
-        raw = await asyncio.to_thread(service.discover_all_media, channel["instagram_user_id"], target, limit)
+        raw = await asyncio.to_thread(service.discover_all_media, ig_user_id, target, limit)
     except ValueError as exc:
         # Raised when the source token is Instagram Login rather than Facebook.
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))

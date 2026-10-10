@@ -17,7 +17,18 @@ from app.dependencies import get_current_profile, verify_api_key
 from app.logger import get_logger
 from app.models.profile import ProfileInDB
 from app.services.channel_profile import build_profile_update, persist_profile_update
-from app.services.instagram import introspect_token
+from app.services.instagram import find_business_account_id, graph_error_message, introspect_token
+from app.services.instagram_tokens import (
+    ALT_FIELD,
+    PRIMARY_FIELD,
+    PROVIDER_FACEBOOK,
+    SECRET_CHANNEL_FIELDS,
+    build_token_doc,
+    normalise_provider,
+    secret_projection,
+    slot_for_store,
+    summarise_slots,
+)
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -110,9 +121,7 @@ async def list_channels(
     current_profile: ProfileInDB = Depends(get_current_profile),
 ):
     """Return all registered channels (tokens excluded) belonging to the current profile."""
-    channels = await db.channels.find(
-        {"profile_id": current_profile.id}, {"youtube_tokens": 0, "instagram_tokens": 0}
-    ).to_list(length=None)
+    channels = await db.channels.find({"profile_id": current_profile.id}, secret_projection()).to_list(length=None)
     for c in channels:
         c["_id"] = str(c["_id"])
     return channels
@@ -132,7 +141,7 @@ async def get_channel(
     """Return a single channel by its ``channel_id`` (tokens excluded)."""
     doc = await db.channels.find_one(
         {"channel_id": channel_id, "profile_id": current_profile.id},
-        {"youtube_tokens": 0, "instagram_tokens": 0},
+        secret_projection(),
     )
     if not doc:
         raise HTTPException(
@@ -352,7 +361,8 @@ async def _create_instagram_channel(
     }
     await db.channels.insert_one(doc)
     doc["_id"] = str(doc["_id"])
-    doc.pop("instagram_tokens", None)
+    for secret in SECRET_CHANNEL_FIELDS:
+        doc.pop(secret, None)
 
     logger.success(
         "Registered Instagram channel '%s' (user_id=%s, provider=%s)",
@@ -1231,6 +1241,13 @@ class InstagramTokenStore(BaseModel):
         "facebook",
         description="Auth source: 'facebook' (Facebook Login) or 'instagram' (Instagram Login).",
     )
+    instagram_user_id: str | None = Field(
+        None,
+        description=(
+            "Business-account id this token addresses. Only needed for a Facebook token added to a channel "
+            "whose primary token is Instagram Login; looked up from the Pages the token can see if omitted."
+        ),
+    )
 
 
 @router.post("/{channel_id}/instagram-token")
@@ -1239,7 +1256,13 @@ async def store_instagram_token(
     body: InstagramTokenStore,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Store an Instagram long-lived token on a channel document."""
+    """Store an Instagram long-lived token on a channel document.
+
+    A channel can hold one token per login type. A token of the same type as an
+    existing one replaces it; a token of the other type is kept alongside it, so
+    a channel can publish through Instagram Login and read comments through
+    Facebook Login.
+    """
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(
@@ -1247,23 +1270,57 @@ async def store_instagram_token(
             detail=f"Channel '{channel_id}' not found",
         )
 
-    provider = body.provider if body.provider in ("facebook", "instagram") else "facebook"
-    token_doc = {
-        "access_token": body.access_token.strip(),
-        "token_type": "bearer",
-        "expires_at": body.expires_at,
-        "provider": provider,
-    }
+    provider = normalise_provider(body.provider)
+    field = slot_for_store(channel, provider)
 
+    business_id = body.instagram_user_id
+    if field == ALT_FIELD and provider == PROVIDER_FACEBOOK and not business_id:
+        # The channel's own id is Instagram-scoped, which Facebook's Graph cannot address.
+        usernames = {str(channel.get(k) or "") for k in ("instagram_username", "handle", "name")}
+        try:
+            business_id = await asyncio.to_thread(find_business_account_id, body.access_token, usernames)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Could not list the Pages this Facebook token can reach: {graph_error_message(exc)[:200]}",
+            )
+        if not business_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "This Facebook token reaches no Instagram account matching this channel. "
+                    "Pass instagram_user_id explicitly if the account is linked under another name."
+                ),
+            )
+
+    token_doc = build_token_doc(body.access_token, provider, body.expires_at, business_id)
     await db.channels.update_one(
         {"channel_id": channel_id},
-        {"$set": {"instagram_tokens": token_doc, "updated_at": now_ist()}},
+        {"$set": {field: token_doc, "updated_at": now_ist()}},
     )
 
     mgr = _get_instagram_manager()
     mgr.invalidate(channel_id)
 
-    return {"ok": True, "channel_id": channel_id, "message": "Instagram token stored"}
+    return {
+        "ok": True,
+        "channel_id": channel_id,
+        "message": "Instagram token stored",
+        "slot": "primary" if field == PRIMARY_FIELD else "alt",
+        "provider": provider,
+    }
+
+
+@router.get("/{channel_id}/instagram-tokens")
+async def list_instagram_token_slots(
+    channel_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Which Instagram tokens this channel holds (login type and expiry, never the token)."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail=f"Channel '{channel_id}' not found")
+    return {"channel_id": channel_id, "tokens": summarise_slots(channel)}
 
 
 @router.get("/{channel_id}/instagram-token")

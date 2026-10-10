@@ -24,8 +24,13 @@ logger = get_logger(__name__)
 # Two integrations run in parallel during the migration:
 #   facebook  – Instagram Graph API via Facebook Login (graph.facebook.com)
 #   instagram – Instagram API with Instagram Login   (graph.instagram.com)
-PROVIDER_FACEBOOK = "facebook"
-PROVIDER_INSTAGRAM = "instagram"
+from app.services.instagram_tokens import (
+    PROVIDER_FACEBOOK,
+    PROVIDER_INSTAGRAM,
+    ig_user_id_for,
+    provider_of,
+    select_slot,
+)
 
 # Meta answers 500 "Please reduce the amount of data you're asking for" when a
 # business_discovery page asks for too much at once. Halving the page is the
@@ -163,6 +168,28 @@ def introspect_token(
     return TokenCheck(reachable=False, valid=False, error=err.get("message") or "inconclusive")
 
 
+def find_business_account_id(access_token: str, usernames: set[str]) -> str | None:
+    """The Instagram business-account id a Facebook token reaches for one of *usernames*.
+
+    A Facebook token addresses an account by its business id, which differs from
+    the Instagram-scoped id an Instagram Login channel stores. The id is found by
+    walking the Pages the token can see and matching the linked account's username.
+    """
+    resp = requests.get(
+        f"{_FB_GRAPH_BASE}/me/accounts",
+        params={"fields": "instagram_business_account{id,username}", "limit": "100"},
+        headers={"Authorization": f"Bearer {access_token.strip()}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    wanted = {u.lstrip("@").strip().lower() for u in usernames if u}
+    for page in resp.json().get("data", []):
+        account = page.get("instagram_business_account") or {}
+        if str(account.get("username", "")).lower() in wanted:
+            return cast(str, account["id"])
+    return None
+
+
 class InstagramService:
     """Wraps the Instagram Graph API for a single channel."""
 
@@ -173,6 +200,7 @@ class InstagramService:
         provider: str = PROVIDER_FACEBOOK,
         db: Any = None,
         channel_id: str | None = None,
+        token_field: str = "instagram_tokens",
     ) -> None:
         # Strip whitespace/newlines — a pasted token with a trailing "\n" produces
         # an "Invalid header value" (Bearer <token>\n) and fails every Graph call.
@@ -181,6 +209,8 @@ class InstagramService:
         self._base = _base_for(provider)
         self._db = db
         self._channel_id = channel_id
+        # Which slot on the channel doc holds this token, so a refresh writes back to the right one.
+        self._token_field = token_field
 
     def _get(self, endpoint: str, params: dict | None = None) -> dict:
 
@@ -1093,8 +1123,8 @@ class InstagramService:
                         {"channel_id": self._channel_id},
                         {
                             "$set": {
-                                "instagram_tokens.access_token": new_token,
-                                "instagram_tokens.expires_at": expires_at,
+                                f"{self._token_field}.access_token": new_token,
+                                f"{self._token_field}.expires_at": expires_at,
                                 "updated_at": now_ist(),
                             }
                         },
@@ -1121,7 +1151,7 @@ class InstagramServiceManager:
         self._db = db
         self._app_id = app_id
         self._app_secret = app_secret
-        self._cache: dict[str, InstagramService] = {}
+        self._cache: dict[tuple[str, str], InstagramService] = {}
 
     async def _resolve_credentials(self) -> tuple[str, str]:
         from app.database import get_instagram_oauth_config
@@ -1136,29 +1166,52 @@ class InstagramServiceManager:
             )
         return aid, asecret
 
-    async def get_service(self, channel_id: str) -> InstagramService | None:
-        if channel_id in self._cache:
-            return self._cache[channel_id]
+    async def get_service(self, channel_id: str, prefer: str | None = None) -> InstagramService | None:
+        """The client for this channel, using the token of login type *prefer* when it has one."""
+        resolved = await self.get_service_and_user_id(channel_id, prefer)
+        return resolved[0] if resolved else None
 
+    async def get_service_and_user_id(
+        self, channel_id: str, prefer: str | None = None
+    ) -> tuple[InstagramService, str] | None:
+        """The client plus the Instagram user id that token addresses.
+
+        The id matters: a Facebook token on a channel whose primary is Instagram
+        Login needs the business-account id stored with *that* token, not the
+        channel's Instagram-scoped one.
+        """
         channel = await self._db.channels.find_one({"channel_id": channel_id})
-        if not channel or not channel.get("instagram_tokens"):
+        if not channel:
+            logger.warning("No channel '%s'", channel_id)
+            return None
+        slot = select_slot(channel, prefer)
+        if not slot:
             logger.warning("No Instagram tokens stored for channel '%s'", channel_id)
             return None
+        field, tokens = slot
+        ig_user_id = ig_user_id_for(channel, tokens)
+
+        cache_key = (channel_id, field)
+        cached = self._cache.get(cache_key)
+        if cached:
+            return cached, ig_user_id
 
         try:
-            tokens = channel["instagram_tokens"]
             service = InstagramService(
                 access_token=tokens["access_token"],
-                provider=tokens.get("provider", PROVIDER_FACEBOOK),
+                provider=provider_of(tokens),
                 db=self._db,
                 channel_id=channel_id,
+                token_field=field,
             )
-            self._cache[channel_id] = service
-            logger.info("Instagram service initialised for channel '%s'", channel_id)
-            return service
+            self._cache[cache_key] = service
+            logger.info("Instagram service initialised for channel '%s' (%s token)", channel_id, provider_of(tokens))
+            return service, ig_user_id
         except Exception:
             logger.exception("Failed to init Instagram service for channel '%s'", channel_id)
             return None
 
     def invalidate(self, channel_id: str) -> None:
-        self._cache.pop(channel_id, None)
+        """Forget every cached client for the channel; the next call re-reads its tokens."""
+        for key in [k for k in self._cache if k[0] == channel_id]:
+            del self._cache[key]
