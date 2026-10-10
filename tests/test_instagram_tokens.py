@@ -192,19 +192,91 @@ def test_a_facebook_alt_token_without_a_business_id_cannot_address_a_lookup():
     assert not is_business_discovery_capable(channel)
 
 
-def test_the_business_id_is_found_by_username_across_the_pages_a_token_reaches(monkeypatch: pytest.MonkeyPatch):
-    class _Resp:
-        def raise_for_status(self) -> None: ...
+class _Graph:
+    """A canned Graph response: ``ok`` and ``json()`` are all the lookup reads."""
 
-        def json(self) -> dict[str, Any]:
-            return {
-                "data": [
-                    {"id": "p1", "instagram_business_account": {"id": "111", "username": "someone_else"}},
-                    {"id": "p2", "instagram_business_account": {"id": "222", "username": "TryAlgoViz"}},
-                    {"id": "p3"},
-                ]
-            }
+    def __init__(self, body: dict[str, Any], status: int = 200) -> None:
+        self._body, self.status_code = body, status
+        self.ok = status < 400
 
-    monkeypatch.setattr(instagram_module.requests, "get", lambda *a, **k: _Resp())
+    def json(self) -> dict[str, Any]:
+        return self._body
+
+    def raise_for_status(self) -> None:
+        if not self.ok:
+            raise instagram_module.requests.HTTPError(response=self)  # type: ignore[arg-type]
+
+
+_PAGE_TOKEN_ERROR = {"error": {"message": "(#100) Tried accessing nonexisting field (accounts)", "code": 100}}
+
+
+def _route(monkeypatch: pytest.MonkeyPatch, routes: dict[str, _Graph]) -> list[str]:
+    """Answer Graph calls by the endpoint's last path segment; returns the endpoints called."""
+    called: list[str] = []
+
+    def fake_get(url: str, **kwargs: Any) -> _Graph:
+        endpoint = url.rsplit("/", 1)[-1]
+        called.append(endpoint)
+        return routes[endpoint]
+
+    monkeypatch.setattr(instagram_module.requests, "get", fake_get)
+    return called
+
+
+def test_the_business_id_is_found_by_username_across_the_pages_a_user_token_reaches(monkeypatch: pytest.MonkeyPatch):
+    _route(
+        monkeypatch,
+        {
+            "accounts": _Graph(
+                {
+                    "data": [
+                        {"id": "p1", "instagram_business_account": {"id": "111", "username": "someone_else"}},
+                        {"id": "p2", "instagram_business_account": {"id": "222", "username": "TryAlgoViz"}},
+                        {"id": "p3"},
+                    ]
+                }
+            )
+        },
+    )
     assert find_business_account_id("tok", {"@tryalgoviz"}) == "222"
     assert find_business_account_id("tok", {"nobody"}) is None
+
+
+def test_a_page_token_is_read_directly_because_it_has_no_accounts_edge(monkeypatch: pytest.MonkeyPatch):
+    """The Graph API Explorer can issue a Page token; /me is then the Page, and /me/accounts does not exist."""
+    called = _route(
+        monkeypatch,
+        {
+            "accounts": _Graph(_PAGE_TOKEN_ERROR, status=400),
+            "me": _Graph(
+                {"id": "page", "instagram_business_account": {"id": "17841418776716682", "username": "tryalgoviz"}}
+            ),
+        },
+    )
+    assert find_business_account_id("page-token", {"tryalgoviz"}) == "17841418776716682"
+    assert called == ["accounts", "me"]
+
+
+def test_a_page_token_for_a_different_account_is_refused_not_attached(monkeypatch: pytest.MonkeyPatch):
+    _route(
+        monkeypatch,
+        {
+            "accounts": _Graph(_PAGE_TOKEN_ERROR, status=400),
+            "me": _Graph({"id": "page", "instagram_business_account": {"id": "999", "username": "other_account"}}),
+        },
+    )
+    assert find_business_account_id("page-token", {"tryalgoviz"}) is None
+
+
+def test_a_page_with_no_linked_instagram_account_matches_nothing(monkeypatch: pytest.MonkeyPatch):
+    _route(monkeypatch, {"accounts": _Graph(_PAGE_TOKEN_ERROR, status=400), "me": _Graph({"id": "page"})})
+    assert find_business_account_id("page-token", {"tryalgoviz"}) is None
+
+
+def test_a_real_failure_is_not_mistaken_for_a_page_token(monkeypatch: pytest.MonkeyPatch):
+    """An expired token must surface as an error, not be quietly retried against /me."""
+    expired = {"error": {"message": "Error validating access token: Session has expired", "code": 190}}
+    called = _route(monkeypatch, {"accounts": _Graph(expired, status=400)})
+    with pytest.raises(instagram_module.requests.HTTPError):
+        find_business_account_id("old", {"tryalgoviz"})
+    assert called == ["accounts"]
