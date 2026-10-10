@@ -1100,13 +1100,26 @@ Classify every comment. Do not skip any."""
         comment_text: str,
         video_title: str,
         platform: str = "youtube",
+        sentiment: str = "positive",
     ) -> str:
-        """Generate a polite, engaging reply to a positive comment.
+        """Generate a polite, engaging reply to a comment.
 
-        Aims to acknowledge the comment and politely encourage a subscription or a follow-up question.
-        Returns the raw reply string.
+        Positive comments get an acknowledgement plus a gentle follow/subscribe nudge. Negative and
+        neutral ones (only drafted for human review) get no promotional nudge: pitching a subscription
+        at someone complaining reads as tone-deaf. Returns the raw reply string.
         """
-        if platform == "instagram":
+        if sentiment == "negative":
+            cta = (
+                "acknowledge the concern sincerely without being defensive, and offer to help or listen "
+                "(do NOT ask them to follow or subscribe)"
+            )
+        elif sentiment == "neutral":
+            cta = (
+                "answer the question or remark helpfully if you can from the video title alone; if you "
+                "cannot be sure of the answer, say thanks and invite them to say more "
+                "(do NOT ask them to follow or subscribe)"
+            )
+        elif platform == "instagram":
             cta = (
                 "politely encourage them to follow for more reels like this or ask a question to drive more engagement"
             )

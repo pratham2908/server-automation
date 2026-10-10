@@ -12,6 +12,14 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.services.comment_reply_review import (
+    MODE_REVIEW,
+    build_pending_row,
+    is_own_comment,
+    is_reviewable,
+    normalise_mode,
+    own_identities,
+)
 from app.services.gemini import GeminiService
 from app.services.instagram import InstagramService
 from app.services.youtube import YouTubeService
@@ -62,7 +70,7 @@ async def run_comment_reply_cycle(
     2. Fetch recent published videos
     3. For each video: fetch comments, exclude own + already-replied, classify, reply
     """
-    stats: dict[str, Any] = {"replied": 0, "skipped": 0, "errors": 0, "videos_processed": 0}
+    stats: dict[str, Any] = {"replied": 0, "drafted": 0, "skipped": 0, "errors": 0, "videos_processed": 0}
 
     config = await _get_reply_config(db)
     if not config.get("enabled", True):
@@ -75,6 +83,7 @@ async def run_comment_reply_cycle(
         return stats
 
     platform = channel.get("platform", "youtube")
+    review_mode = normalise_mode(channel.get("comment_reply_mode")) == MODE_REVIEW
     templates = config.get("reply_templates", _DEFAULT_TEMPLATES)
     max_replies = config.get("max_replies_per_run", _DEFAULT_MAX_REPLIES)
     max_videos = config.get("max_videos_per_run", _DEFAULT_MAX_VIDEOS)
@@ -109,7 +118,7 @@ async def run_comment_reply_cycle(
     logger.info("Found %d videos for comment-reply cycle on channel '%s'", len(videos), channel_id)
 
     own_yt_channel_id = channel.get("youtube_channel_id", "")
-    own_ig_username = channel.get("name", "").lower()
+    own_ig_identities = own_identities(channel)
 
     total_replies = 0
 
@@ -137,13 +146,23 @@ async def run_comment_reply_cycle(
         if not raw_comments:
             continue
 
+        # Instagram only reports who wrote a comment with instagram_manage_comments. Without it every
+        # author is blank, so our own comments cannot be told apart and would be replied to.
+        if platform == "instagram" and not any(c.get("author") for c in raw_comments):
+            logger.warning(
+                "Instagram comments on %s carry no author: channel '%s' is missing instagram_manage_comments; "
+                "reconnect it to grant the permission",
+                platform_vid_id,
+                channel_id,
+            )
+
         # Filter out own comments
         filtered: list[dict[str, Any]] = []
         for c in raw_comments:
             if platform == "youtube":
                 if c.get("author_channel_id") == own_yt_channel_id:
                     continue
-            elif c.get("author", "").lower() == own_ig_username:
+            elif is_own_comment(c.get("author", ""), own_ig_identities):
                 continue
             filtered.append(c)
 
@@ -167,7 +186,9 @@ async def run_comment_reply_cycle(
             continue
 
         # Classify sentiment in batches
-        positive_comments: list[dict[str, Any]] = []
+        # (comment, sentiment) pairs that get a reply or a draft. Auto mode handles only positive ones;
+        # review mode also drafts negative and neutral, since a person approves each before it is sent.
+        to_answer: list[tuple[dict[str, Any], str]] = []
         sentiment_counts = {"positive": 0, "negative": 0, "neutral": 0, "spam": 0}
 
         for i in range(0, len(candidates), _SENTIMENT_BATCH_SIZE):
@@ -183,8 +204,8 @@ async def run_comment_reply_cycle(
             for c in batch:
                 sent = sentiment_map.get(c["comment_id"], "neutral")
                 sentiment_counts[sent] = sentiment_counts.get(sent, 0) + 1
-                if sent == "positive":
-                    positive_comments.append(c)
+                if sent == "positive" or (review_mode and is_reviewable(sent)):
+                    to_answer.append((c, sent))
                 else:
                     # Mark as skipped in DB to avoid re-analysis
                     status_val = f"skipped_{sent}" if sent in ("negative", "neutral", "spam") else "skipped_other"
@@ -215,8 +236,8 @@ async def run_comment_reply_cycle(
             sentiment_counts["spam"],
         )
 
-        # Reply to positive comments
-        for c in positive_comments:
+        # Reply to (or, in review mode, draft a reply for) each answerable comment
+        for c, sent in to_answer:
             if total_replies >= max_replies:
                 break
 
@@ -227,13 +248,34 @@ async def run_comment_reply_cycle(
                     comment_text=c.get("text", ""),
                     video_title=video.get("title", ""),
                     platform=platform,
+                    sentiment=sent,
                 )
             except Exception as exc:
-                logger.warning("AI reply generation failed, falling back to template: %s", exc)
+                logger.warning("AI reply generation failed: %s", exc)
 
-            # Fallback to template if AI failed or returned empty
             if not reply_text:
+                if sent != "positive":
+                    # The canned templates are subscribe pitches, wrong for a complaint or a question.
+                    # Leave it unrecorded so the next cycle tries again rather than queueing a bad draft.
+                    stats["errors"] += 1
+                    continue
                 reply_text = _pick_template(templates)
+
+            if review_mode:
+                await db.comment_replies.insert_one(
+                    build_pending_row(
+                        channel_id=channel_id,
+                        platform=platform,
+                        video=video,
+                        comment=c,
+                        sentiment=sent,
+                        suggested_reply=reply_text,
+                    )
+                )
+                total_replies += 1
+                stats["drafted"] += 1
+                continue
+
             try:
                 if platform == "youtube" and yt_svc:
                     reply_id = yt_svc.reply_to_comment(c["comment_id"], reply_text)
@@ -267,12 +309,13 @@ async def run_comment_reply_cycle(
             total_replies += 1
             stats["replied"] += 1
 
-        stats["skipped"] += len(candidates) - len(positive_comments)
+        stats["skipped"] += len(candidates) - len(to_answer)
 
     logger.info(
-        "Comment reply cycle for '%s': %d replies, %d skipped, %d errors",
+        "Comment reply cycle for '%s': %d replies, %d drafted, %d skipped, %d errors",
         channel_id,
         stats["replied"],
+        stats["drafted"],
         stats["skipped"],
         stats["errors"],
     )
