@@ -280,11 +280,18 @@ class _Gemini:
         self._sentiments = sentiments
         self._fail = fail_reply_for or set()
         self.reply_sentiments: list[str] = []
+        self.contexts: list[str] = []
 
-    async def classify_comment_sentiment(self, batch: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def classify_comment_sentiment(
+        self, batch: list[dict[str, Any]], video_context: str = ""
+    ) -> list[dict[str, Any]]:
+        self.contexts.append(video_context)
         return [{"comment_id": c["comment_id"], "sentiment": self._sentiments[c["comment_id"]]} for c in batch]
 
-    async def generate_comment_reply(self, comment_text: str, video_title: str, platform: str, sentiment: str) -> str:
+    async def generate_comment_reply(
+        self, comment_text: str, video_title: str, platform: str, sentiment: str, video_context: str = ""
+    ) -> str:
+        self.contexts.append(video_context)
         self.reply_sentiments.append(sentiment)
         return "" if comment_text in self._fail else f"draft for: {comment_text}"
 
@@ -369,3 +376,31 @@ def test_a_cycle_rerun_does_not_draft_the_same_comments_again():
             )
         )
     assert [r["comment_id"] for r in replies.rows].count("pos") == 1
+
+
+def test_the_engine_gives_the_model_the_videos_title_and_description():
+    """The classifier and the reply writer both see what the video is, so a comment is read in context."""
+    replies = _Replies()
+    ig = _Ig(_comments())
+    channel = {
+        "channel_id": "ch",
+        "platform": "instagram",
+        "instagram_username": "physicsasmr",
+        "comment_reply_mode": MODE_REVIEW,
+    }
+    db = _CycleDb(channel, replies)
+    db.videos = _Coll(
+        docs=[
+            {
+                "video_id": "v1",
+                "title": "Cool reel",
+                "description": "How a gyroscope resists tilting",
+                "instagram_media_id": "m1",
+                "published_at": now_ist(),
+            }
+        ]
+    )
+    gemini = _Gemini(SENTIMENTS)
+    asyncio.run(run_comment_reply_cycle("ch", db, None, _Manager(ig), gemini))  # type: ignore[arg-type]
+    assert gemini.contexts, "the model was never called"
+    assert all("Cool reel" in c and "gyroscope" in c for c in gemini.contexts)
