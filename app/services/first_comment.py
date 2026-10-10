@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Any
 
 from app.logger import get_logger
-from app.timezone import now_ist
+from app.timezone import assume_utc, now_ist
 
 logger = get_logger(__name__)
 
@@ -91,7 +91,10 @@ def is_due(video_doc: dict[str, Any], platform: str, now: datetime) -> bool:
         return False
 
     scheduled_at = video_doc.get("scheduled_at")
-    if isinstance(scheduled_at, datetime) and scheduled_at > now:
+    # Mongo hands datetimes back naive (UTC); comparing one with the aware ``now``
+    # raised TypeError and aborted the whole comment pass, so no comment on any
+    # video was ever posted.
+    if isinstance(scheduled_at, datetime) and assume_utc(scheduled_at) > now:
         return False
 
     return True

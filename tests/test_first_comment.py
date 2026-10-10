@@ -27,7 +27,7 @@ from app.services.first_comment import (
 )
 from app.services.instagram import InstagramService
 from app.services.youtube import YouTubeService
-from app.timezone import now_ist
+from app.timezone import UTC, now_ist
 
 # --- validation ---------------------------------------------------------------
 
@@ -84,6 +84,15 @@ def _pending(**overrides: Any) -> dict[str, Any]:
     }
     doc.update(overrides)
     return doc
+
+
+def test_a_scheduled_time_read_back_from_mongo_is_compared_correctly():
+    """Mongo returns naive UTC datetimes; the poller's ``now`` is aware."""
+    now = now_ist()
+    past = (now - timedelta(hours=1)).astimezone(UTC).replace(tzinfo=None)
+    future = (now + timedelta(hours=1)).astimezone(UTC).replace(tzinfo=None)
+    assert is_due(_pending(scheduled_at=past), "youtube", now)
+    assert not is_due(_pending(scheduled_at=future), "youtube", now)
 
 
 def test_a_pending_comment_whose_time_has_passed_is_due():
