@@ -110,6 +110,17 @@ def _lenient_json_loads(text: str, open_ch: str, close_ch: str):
         raise
 
 
+REPLY_VOICE_RULES = """Write it the way a real person types on their phone:
+- Short. Usually one line, never more than two sentences.
+- Casual and warm. Contractions are good. Lowercase openers and small imperfections are fine.
+- Match the commenter's energy and language. If they wrote one word, reply with a few.
+- At most one emoji, and often none. No hashtags.
+- Do NOT use dashes of any kind to join clauses (no em dash, no en dash, no " - "). Use a comma or start a new sentence.
+- Do NOT use stock phrases like "Thank you for your feedback", "Glad you enjoyed it", "Great question", "I appreciate", "Feel free to", "Stay tuned".
+- Do not repeat the comment back to them, and do not start with their name or "@".
+- Do not explain that you are an AI or describe what you are doing."""
+
+
 class GeminiService:
     """Provides AI-powered analysis and content generation via Gemini."""
 
@@ -1149,20 +1160,59 @@ The comment:
 
 What to do: {intent}
 
-Write it the way a real person types on their phone:
-- Short. Usually one line, never more than two sentences.
-- Casual and warm. Contractions are good. Lowercase openers and small imperfections are fine.
-- Match the commenter's energy and language. If they wrote one word, reply with a few.
-- At most one emoji, and often none. No hashtags.
-- Do NOT use dashes of any kind to join clauses (no em dash, no en dash, no " - "). Use a comma or start a new sentence.
-- Do NOT use stock phrases like "Thank you for your feedback", "Glad you enjoyed it", "Great question", "I appreciate", "Feel free to", "Stay tuned".
-- Do not repeat the comment back to them, and do not start with their name or "@".
-- Do not explain that you are an AI or describe what you are doing.
+{REPLY_VOICE_RULES}
 
 Return a JSON object:
 {{"reply": "..."}}"""
 
         text = await self._generate(prompt, task="comment_reply")
+        try:
+            result = json.loads(text)
+            from typing import cast
+
+            return humanise_reply(cast(str, result.get("reply", "")))
+        except (json.JSONDecodeError, TypeError):
+            return ""
+
+    async def generate_thread_reply(
+        self,
+        transcript: str,
+        platform: str = "youtube",
+        video_context: str = "",
+        instruction: str = "",
+    ) -> str:
+        """Draft the channel's next message in a comment thread.
+
+        ``transcript`` is the whole conversation, the message being answered marked, so the reply
+        follows what was already said instead of answering the last line in isolation, and does
+        not repeat something already told to the viewer. ``instruction`` is an optional steer from
+        the person ("shorter", "answer in Hindi", "say we will cover it in the next video").
+        """
+        medium = "an Instagram comment thread" if platform == "instagram" else "a YouTube comment thread"
+        about = f"The video:\n{video_context}\n\n" if video_context else ""
+        steer = (
+            f"\nExtra direction from the person running the channel (follow it): {instruction.strip()}\n"
+            if instruction.strip()
+            else ""
+        )
+
+        prompt = f"""You run this channel and are continuing {medium} on your own video.
+
+{about}The conversation so far, oldest first ("You" is the channel; the line marked is what you are answering):
+{transcript}
+{steer}
+Write the channel's next message. It answers the marked line, but make sure it fits the whole conversation:
+- If you already said something earlier in the thread, do not say it again.
+- If the viewer replied to you, respond to what they just said instead of restarting.
+- A follow/subscribe nudge is almost never right inside an ongoing thread. Skip it.
+- If you cannot be sure of a factual answer from what is shown, say so briefly rather than inventing one.
+
+{REPLY_VOICE_RULES}
+
+Return a JSON object:
+{{"reply": "..."}}"""
+
+        text = await self._generate(prompt, task="comment_thread_reply")
         try:
             result = json.loads(text)
             from typing import cast

@@ -329,6 +329,7 @@ from app.routers import (
     channel_groups,
     channels,
     comment_analysis,
+    comment_inbox,
     comment_replies,
     competitor_feed,
     content_intelligence,
@@ -368,6 +369,7 @@ app.include_router(comment_analysis.router)
 app.include_router(comment_analysis.config_router)
 app.include_router(comment_replies.router)
 app.include_router(comment_replies.config_router)
+app.include_router(comment_inbox.router)
 app.include_router(preview_analysis.router)
 app.include_router(retention_analysis.router)
 app.include_router(sync_analysis.config_router)
