@@ -1,21 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
 
-from app.config import get_settings
 from app.database import get_db
+from app.dependencies import verify_api_key_flexible as verify_api_key
 from app.services.metrics import metrics_service
 
 router = APIRouter(tags=["observability"])
-
-
-async def verify_api_key(api_key: str = Query(...)):
-    settings = get_settings()
-    if api_key != settings.API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-        )
-    return api_key
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
