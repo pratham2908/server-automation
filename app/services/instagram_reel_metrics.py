@@ -23,6 +23,9 @@ REEL_INSIGHT_METRICS: tuple[str, ...] = (
     "reels_skip_rate",
 )
 
+# Only a Facebook-Login token gets these; the fetch adds them for that provider alone.
+FACEBOOK_LOGIN_REEL_METRICS: tuple[str, ...] = ("reposts", "total_views")
+
 
 def reel_metadata(like_count: Any, comments_count: Any, insights: Mapping[str, float]) -> dict[str, float | int]:
     """The ``metadata`` fields for one reel.
@@ -60,6 +63,11 @@ def reel_metadata(like_count: Any, comments_count: Any, insights: Mapping[str, f
     if "reels_skip_rate" in insights:
         # Already a percentage (40 means 40% swiped away within the first moments).
         meta["skip_rate"] = round(float(insights["reels_skip_rate"]), 1)
+    if "reposts" in insights:
+        meta["reposts"] = int(insights["reposts"])
+    if "total_views" in insights:
+        # Includes plays of boosted/ad copies, which ``views`` leaves out.
+        meta["total_views"] = int(insights["total_views"])
     if "total_interactions" in insights:
         interactions = int(insights["total_interactions"])
         meta["total_interactions"] = interactions

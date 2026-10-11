@@ -25,6 +25,8 @@ from app.services.downloader import (
 )
 from app.services.error_reporting import create_monitored_task, report_error
 from app.services.first_comment import pending_fields, platform_id_field, validate_comment
+from app.services.instagram import InstagramService
+from app.services.instagram_follow_sync import refresh_follow_estimates
 from app.services.instagram_reel_metrics import reel_metadata
 from app.services.r2 import R2Service
 from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
@@ -1670,12 +1672,15 @@ class VideoService:
         insights_map = ig.get_reel_insights(media_ids)
 
         new_vids = []
+        views_by_media: dict[str, int] = {}
         for r in ig_reels:
             mid = r["id"]
             ins = insights_map.get(mid, {})
 
             # Likes and comments come on the media object; everything else from insights.
             metadata = reel_metadata(r.get("like_count"), r.get("comments_count"), ins)
+            if "views" in metadata:
+                views_by_media[mid] = int(metadata["views"])
 
             if mid not in db_ids:
                 new_vids.append(
@@ -1710,6 +1715,7 @@ class VideoService:
                 )
 
         if not new_vids:
+            await self._refresh_instagram_follow_estimates(ig, channel_id, channel, views_by_media)
             return {"ok": True, "synced": 0, "missing": missing}
         schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
         cats = [
@@ -1753,7 +1759,22 @@ class VideoService:
                     }
                 )
                 inserted += 1
+        await self._refresh_instagram_follow_estimates(ig, channel_id, channel, views_by_media)
         return {"ok": True, "synced": inserted, "missing": missing}
+
+    async def _refresh_instagram_follow_estimates(
+        self, ig: InstagramService, channel_id: str, channel: dict[str, Any], views_by_media: dict[str, int]
+    ) -> None:
+        """Account follow totals and per-reel follow estimates, after the reels are saved.
+
+        A failure here is logged, not raised: the reels' own numbers are already
+        stored, and losing them to an account-insights hiccup would be worse than a
+        follow estimate one sync out of date.
+        """
+        try:
+            await refresh_follow_estimates(self.db, ig, channel_id, channel["instagram_user_id"], views_by_media)
+        except Exception:
+            logger.exception("Follow estimates not refreshed for '%s'", channel_id)
 
     async def _extract_params_and_categorize_batch(self, schema, cats, batch, instructions, platform):
         if not self.gemini:

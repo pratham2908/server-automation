@@ -56,6 +56,10 @@ async def connect_db(
         [("channel_id", 1), ("status", 1)],
     )
     await _db.videos.create_index("video_id", unique=True)
+    # Instagram follow estimates: one row per account day, and every reel's view
+    # count at each sync (read back per channel to work out views per day).
+    await _db.instagram_account_daily.create_index([("channel_id", 1), ("date", 1)], unique=True)
+    await _db.instagram_reel_snapshots.create_index([("channel_id", 1), ("media_id", 1), ("at", 1)])
     await _db.videos.create_index("retention.status")
     await _db.videos.create_index("performance.analyzed_at")
     # Backs the "already imported?" dedup check when listing a channel app's videos.
