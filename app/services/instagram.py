@@ -659,27 +659,54 @@ class InstagramService:
 
         return cast(str, self._post(f"{comment_id}/replies", {"message": message}).get("id", ""))
 
-    def get_reel_insights(self, media_ids: list[str]) -> dict[str, dict[str, Any]]:
-        """Fetch per-reel insights (views, reach, saved, shares).
+    def get_reel_insights(self, media_ids: list[str]) -> dict[str, dict[str, float]]:
+        """Fetch per-reel insights: views, reach, watch time, skip rate and the rest.
 
-        Returns a dict keyed by ``media_id``.
+        Returns a dict keyed by ``media_id``. Values stay floats: the skip rate
+        arrives as 50.7, which an int would silently turn into 50.
         """
-        insights: dict[str, dict[str, Any]] = {}
-        metrics = "views,reach,saved,shares,total_interactions"
+        from app.services.instagram_reel_metrics import REEL_INSIGHT_METRICS
 
+        insights: dict[str, dict[str, float]] = {}
         for mid in media_ids:
             try:
-                data = self._get(f"{mid}/insights", {"metric": metrics})
-                row: dict[str, Any] = {}
-                for entry in data.get("data", []):
-                    name = entry.get("name")
-                    values = entry.get("values", [{}])
-                    row[name] = values[0].get("value", 0) if values else 0
-                insights[mid] = row
+                row = self._reel_insight_row(mid, REEL_INSIGHT_METRICS)
             except Exception as exc:
                 logger.warning("Could not fetch insights for media %s: %s", mid, exc)
-
+                continue
+            insights[mid] = row
         return insights
+
+    def _reel_insight_row(self, media_id: str, metrics: tuple[str, ...]) -> dict[str, float]:
+        """One reel's metrics. All at once; on a refusal, one at a time.
+
+        Instagram fails the whole request when a single metric does not apply to
+        the media (an old reel without a skip rate, say). One at a time then costs
+        a few extra calls for that reel only and keeps every metric that does exist.
+        """
+        try:
+            return self._parse_float_insights(self._get(f"{media_id}/insights", {"metric": ",".join(metrics)}))
+        except requests.HTTPError as exc:
+            logger.info("Reel insights for %s refused as a batch (%s) — asking per metric", media_id, exc)
+        row: dict[str, float] = {}
+        for metric in metrics:
+            try:
+                row.update(self._parse_float_insights(self._get(f"{media_id}/insights", {"metric": metric})))
+            except requests.HTTPError as exc:
+                logger.info("Reel insight '%s' unavailable for %s: %s", metric, media_id, exc)
+        return row
+
+    @staticmethod
+    def _parse_float_insights(body: dict[str, Any]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for entry in body.get("data", []):
+            name = entry.get("name")
+            if not name:
+                continue
+            values = entry.get("values") or []
+            raw = values[0].get("value", 0) if values else (entry.get("total_value") or {}).get("value", 0)
+            out[str(name)] = float(raw or 0)
+        return out
 
     # ------------------------------------------------------------------
     # Publishing (Reels)
