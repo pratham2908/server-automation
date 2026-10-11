@@ -30,17 +30,26 @@ def reel_metadata(like_count: Any, comments_count: Any, insights: Mapping[str, f
     A field is present only when Instagram reported it. Writing a 0 for a metric
     it merely didn't return would overwrite a real earlier value on the next sync.
     """
-    reach = int(insights.get("reach", 0))
+    # Likes and comments come from the media listing, which every synced reel
+    # has; the rest come from the insights call, which can fail for one reel
+    # (a transient error) and must then leave the stored numbers alone.
     meta: dict[str, float | int] = {
         "likes": int(like_count or 0),
         "comments": int(comments_count or 0),
-        "reach": reach,
-        # ``views`` is the real play count. Reach (distinct accounts) used to stand
-        # in for it, which undercounts any reel watched more than once per person.
-        "views": int(insights["views"]) if "views" in insights else reach,
-        "saves": int(insights.get("saved", 0)),
-        "shares": int(insights.get("shares", 0)),
     }
+    reach = int(insights["reach"]) if "reach" in insights else 0
+    if "reach" in insights:
+        meta["reach"] = reach
+    if "views" in insights:
+        # The real play count. Reach (distinct accounts) used to stand in for it,
+        # which undercounts any reel watched more than once per person.
+        meta["views"] = int(insights["views"])
+    elif "reach" in insights:
+        meta["views"] = reach
+    if "saved" in insights:
+        meta["saves"] = int(insights["saved"])
+    if "shares" in insights:
+        meta["shares"] = int(insights["shares"])
     if "ig_reels_avg_watch_time" in insights:
         # Milliseconds from Instagram; seconds everywhere else in the app.
         meta["avg_view_duration_seconds"] = round(insights["ig_reels_avg_watch_time"] / 1000, 2)
@@ -57,7 +66,7 @@ def reel_metadata(like_count: Any, comments_count: Any, insights: Mapping[str, f
         if reach:
             # Interactions per reached account: comparable across reels of different size.
             meta["engagement_rate"] = round(interactions / reach * 100, 2)
-    if reach:
+    if reach and "views" in meta:
         # Plays per reached account; above 1 means people replayed it.
         meta["views_per_reach"] = round(meta["views"] / reach, 2)
     return meta
