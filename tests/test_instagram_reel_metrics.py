@@ -58,7 +58,13 @@ def test_a_metric_instagram_did_not_return_is_absent_not_zero():
 
 def test_missing_like_and_comment_counts_are_zero():
     meta = reel_metadata(None, None, {})
-    assert meta["likes"] == 0 and meta["comments"] == 0 and meta["views"] == 0
+    assert meta["likes"] == 0 and meta["comments"] == 0
+
+
+def test_a_failed_insights_call_leaves_the_stored_counts_alone():
+    """Every insight failing for a reel must not write reach/views/saves/shares as 0."""
+    meta = reel_metadata(4, 2, {})
+    assert meta == {"likes": 4, "comments": 2}
 
 
 # ---------- the fetch ----------
