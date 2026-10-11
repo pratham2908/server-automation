@@ -665,12 +665,17 @@ class InstagramService:
         Returns a dict keyed by ``media_id``. Values stay floats: the skip rate
         arrives as 50.7, which an int would silently turn into 50.
         """
-        from app.services.instagram_reel_metrics import REEL_INSIGHT_METRICS
+        from app.services.instagram_reel_metrics import FACEBOOK_LOGIN_REEL_METRICS, REEL_INSIGHT_METRICS
 
+        metrics = REEL_INSIGHT_METRICS
+        if self._provider != PROVIDER_INSTAGRAM:
+            # Reposts and cross-surface totals exist only behind Facebook Login; asking an
+            # Instagram-Login token would fail every batch into the slow per-metric path.
+            metrics = REEL_INSIGHT_METRICS + FACEBOOK_LOGIN_REEL_METRICS
         insights: dict[str, dict[str, float]] = {}
         for mid in media_ids:
             try:
-                row = self._reel_insight_row(mid, REEL_INSIGHT_METRICS)
+                row = self._reel_insight_row(mid, metrics)
             except Exception as exc:
                 logger.warning("Could not fetch insights for media %s: %s", mid, exc)
                 continue
@@ -707,6 +712,31 @@ class InstagramService:
             raw = values[0].get("value", 0) if values else (entry.get("total_value") or {}).get("value", 0)
             out[str(name)] = float(raw or 0)
         return out
+
+    def get_account_day_insights(
+        self, ig_user_id: str, since: int, until: int
+    ) -> tuple[dict | None, dict | None, dict | None]:
+        """Raw bodies for one day of account totals: (totals, views by type, follows).
+
+        Three calls because each breakdown needs its own request. A refused call
+        (an account under 100 followers gets no follow data, for one) comes back
+        as ``None`` so the other two still count.
+        """
+        node = self._user_node(ig_user_id)
+        window = {"period": "day", "metric_type": "total_value", "since": since, "until": until}
+        requests_by_part = (
+            {"metric": "profile_views,total_interactions,accounts_engaged"},
+            {"metric": "views", "breakdown": "media_product_type"},
+            {"metric": "follows_and_unfollows", "breakdown": "follow_type"},
+        )
+        bodies: list[dict | None] = []
+        for extra in requests_by_part:
+            try:
+                bodies.append(self._get(f"{node}/insights", {**window, **extra}))
+            except requests.HTTPError as exc:
+                logger.info("Account insight %s unavailable for %s: %s", extra["metric"], ig_user_id, exc)
+                bodies.append(None)
+        return bodies[0], bodies[1], bodies[2]
 
     # ------------------------------------------------------------------
     # Publishing (Reels)

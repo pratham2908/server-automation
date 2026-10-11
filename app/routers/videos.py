@@ -56,6 +56,17 @@ class VideoPlaybackOut(BaseModel):
     expires_in_seconds: int
 
 
+class InstagramAccountDayOut(BaseModel):
+    """One day of account totals. ``None`` = Instagram hasn't reported it (it lags up to 48h)."""
+
+    date: str
+    follows: int | None = None
+    unfollows: int | None = None
+    profile_visits: int | None = None
+    reel_views: int | None = None
+    total_views: int | None = None
+
+
 class CategoryChangeRequest(BaseModel):
     old_category_id: str
     new_category_id: str
@@ -245,6 +256,21 @@ async def storage_purge(
     protected = await _active_r2_keys(service)
     purged, errs = service.r2.purge_prefix_older_than(prefix, days_old, protected_keys=protected)
     return {"ok": True, "purged_count": purged, "errors": errs, "days_old": days_old}
+
+
+@router.get("/instagram-account-daily", response_model=list[InstagramAccountDayOut])
+async def instagram_account_daily(
+    channel_id: str,
+    days: int = Query(30, ge=1, le=365),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> list[InstagramAccountDayOut]:
+    """Daily follows, unfollows and profile visits for an Instagram channel, newest first.
+
+    Filled by the Instagram sync; Instagram reports these for the account only,
+    never per reel.
+    """
+    cursor = db.instagram_account_daily.find({"channel_id": channel_id}).sort("date", -1).limit(days)
+    return [InstagramAccountDayOut.model_validate(doc) async for doc in cursor]
 
 
 @router.post("/extract-params/all")

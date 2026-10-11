@@ -5,7 +5,7 @@ from __future__ import annotations
 import requests
 
 from app.services.instagram import InstagramService
-from app.services.instagram_reel_metrics import REEL_INSIGHT_METRICS, reel_metadata
+from app.services.instagram_reel_metrics import FACEBOOK_LOGIN_REEL_METRICS, REEL_INSIGHT_METRICS, reel_metadata
 
 # Numbers a real reel returned during the live probe.
 LIVE = {
@@ -105,7 +105,27 @@ def test_a_refused_batch_falls_back_to_per_metric_and_keeps_what_exists():
     out = _svc(get).get_reel_insights(["old"])
     assert "reels_skip_rate" not in out["old"]
     assert out["old"]["views"] == 7.0 and out["old"]["ig_reels_avg_watch_time"] == 7.0
-    assert len(asked) == 1 + len(REEL_INSIGHT_METRICS)  # the batch, then each metric once
+    # The batch, then each metric once (a Facebook token also asks the Facebook-only ones).
+    assert len(asked) == 1 + len(REEL_INSIGHT_METRICS) + len(FACEBOOK_LOGIN_REEL_METRICS)
+
+
+def test_reposts_are_asked_for_only_behind_facebook_login():
+    asked: list[str] = []
+
+    def get(endpoint, params=None):
+        asked.append(params["metric"])
+        return _body(views=1)
+
+    svc = InstagramService(access_token="t", provider="instagram")
+    svc._get = get  # type: ignore[method-assign]
+    svc.get_reel_insights(["m"])
+    _svc(get).get_reel_insights(["m"])
+    assert "reposts" not in asked[0] and "reposts" in asked[1]
+
+
+def test_reposts_and_cross_surface_views_are_stored_when_reported():
+    meta = reel_metadata(0, 0, {"reposts": 28.0, "total_views": 530000.0})
+    assert meta["reposts"] == 28 and meta["total_views"] == 530000
 
 
 def test_one_unreadable_reel_does_not_stop_the_others():
