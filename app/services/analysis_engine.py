@@ -24,7 +24,6 @@ from app.timezone import now_ist
 logger = get_logger(__name__)
 
 
-
 def build_actual_retention_updates(
     stats: dict[str, Any],
     ai_insight: dict[str, Any] | None,
@@ -226,6 +225,12 @@ async def run_analysis(
                 "saves": reel_insight.get("saved") or meta.get("saves", 0),
                 "reach": reel_insight.get("reach") or meta.get("reach", 0),
                 "engagement_rate": meta.get("engagement_rate"),
+                # What viewers actually did: how many swiped away, how long they stayed.
+                **{
+                    key: meta[key]
+                    for key in ("skip_rate", "avg_view_duration_seconds", "total_watch_time_seconds")
+                    if meta.get(key) is not None
+                },
             }
 
         stats["subscriber_count_at_analysis"] = subscriber_count

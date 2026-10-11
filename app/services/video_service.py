@@ -25,6 +25,7 @@ from app.services.downloader import (
 )
 from app.services.error_reporting import create_monitored_task, report_error
 from app.services.first_comment import pending_fields, platform_id_field, validate_comment
+from app.services.instagram_reel_metrics import reel_metadata
 from app.services.r2 import R2Service
 from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
 from app.services.schedule_operation import (
@@ -1673,15 +1674,8 @@ class VideoService:
             mid = r["id"]
             ins = insights_map.get(mid, {})
 
-            # Map metrics correctly
-            # video_views is available on the media object directly for Reels
-            # reach, saved, shares come from insights
-            likes = int(r.get("like_count", 0))
-            comments = int(r.get("comments_count", 0))
-            reach = int(ins.get("reach", 0))
-            views = reach  # Use reach as views for Reels since video_views is deprecated
-            saves = int(ins.get("saved", 0))
-            shares = int(ins.get("shares", 0))
+            # Likes and comments come on the media object; everything else from insights.
+            metadata = reel_metadata(r.get("like_count"), r.get("comments_count"), ins)
 
             if mid not in db_ids:
                 new_vids.append(
@@ -1691,38 +1685,17 @@ class VideoService:
                         "description": r.get("caption", ""),
                         "published_at": (isoparse(r.get("timestamp")) if r.get("timestamp") else None),
                         "thumbnail_url": self._instagram_reel_thumbnail_url(r),
-                        "metadata": {
-                            "views": views,
-                            "likes": likes,
-                            "comments": comments,
-                            "reach": reach,
-                            "saves": saves,
-                            "shares": shares,
-                        },
+                        "metadata": metadata,
                     }
                 )
             else:
-                mid = r["id"]
-                ins = insights_map.get(mid, {})
-                likes = int(r.get("like_count", 0))
-                comments = int(r.get("comments_count", 0))
-                reach = int(ins.get("reach", 0))
-                views = reach  # Use reach as views for Reels
-                saves = int(ins.get("saved", 0))
-                shares = int(ins.get("shares", 0))
-
                 existing = await self.db.videos.find_one(
                     {"channel_id": channel_id, "instagram_media_id": mid},
                     {"thumbnail_url": 1},
                 )
                 thumb = self._instagram_reel_thumbnail_url(r)
                 set_doc: dict[str, Any] = {
-                    "metadata.views": views,
-                    "metadata.likes": likes,
-                    "metadata.comments": comments,
-                    "metadata.reach": reach,
-                    "metadata.saves": saves,
-                    "metadata.shares": shares,
+                    **{f"metadata.{key}": value for key, value in metadata.items()},
                     "status": "published",
                     "updated_at": now_ist(),
                 }
