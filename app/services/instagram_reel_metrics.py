@@ -51,4 +51,13 @@ def reel_metadata(like_count: Any, comments_count: Any, insights: Mapping[str, f
     if "reels_skip_rate" in insights:
         # Already a percentage (40 means 40% swiped away within the first moments).
         meta["skip_rate"] = round(float(insights["reels_skip_rate"]), 1)
+    if "total_interactions" in insights:
+        interactions = int(insights["total_interactions"])
+        meta["total_interactions"] = interactions
+        if reach:
+            # Interactions per reached account: comparable across reels of different size.
+            meta["engagement_rate"] = round(interactions / reach * 100, 2)
+    if reach:
+        # Plays per reached account; above 1 means people replayed it.
+        meta["views_per_reach"] = round(meta["views"] / reach, 2)
     return meta

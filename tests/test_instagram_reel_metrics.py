@@ -110,3 +110,18 @@ def test_one_unreadable_reel_does_not_stop_the_others():
 
     out = _svc(get).get_reel_insights(["bad/x", "good"])
     assert "bad/x" not in out and out["good"] == {"views": 5.0}
+
+
+def test_engagement_rate_and_replay_ratio_are_derived_from_reach():
+    meta = reel_metadata(1, 0, LIVE)
+
+    assert meta["total_interactions"] == 2
+    assert meta["engagement_rate"] == 1.8  # 2 / 111 reached accounts
+    assert meta["views_per_reach"] == 1.21  # 134 plays / 111 accounts
+
+
+def test_no_reach_means_no_division():
+    meta = reel_metadata(0, 0, {"views": 5.0})
+
+    assert "engagement_rate" not in meta
+    assert "views_per_reach" not in meta
