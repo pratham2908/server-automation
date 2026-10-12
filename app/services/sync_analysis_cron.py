@@ -1,14 +1,17 @@
-"""Background cron loop for automated video sync + analysis.
+"""Background cron loop for per-channel auto-sync + analysis.
 
-Runs every N hours (default 12, configurable via ``sync_analysis_config``
-in the ``config`` collection).  For each channel it:
+Only channels that opt in via ``automation_config.auto_sync.enabled`` are
+synced, each on its own ``interval_hours``. A tick every few minutes picks the
+channels whose ``last_tasks.auto_sync`` is older than their interval, and for
+each one:
 
-1. Calls the existing video sync logic (YouTube or Instagram).
-2. Counts newly-eligible unanalyzed videos.
-3. If the count meets the configurable threshold, triggers a full
-   analysis update via ``run_analysis``.
+1. Refreshes the channel's numbers (subscribers, views, profile).
+2. Calls the existing video sync logic (YouTube or Instagram).
+3. Counts newly-eligible unanalyzed videos.
+4. If the count meets the threshold, triggers a full analysis via ``run_analysis``.
 
-Follows the same ``asyncio.create_task`` pattern as the other crons.
+The ``sync_analysis_config`` document in the ``config`` collection holds the
+global kill switch (``enabled``) and the ``analysis_threshold``.
 """
 
 from __future__ import annotations
@@ -23,15 +26,21 @@ from app.database import get_channel_platform, not_paused_query, update_channel_
 from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
 from app.services.analysis_engine import run_analysis
+from app.services.auto_sync_schedule import AUTO_SYNC_TASK, is_auto_sync_due
+from app.services.channel_stats import refresh_channel_stats
 from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
+from app.services.growth_tracking import GrowthTrackingService
 from app.services.metrics import metrics_service
 from app.services.video_service import VideoService
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
-_DEFAULT_INTERVAL_HOURS = 12
 _DEFAULT_ANALYSIS_THRESHOLD = 3
+# How often the cron looks for due channels. Per-channel intervals are whole
+# hours, so a five-minute tick makes each sync at most five minutes late.
+_TICK_SECONDS = 300
 
 
 async def _get_config(db: AsyncIOMotorDatabase) -> dict:
@@ -83,9 +92,30 @@ async def run_sync_analysis_for_channel(
     result: dict[str, Any] = {
         "channel_id": channel_id,
         "platform": platform,
+        "stats": None,
         "sync": None,
         "analysis": None,
     }
+
+    # --- Channel numbers ---
+    # Independent of the video sync: a failure here is reported but must not
+    # stop the videos from syncing, and vice versa.
+    try:
+        refreshed = await refresh_channel_stats(
+            db, channel, youtube_service_manager, instagram_service_manager, GrowthTrackingService(db)
+        )
+        result["stats"] = "ok" if refreshed else "skipped (no credential)"
+    except ChannelNotConnectedError as exc:
+        result["stats"] = f"skipped ({exc})"
+    except Exception as exc:
+        result["stats"] = f"error ({exc})"
+        logger.error("Auto-sync stats refresh failed for '%s': %s", channel_id, exc)
+        await report_error(
+            feature="Sync-analysis cron: channel stats",
+            message=f"Channel stats refresh failed for '{channel_id}': {exc!s}",
+            exception=exc,
+            context={"channel_id": channel_id},
+        )
 
     # --- Sync ---
     try:
@@ -187,47 +217,37 @@ async def run_sync_analysis_cron(
     instagram_service_manager: Any,
     gemini_service: GeminiService,
 ) -> None:
-    """Infinite loop — sleeps for the configured interval, runs sync + analysis, repeats."""
+    """Infinite loop — every tick, sync + analyse each opted-in channel that is due."""
 
-    logger.info(
-        "Sync-analysis cron started (default interval: %dh, threshold: %d)",
-        _DEFAULT_INTERVAL_HOURS,
-        _DEFAULT_ANALYSIS_THRESHOLD,
-    )
+    logger.info("Auto-sync cron started (tick: %ds, per-channel intervals)", _TICK_SECONDS)
 
     while True:
-        config = await _get_config(db)
-        interval_hours = config.get("interval_hours", _DEFAULT_INTERVAL_HOURS)
-        interval_seconds = float(interval_hours) * 3600
-        enabled = config.get("enabled", True)
-
-        logger.info(
-            "Sync-analysis cron: sleeping %.0f min until next run (enabled=%s)",
-            interval_seconds / 60,
-            enabled,
-        )
-        await asyncio.sleep(interval_seconds)
-
-        if not enabled:
-            logger.info("Sync-analysis cron: disabled via config — skipping this cycle")
-            continue
+        await asyncio.sleep(_TICK_SECONDS)
 
         try:
-            metrics_service.track_task_start("sync_analysis")
             config = await _get_config(db)
-            threshold = config.get("analysis_threshold", _DEFAULT_ANALYSIS_THRESHOLD)
+            if not config.get("enabled", True):
+                continue
 
-            channels = await db.channels.find(not_paused_query()).to_list(length=None)
-            logger.info(
-                "Sync-analysis cron tick — processing %d channel(s)",
-                len(channels),
-            )
+            now = now_ist()
+            candidates = await db.channels.find(
+                {"automation_config.auto_sync.enabled": True, **not_paused_query()}
+            ).to_list(length=None)
+            due = [c for c in candidates if c.get("channel_id") and is_auto_sync_due(c, now)]
+            if not due:
+                continue
+
+            metrics_service.track_task_start("sync_analysis")
+            threshold = config.get("analysis_threshold", _DEFAULT_ANALYSIS_THRESHOLD)
+            logger.info("Auto-sync cron tick — %d channel(s) due", len(due))
 
             results = []
-            for channel in channels:
-                channel_id = channel.get("channel_id")
-                if not channel_id:
-                    continue
+            for channel in due:
+                channel_id = channel["channel_id"]
+                # Stamp before running, not after: a sync that fails (an IG rate
+                # limit, an expired token) then waits a full interval instead of
+                # being retried — and re-failing — on every five-minute tick.
+                await update_channel_task_status(db, channel_id, AUTO_SYNC_TASK)
                 try:
                     r = await run_sync_analysis_for_channel(
                         channel_id=channel_id,
@@ -241,7 +261,7 @@ async def run_sync_analysis_cron(
                     results.append(r)
                 except Exception as exc:
                     logger.error(
-                        "Sync-analysis cron failed for channel '%s': %s",
+                        "Auto-sync cron failed for channel '%s': %s",
                         channel_id,
                         exc,
                     )
@@ -253,9 +273,9 @@ async def run_sync_analysis_cron(
                     )
 
             metrics_service.track_task_end("sync_analysis", "success")
-            logger.info("Sync-analysis cron cycle complete: %s", results)
+            logger.info("Auto-sync cron cycle complete: %s", results)
         except Exception as exc:
-            logger.error("Sync-analysis cron top-level error: %s", exc)
+            logger.error("Auto-sync cron top-level error: %s", exc)
             metrics_service.track_task_end("sync_analysis", "error")
             await report_error(
                 feature="Sync-analysis cron: top-level",

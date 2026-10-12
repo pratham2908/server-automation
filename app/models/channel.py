@@ -110,11 +110,23 @@ class AutoSchedulerConfig(BaseModel):
     )
 
 
+class AutoSyncConfig(BaseModel):
+    """Per-channel periodic sync of videos and channel numbers.
+
+    Off by default: a sync spends platform quota (and, past the analysis
+    threshold, a Gemini analysis), so channels opt in rather than out.
+    """
+
+    enabled: bool = Field(False, description="Whether this channel is synced automatically")
+    interval_hours: int = Field(6, ge=1, le=168, description="Hours between automatic syncs")
+
+
 class AutomationConfig(BaseModel):
     """Aggregate for all channel-level automation settings."""
 
     velocity_booster: VelocityBoosterConfig = Field(default_factory=VelocityBoosterConfig)
     auto_scheduler: AutoSchedulerConfig = Field(default_factory=AutoSchedulerConfig)
+    auto_sync: AutoSyncConfig = Field(default_factory=AutoSyncConfig)
 
 
 class Channel(BaseModel):

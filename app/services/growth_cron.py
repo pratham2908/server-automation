@@ -12,9 +12,9 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import not_paused_query, update_channel_task_status
+from app.database import not_paused_query
 from app.logger import get_logger
-from app.services.channel_profile import build_profile_update, name_changed, persist_profile_update
+from app.services.channel_stats import refresh_channel_stats
 from app.services.error_reporting import report_error
 from app.services.growth_tracking import GrowthTrackingService
 from app.services.metrics import metrics_service
@@ -56,65 +56,13 @@ async def run_growth_tracking_cron(
 
             for channel in channels:
                 channel_id = channel.get("channel_id")
-                platform = channel.get("platform", "youtube")
                 if not channel_id:
                     continue
 
                 try:
-                    subs, views = 0, 0
-                    metadata: dict[str, Any] = {}
-                    info: dict[str, Any] | None = None
-
-                    if platform == "youtube":
-                        yt_service = await youtube_service_manager.get_service(channel_id)
-                        if yt_service:
-                            info = yt_service.get_channel_info(channel.get("youtube_channel_id", ""))
-                            subs = info.get("subscriber_count", 0)
-                            views = info.get("view_count", 0)
-                            metadata = {"video_count": info.get("video_count", 0)}
-
-                    elif platform == "instagram":
-                        ig_service = await instagram_service_manager.get_service(channel_id)
-                        if ig_service:
-                            info = ig_service.get_account_info(channel.get("instagram_user_id", ""))
-                            subs = info.get("followers_count", 0)
-                            # For Instagram, views aren't a single account-level metric.
-                            # We could aggregate them here if we find it helpful.
-                            views = 0
-                            metadata = {"media_count": info.get("media_count", 0)}
-
-                    if info is None:
-                        # No usable platform credential. Recording a zero snapshot here
-                        # would put a fake collapse to 0 followers into the growth chart,
-                        # so skip the channel entirely rather than invent a data point.
-                        logger.warning(
-                            "Growth tracking: skipping '%s' — no %s credential available",
-                            channel_id,
-                            platform,
-                        )
-                        continue
-
-                    # Record the snapshot
-                    await growth_service.record_snapshot(channel_id, platform, subs, views, metadata)
-
-                    # The payload we just fetched already carries the display name,
-                    # avatar, and description, so refreshing the cached profile costs
-                    # no extra API call — it is the same response, previously discarded.
-                    current_name = channel.get("name", "")
-                    profile = build_profile_update(platform, info, current_name)
-                    await persist_profile_update(db, channel_id, profile)
-                    if name_changed(profile, current_name):
-                        logger.success(
-                            "Channel '%s' renamed on %s: %r -> %r",
-                            channel_id,
-                            platform,
-                            current_name,
-                            profile["name"],
-                        )
-
-                    # Update channel status
-                    await update_channel_task_status(db, channel_id, "growth_tracking")
-
+                    await refresh_channel_stats(
+                        db, channel, youtube_service_manager, instagram_service_manager, growth_service
+                    )
                 except Exception as exc:
                     logger.error(f"Growth snapshot failed for channel '{channel_id}': {exc}")
                     await report_error(

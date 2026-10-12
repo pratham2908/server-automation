@@ -49,10 +49,12 @@ API_SCHEMA = {
                         "min_hours_since_last_upload": 12,
                         "min_views_threshold": 1000,
                         "schedule_delay_minutes": 15,
-                    }
+                    },
+                    "auto_sync": {"enabled": True, "interval_hours": 6},
                 },
                 "last_tasks": {
                     "video_sync": "2026-03-06T18:00:00Z",
+                    "auto_sync": "2026-03-06T18:00:00Z",
                     "sync_analysis": "2026-03-06T19:53:30Z",
                     "velocity_booster": "2026-03-06T19:53:30Z",
                 },
@@ -1039,7 +1041,6 @@ API_SCHEMA = {
             "response": {
                 "key": "sync_analysis_config",
                 "enabled": True,
-                "interval_hours": 12,
                 "analysis_threshold": 3,
             },
         },
@@ -1047,12 +1048,14 @@ API_SCHEMA = {
             "group": "Sync-Analysis Pipeline",
             "method": "PUT",
             "path": "/api/v1/config/auto-pipeline/",
-            "description": "Update the auto-sync + analysis pipeline config. Changes apply on the next cron cycle.",
-            "request": {"interval_hours": 6, "analysis_threshold": 2},
+            "description": (
+                "Update the auto-sync kill switch and analysis threshold. Which channels sync, and how "
+                "often, is per channel: automation_config.auto_sync on PATCH /channels/{id}."
+            ),
+            "request": {"analysis_threshold": 2},
             "response": {
                 "ok": True,
                 "enabled": True,
-                "interval_hours": 6,
                 "analysis_threshold": 2,
             },
         },

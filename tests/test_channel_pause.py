@@ -58,7 +58,6 @@ class TestCronsUseTheFilter:
     @pytest.mark.parametrize(
         "module",
         [
-            "sync_analysis_cron",
             "growth_cron",
             "comment_analysis_cron",
             "comment_reply_cron",
@@ -71,6 +70,16 @@ class TestCronsUseTheFilter:
         src = inspect.getsource(importlib.import_module(f"app.services.{module}"))
         assert "db.channels.find(not_paused_query())" in src, f"{module} must filter paused channels"
         assert "db.channels.find()" not in src, f"{module} still has an unfiltered channel listing"
+
+    def test_auto_sync_cron_filters_opted_in_channels(self):
+        """The auto-sync cron lists only opted-in channels, and still drops paused ones."""
+        import inspect
+
+        from app.services import sync_analysis_cron
+
+        src = inspect.getsource(sync_analysis_cron)
+        assert '{"automation_config.auto_sync.enabled": True, **not_paused_query()}' in src
+        assert "db.channels.find()" not in src
 
     def test_auto_publisher_guards_and_keeps_the_video_queued(self):
         import inspect
