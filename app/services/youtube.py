@@ -16,6 +16,7 @@ from googleapiclient.http import MediaFileUpload
 from app.database import get_youtube_oauth_config
 from app.logger import get_logger
 from app.services.metrics import metrics_service
+from app.services.youtube_schedule import apply_publish_at, check_reschedulable
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -786,6 +787,32 @@ class YouTubeService:
         )
         applied = cast(str, (response.get("status") or {}).get("privacyStatus", privacy_status))
         logger.info("Set YouTube video %s to %s", youtube_video_id, applied)
+        return applied
+
+    def reschedule_video(self, youtube_video_id: str, publish_at: str) -> str:
+        """Move a scheduled (private, ``publishAt``) video to a new time. Returns the time YouTube now holds.
+
+        The existing status is read and sent back whole with only ``publishAt`` changed, because
+        ``videos.update`` replaces the part it is given. A video that is no longer private has
+        already published (or was never scheduled) and is refused rather than altered.
+
+        Requires the ``youtube.force-ssl`` scope, which this app already requests.
+        """
+        current = self._execute(self._youtube.videos().list(part="status", id=youtube_video_id))
+        items = current.get("items") or []
+        if not items:
+            raise ValueError(f"YouTube has no video {youtube_video_id}")
+
+        status = dict(items[0].get("status") or {})
+        check_reschedulable(status)
+
+        response = self._execute(
+            self._youtube.videos().update(
+                part="status", body={"id": youtube_video_id, "status": apply_publish_at(status, publish_at)}
+            )
+        )
+        applied = cast(str, (response.get("status") or {}).get("publishAt", publish_at))
+        logger.info("Rescheduled YouTube video %s to %s", youtube_video_id, applied)
         return applied
 
     def delete_video(self, youtube_video_id: str) -> None:

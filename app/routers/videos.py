@@ -588,7 +588,11 @@ async def reschedule_video(
     body: ScheduleRequest,  # Reusing ScheduleRequest as it has scheduled_at
     service: VideoService = Depends(get_video_service),
 ):
-    """Reschedule a queued video."""
+    """Reschedule a queued video, or move a scheduled YouTube video to a new publish time.
+
+    For a video already uploaded to YouTube this changes ``publishAt`` on YouTube itself, then our
+    record. The new time must be in the future; a video that has already gone public cannot be moved.
+    """
     try:
         return await service.reschedule_video(channel_id, video_id, body.scheduled_at, body.first_comment)
     except Exception as e:
