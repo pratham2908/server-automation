@@ -30,7 +30,6 @@ _CONFIG_KEY = "sync_analysis_config"
 _DEFAULTS = {
     "key": _CONFIG_KEY,
     "enabled": True,
-    "interval_hours": 12,
     "analysis_threshold": 3,
 }
 
@@ -58,8 +57,8 @@ async def get_auto_pipeline_config(
 
 
 class AutoPipelineConfigUpdate(BaseModel):
-    enabled: bool | None = Field(None, description="Enable or disable the auto-sync cron")
-    interval_hours: int | None = Field(None, ge=1, le=168, description="Sync interval in hours")
+    # How often, and for which channels, is per-channel: automation_config.auto_sync.
+    enabled: bool | None = Field(None, description="Global kill switch for the auto-sync cron")
     analysis_threshold: int | None = Field(None, ge=1, le=50, description="Min unanalyzed videos to trigger analysis")
 
 

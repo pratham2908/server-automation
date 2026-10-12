@@ -9,12 +9,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import get_settings
 from app.database import get_channel_platform, get_db, get_instagram_oauth_config
 from app.dependencies import get_current_profile, verify_api_key
 from app.logger import get_logger
+from app.models.channel import AutoSyncConfig
 from app.models.profile import ProfileInDB
 from app.services.channel_profile import build_profile_update, persist_profile_update
 from app.services.instagram import find_business_account_id, graph_error_message, introspect_token
@@ -108,6 +109,16 @@ class ChannelUpdate(BaseModel):
     # no-op'd the pause toggle; `starred` backs the admin-view favourites.
     paused: bool | None = None
     starred: bool | None = None
+
+    @field_validator("automation_config")
+    @classmethod
+    def _validate_auto_sync(cls, value: dict | None) -> dict | None:
+        # The cron reads `auto_sync.interval_hours` as a schedule, so a 0 or a
+        # string stored here would either sync every tick or never. Validate the
+        # one block the server acts on numerically; the rest is stored as sent.
+        if value and "auto_sync" in value:
+            value = {**value, "auto_sync": AutoSyncConfig.model_validate(value["auto_sync"]).model_dump()}
+        return value
 
 
 # ------------------------------------------------------------------

@@ -184,7 +184,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background comment reply cron started")
 
-    # ---- Background sync + analysis cron (every 12 hours by default) ----
+    # ---- Background auto-sync + analysis cron (opted-in channels, per-channel interval) ----
     from app.services.sync_analysis_cron import run_sync_analysis_cron
 
     _sync_analysis_task = create_monitored_task(

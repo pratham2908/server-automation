@@ -2000,12 +2000,13 @@ Background async task that runs the comment analysis pipeline daily at a configu
 
 ### Sync-Analysis Cron (`app/services/sync_analysis_cron.py`)
 
-Background async task that syncs videos from all channels and conditionally triggers analysis:
+Background async task that syncs opted-in channels on a per-channel interval and conditionally triggers analysis:
 
-- **Schedule**: Runs every `interval_hours` (default: **12 hours**). Re-reads config each cycle.
-- **What it does**: For each channel, calls the existing `sync_videos` logic, then counts unanalyzed eligible videos. If the count meets `analysis_threshold` (default 3), triggers `run_analysis`.
+- **Schedule**: Ticks every 5 minutes and syncs each channel with `automation_config.auto_sync.enabled` whose `last_tasks.auto_sync` is older than its `interval_hours` (default **6**). Due-ness comes from the persisted stamp, so restarts neither skip nor double a sync. The stamp is written when a sync *starts*, so a failing channel waits a full interval before retrying.
+- **What it does**: For each due channel, refreshes the channel's numbers (same helper as the growth cron: snapshot + cached profile), calls the existing `sync_videos` logic, then counts unanalyzed eligible videos. If the count meets `analysis_threshold` (default 3), triggers `run_analysis`.
+- **Opt-in**: channels without `auto_sync.enabled` are never auto-synced. Paused channels are skipped as usual.
 - **Error handling**: `HTTPException`s from the sync handler (e.g. missing tokens) are caught and logged — the cron skips that channel and continues.
-- **Configurable at runtime**: `enabled`, `interval_hours`, `analysis_threshold` stored in `config` collection (key: `sync_analysis_config`). Update via `PUT /api/v1/config/auto-pipeline/`.
+- **Configurable at runtime**: per channel via `PATCH /channels/{id}` (`automation_config.auto_sync`: `enabled`, `interval_hours` 1–168); globally `enabled` (kill switch) and `analysis_threshold` in `config` (key: `sync_analysis_config`) via `PUT /api/v1/config/auto-pipeline/`.
 - **Manual trigger**: `POST /api/v1/sync-analysis/trigger` runs one cycle immediately (with optional `?channel_id=` filter).
 - **Started automatically** in `main.py` lifespan as an `asyncio.create_task`
 - **Graceful shutdown**: Task is cancelled during app shutdown
@@ -2316,8 +2317,8 @@ The sync-analysis pipeline is a **background cron** that automates the two most 
 
 ### How It Works
 
-1. Every N hours (default 12), the cron wakes up and iterates over all registered channels
-2. For each channel, it calls the existing `sync_videos` logic (same code as `POST /videos/sync`) to pull new videos from YouTube/Instagram and refresh metadata on existing ones
+1. Every 5 minutes the cron looks for channels that opted in (`automation_config.auto_sync.enabled`) and whose own `interval_hours` (default 6) has elapsed since `last_tasks.auto_sync`
+2. For each due channel, it refreshes the channel's numbers (subscribers/views/profile), then calls the existing `sync_videos` logic (same code as `POST /videos/sync`) to pull new videos from YouTube/Instagram and refresh metadata on existing ones
 3. After sync, it counts how many published + verified videos have no `analysis_history` entry yet
 4. If the count meets the configurable threshold (default 3), it triggers `run_analysis` for that channel -- updating `analysis_history`, the channel `analysis` summary, category scores, and content param scores
 5. Channels with missing tokens or service errors are logged and skipped without affecting other channels
@@ -2328,9 +2329,10 @@ Stored in `db.config` with key `sync_analysis_config`. Read fresh each cycle, so
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable/disable the cron |
-| `interval_hours` | int | `12` | How often to run (hours) |
+| `enabled` | bool | `true` | Global kill switch for the cron |
 | `analysis_threshold` | int | `3` | Min unanalyzed videos to trigger analysis |
+
+Which channels sync, and how often, is per channel: `automation_config.auto_sync` (`enabled` default `false`, `interval_hours` default `6`).
 
 ### API Endpoints
 
