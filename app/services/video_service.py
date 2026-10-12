@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from dateutil.parser import isoparse
+from googleapiclient.errors import HttpError
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.config import get_settings
@@ -36,6 +37,7 @@ from app.services.schedule_operation import (
 )
 from app.services.scheduler import compute_schedule_slots
 from app.services.todo_engine import recompute_category
+from app.services.youtube_schedule import error_reason, publish_at_for
 from app.timezone import IST, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
@@ -1493,11 +1495,13 @@ class VideoService:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
             raise ValueError("Video not found")
-        if video.get("status") != "queued":
-            raise ValueError("Video not queued")
         channel = await self.db.channels.find_one({"channel_id": channel_id})
         platform = get_channel_platform(channel) if channel else "youtube"
         comment = validate_comment(first_comment, platform)
+        if video.get("status") == "scheduled":
+            return await self._reschedule_on_youtube(channel_id, video, platform, new_time, first_comment, comment)
+        if video.get("status") != "queued":
+            raise ValueError("Only a queued or scheduled video can be rescheduled")
         now = now_ist()
         upd: dict[str, Any] = {"scheduled_at": new_time, "updated_at": now}
         # Only touched when the caller says something about it: a reschedule that
@@ -1509,6 +1513,52 @@ class VideoService:
             {"channel_id": channel_id, "video_id": video_id}, {"$set": {"scheduled_at": new_time}}
         )
         return {"ok": True, "scheduled_at": to_ist_iso(new_time) if new_time else None}
+
+    async def _reschedule_on_youtube(
+        self,
+        channel_id: str,
+        video: dict[str, Any],
+        platform: str,
+        new_time: datetime | None,
+        first_comment: str | None,
+        comment: str | None,
+    ) -> dict[str, Any]:
+        """Change the publish time of a video already uploaded to YouTube and waiting, private, to go live.
+
+        YouTube holds the schedule (``publishAt``), so it is changed there first and our record only
+        follows once YouTube has accepted it: if the call fails, our ``scheduled_at`` still matches
+        what YouTube will actually do.
+        """
+        if platform != "youtube":
+            raise ValueError(
+                "Only YouTube videos can be rescheduled once scheduled; Instagram posts are held in our queue"
+            )
+        if new_time is None:
+            raise ValueError("Choose the new publish time")
+        youtube_video_id = video.get("youtube_video_id")
+        if not youtube_video_id:
+            raise ValueError("This video has not been uploaded to YouTube yet")
+        publish_at = publish_at_for(new_time, now_ist())
+
+        yt = await self._get_youtube_service(channel_id)
+        if not yt:
+            raise ChannelNotConnectedError(f"Channel '{channel_id}' has no valid YouTube token")
+        try:
+            applied = await asyncio.to_thread(yt.reschedule_video, youtube_video_id, publish_at)
+        except HttpError as exc:
+            # Google's own reason ("publishAt must be in the future", quota, a revoked grant) is what
+            # lets the person fix it; a bare 400 would not.
+            raise ValueError(f"YouTube refused the new time: {error_reason(exc)}") from exc
+
+        upd: dict[str, Any] = {"scheduled_at": new_time, "updated_at": now_ist()}
+        if first_comment is not None:
+            upd.update(pending_fields(comment))
+        await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
+        return {
+            "ok": True,
+            "scheduled_at": to_ist_iso(new_time),
+            "youtube_publish_at": applied,
+        }
 
     async def update_video_metadata(self, channel_id: str, video_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
