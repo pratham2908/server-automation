@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app.logger import get_logger
 from app.services.metrics import metrics_service
+from app.services.trial_reel import TrialReelNotAvailableError, explain_refusal, trial_params_json
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -208,6 +209,15 @@ def find_business_account_id(access_token: str, usernames: set[str]) -> str | No
     page_resp.raise_for_status()
     account = page_resp.json().get("instagram_business_account") or {}
     return cast(str, account["id"]) if matches(account) else None
+
+
+def _json_or_none(response: requests.Response | None) -> object:
+    if response is None:
+        return None
+    try:
+        return response.json()
+    except ValueError:
+        return None
 
 
 class InstagramService:
@@ -992,6 +1002,7 @@ class InstagramService:
         *,
         thumb_offset: int | None = None,
         cover_url: str | None = None,
+        trial_graduation: str | None = None,
         poll_interval: float = 10.0,
         max_polls: int = 40,
     ) -> str:
@@ -1016,8 +1027,17 @@ class InstagramService:
             params["cover_url"] = cover_url
         elif thumb_offset is not None:
             params["thumb_offset"] = str(thumb_offset)
+        trial_params = trial_params_json(trial_graduation)
+        if trial_params:
+            params["trial_params"] = trial_params
 
-        data = self._post(f"{self._user_node(ig_user_id)}/media", params)
+        try:
+            data = self._post(f"{self._user_node(ig_user_id)}/media", params)
+        except requests.HTTPError as exc:
+            reason = explain_refusal(_json_or_none(exc.response)) if trial_params else None
+            if reason:
+                raise TrialReelNotAvailableError(reason) from exc
+            raise
         cid = data.get("id", "")
         if not cid:
             raise RuntimeError(f"Failed to create media container: {data}")

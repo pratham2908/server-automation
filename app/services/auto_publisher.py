@@ -104,6 +104,7 @@ async def _publish_one_reel(
             caption=caption,
             thumb_offset=thumb_offset_ms,
             cover_url=cover_url,
+            trial_graduation=video_doc.get("trial_graduation"),
         )
 
         now = now_ist()

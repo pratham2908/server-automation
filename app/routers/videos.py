@@ -97,6 +97,11 @@ class ScheduleRequest(BaseModel):
         None,
         description="Comment to post from the channel's own account as soon as the video goes live",
     )
+    trial_graduation: str | None = Field(
+        None,
+        description="Instagram only. MANUAL or SS_PERFORMANCE publishes the reel as a trial reel; "
+        "an empty string turns it off; omit to leave it as it is",
+    )
 
 
 class PrivacyRequest(BaseModel):
@@ -521,6 +526,7 @@ async def schedule_video(
             video_id,
             body.scheduled_at if body else None,
             body.first_comment if body else None,
+            body.trial_graduation if body else None,
         )
     except Exception as e:
         error_service = get_error_service(service.db)
@@ -594,7 +600,7 @@ async def reschedule_video(
     record. The new time must be in the future; a video that has already gone public cannot be moved.
     """
     try:
-        return await service.reschedule_video(channel_id, video_id, body.scheduled_at, body.first_comment)
+        return await service.reschedule_video(channel_id, video_id, body.scheduled_at, body.first_comment, body.trial_graduation)
     except Exception as e:
         error_service = get_error_service(service.db)
         await error_service.log_error(

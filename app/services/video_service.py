@@ -37,6 +37,7 @@ from app.services.schedule_operation import (
 )
 from app.services.scheduler import compute_schedule_slots
 from app.services.todo_engine import recompute_category
+from app.services.trial_reel import validate_strategy
 from app.services.youtube_schedule import error_reason, publish_at_for
 from app.timezone import IST, now_ist, to_ist_iso
 
@@ -1344,6 +1345,7 @@ class VideoService:
         video_id: str,
         scheduled_at: datetime | None = None,
         first_comment: str | None = None,
+        trial_graduation: str | None = None,
     ) -> dict[str, Any]:
 
         settings = get_settings()
@@ -1352,6 +1354,7 @@ class VideoService:
             raise ValueError("Channel not found")
         platform = channel.get("platform", "youtube")
         comment = validate_comment(first_comment, platform)
+        trial = validate_strategy(trial_graduation, platform)
         if comment and video_id.lower() == "all":
             # One comment across a whole queue is far more likely to be a
             # mistake than an intention, and it would be tedious to undo.
@@ -1394,6 +1397,9 @@ class VideoService:
                 await self.db.videos.update_one({"_id": v_doc["_id"]}, {"$set": fields})
                 # The workers read the doc handed to them, not a re-fetch.
                 v_doc.update(fields)
+            if trial_graduation is not None:
+                await self.db.videos.update_one({"_id": v_doc["_id"]}, {"$set": {"trial_graduation": trial}})
+                v_doc["trial_graduation"] = trial
             if platform == "youtube":
                 r = await enqueue_video_for_youtube(
                     db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot
@@ -1491,6 +1497,7 @@ class VideoService:
         video_id: str,
         new_time: datetime | None = None,
         first_comment: str | None = None,
+        trial_graduation: str | None = None,
     ) -> dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
@@ -1498,6 +1505,7 @@ class VideoService:
         channel = await self.db.channels.find_one({"channel_id": channel_id})
         platform = get_channel_platform(channel) if channel else "youtube"
         comment = validate_comment(first_comment, platform)
+        trial = validate_strategy(trial_graduation, platform)
         if video.get("status") == "scheduled":
             return await self._reschedule_on_youtube(channel_id, video, platform, new_time, first_comment, comment)
         if video.get("status") != "queued":
@@ -1508,6 +1516,8 @@ class VideoService:
         # omits the field must not silently wipe a comment set when scheduling.
         if first_comment is not None:
             upd.update(pending_fields(comment))
+        if trial_graduation is not None:
+            upd["trial_graduation"] = trial
         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
         await self.db.schedule_queue.update_one(
             {"channel_id": channel_id, "video_id": video_id}, {"$set": {"scheduled_at": new_time}}
