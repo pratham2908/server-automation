@@ -184,6 +184,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background comment reply cron started")
 
+    # ---- Background trial-reel graduation checks (state lives in Mongo, so restarts resume) ----
+    from app.services.trial_graduation_cron import run_trial_graduation_cron
+
+    _trial_graduation_task = create_monitored_task(
+        run_trial_graduation_cron(db, instagram_service_manager),
+        feature="Background: Trial graduation cron",
+    )
+    logger.info("Background trial graduation cron started")
+
     # ---- Background auto-sync + analysis cron (opted-in channels, per-channel interval) ----
     from app.services.sync_analysis_cron import run_sync_analysis_cron
 

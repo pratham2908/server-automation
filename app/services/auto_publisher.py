@@ -18,6 +18,7 @@ from app.services.errors import get_error_service
 from app.services.first_comment import post_and_record
 from app.services.publish_failure import build_failure_marker
 from app.services.schedule_operation import _build_instagram_caption
+from app.services.trial_graduation import arm_fields
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -117,6 +118,8 @@ async def _publish_one_reel(
                     "status": "published",
                     "published_at": now,
                     "updated_at": now,
+                    # Starts the graduation timer (if one was asked for) from the moment it is live.
+                    **arm_fields(video_doc, now),
                 }
             },
         )

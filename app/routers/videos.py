@@ -13,6 +13,7 @@ from app.logger import get_logger
 from app.models.post import PostDoc
 from app.services.errors import get_error_service
 from app.services.post_rules import protected_slide_keys
+from app.services.trial_graduation import TrialCheck
 from app.services.video_service import PLAYBACK_URL_TTL_SECONDS, VideoService
 from app.timezone import now_ist
 
@@ -101,6 +102,11 @@ class ScheduleRequest(BaseModel):
         None,
         description="Instagram only. MANUAL or SS_PERFORMANCE publishes the reel as a trial reel; "
         "an empty string turns it off; omit to leave it as it is",
+    )
+    trial_check: TrialCheck | None = Field(
+        None,
+        description="With MANUAL: check the reel's numbers after_hours after it publishes and email a link "
+        "if it clears the conditions, so it can be graduated in the Instagram app",
     )
 
 
@@ -527,6 +533,7 @@ async def schedule_video(
             body.scheduled_at if body else None,
             body.first_comment if body else None,
             body.trial_graduation if body else None,
+            body.trial_check if body else None,
         )
     except Exception as e:
         error_service = get_error_service(service.db)
@@ -600,7 +607,7 @@ async def reschedule_video(
     record. The new time must be in the future; a video that has already gone public cannot be moved.
     """
     try:
-        return await service.reschedule_video(channel_id, video_id, body.scheduled_at, body.first_comment, body.trial_graduation)
+        return await service.reschedule_video(channel_id, video_id, body.scheduled_at, body.first_comment, body.trial_graduation, body.trial_check)
     except Exception as e:
         error_service = get_error_service(service.db)
         await error_service.log_error(
