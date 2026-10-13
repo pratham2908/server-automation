@@ -1169,6 +1169,10 @@ class InstagramService:
         next_cursor = (paging.get("cursors") or {}).get("after") if paging.get("next") else None
         return {"data": list(body.get("data") or []), "next_cursor": next_cursor}
 
+    def get_media_snapshot(self, media_id: str) -> dict[str, Any]:
+        """One media's link and public counts, for a reel we already know the id of."""
+        return self._get(media_id, {"fields": "id,permalink,like_count,comments_count,media_product_type"})
+
     def get_media_insights(self, media_id: str, metrics: list[str]) -> tuple[dict[str, int], list[str]]:
         """Lifetime insights for one media, and the metrics it could not report.
 
