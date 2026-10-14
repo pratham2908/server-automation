@@ -4,9 +4,11 @@ A trial reel set to ``MANUAL`` stays with non-followers until the owner shares i
 from the Instagram app. The API cannot graduate it, so the best we can do is
 watch the numbers and tell the owner when the reel is worth the tap.
 
-The owner states the bar when scheduling: check after N hours, against one or
-more metric minimums, passing when *all* or *any* of them are met. The clock
-starts at publish, since a trial reel only exists once it is live.
+The owner states the bar when scheduling: up to three check times (hours after
+publish), against one or more metric minimums, passing when *all* or *any* of
+them are met. The first check that passes ends it and sends the email; if the
+last check still falls short the reel is marked as having missed its bar. The
+clock starts at publish, since a trial reel only exists once it is live.
 
 Everything here is pure; the cron that reads Instagram and sends the email lives
 in ``trial_graduation_cron``.
@@ -18,9 +20,10 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.services.trial_reel import MANUAL, validate_strategy
+from app.timezone import assume_utc
 
 # Keys as stored by ``instagram_reel_metrics.reel_metadata``, so a check reads the
 # same numbers the dashboard shows.
@@ -40,6 +43,7 @@ METRIC_LABELS: dict[str, str] = {
 # sensibly wait before the numbers stop meaning "trial performance".
 MIN_AFTER_HOURS = 0.25
 MAX_AFTER_HOURS = 168.0
+MAX_TIMERS = 3
 
 PENDING = "pending"
 MET = "met"
@@ -53,11 +57,32 @@ class Condition(BaseModel):
 
 
 class TrialCheck(BaseModel):
-    """The bar a trial reel has to clear, as the owner set it."""
+    """The bar a trial reel has to clear, and when it is looked at, as the owner set it."""
 
-    after_hours: float = Field(..., ge=MIN_AFTER_HOURS, le=MAX_AFTER_HOURS)
+    after_hours: list[float] = Field(..., min_length=1, max_length=MAX_TIMERS)
     match: Literal["all", "any"] = "all"
     conditions: list[Condition] = Field(..., min_length=1, max_length=len(METRIC_LABELS))
+
+    @field_validator("after_hours", mode="before")
+    @classmethod
+    def _single_hours_is_one_timer(cls, value: Any) -> Any:
+        # A check saved before there could be several stored one number.
+        return [value] if isinstance(value, int | float) else value
+
+    @field_validator("after_hours")
+    @classmethod
+    def _timers_are_in_range_and_ascending(cls, hours: list[float]) -> list[float]:
+        if any(h < MIN_AFTER_HOURS or h > MAX_AFTER_HOURS for h in hours):
+            raise ValueError(f"Each check must be between {MIN_AFTER_HOURS} and {MAX_AFTER_HOURS} hours after posting")
+        if any(later <= earlier for earlier, later in zip(hours, hours[1:], strict=False)):
+            raise ValueError("Check times must each be later than the one before")
+        return hours
+
+
+def check_hours(check: Mapping[str, Any]) -> list[float]:
+    """The check times of a stored check, whether it was saved with one or several."""
+    raw = check["after_hours"]
+    return [float(h) for h in raw] if isinstance(raw, list) else [float(raw)]
 
 
 def trial_fields(
@@ -94,8 +119,17 @@ def arm_fields(video: Mapping[str, Any], published_at: datetime) -> dict[str, An
         return {}
     return {
         "trial_check_state": PENDING,
-        "trial_check_due_at": published_at + timedelta(hours=float(check["after_hours"])),
+        "trial_check_stage": 0,
+        "trial_check_due_at": published_at + timedelta(hours=check_hours(check)[0]),
     }
+
+
+def next_due(video: Mapping[str, Any], stage: int) -> datetime | None:
+    """When timer ``stage`` falls due (counted from publish), or ``None`` if there is no such timer."""
+    hours = check_hours(video["trial_check"])
+    if stage >= len(hours):
+        return None
+    return assume_utc(video["published_at"]) + timedelta(hours=hours[stage])
 
 
 class ConditionResult(BaseModel):
