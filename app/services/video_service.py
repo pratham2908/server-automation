@@ -37,7 +37,7 @@ from app.services.schedule_operation import (
 )
 from app.services.scheduler import compute_schedule_slots
 from app.services.todo_engine import recompute_category
-from app.services.trial_graduation import TrialCheck, trial_fields
+from app.services.trial_graduation import TrialCheck, edit_running_check, trial_fields
 from app.services.youtube_schedule import error_reason, publish_at_for
 from app.timezone import IST, now_ist, to_ist_iso
 
@@ -1524,6 +1524,17 @@ class VideoService:
             {"channel_id": channel_id, "video_id": video_id}, {"$set": {"scheduled_at": new_time}}
         )
         return {"ok": True, "scheduled_at": to_ist_iso(new_time) if new_time else None}
+
+    async def update_trial_check(self, channel_id: str, video_id: str, check: TrialCheck) -> dict[str, Any]:
+        """Change the graduate check of a manual trial reel that is already live and still waiting on a timer."""
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+        if not video:
+            raise ValueError("Video not found")
+        if video.get("status") != "published":
+            raise ValueError("Only a published reel's running check can be edited here; reschedule it instead")
+        fields = edit_running_check(video, check)
+        await self.db.videos.update_one({"_id": video["_id"]}, {"$set": {**fields, "updated_at": now_ist()}})
+        return {"ok": True, "trial_check": fields["trial_check"], "next_check_at": to_ist_iso(fields["trial_check_due_at"])}
 
     async def _reschedule_on_youtube(
         self,

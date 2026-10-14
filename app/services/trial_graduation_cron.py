@@ -19,7 +19,17 @@ from app.logger import get_logger
 from app.services.email_service import resolve_owner_email, send_email
 from app.services.error_reporting import report_error
 from app.services.instagram_reel_metrics import reel_metadata
-from app.services.trial_graduation import FAILED, MET, MISSED, PENDING, check_hours, evaluate, next_due
+from app.services.trial_graduation import (
+    FAILED,
+    MET,
+    MISSED,
+    PENDING,
+    ConditionResult,
+    GroupResult,
+    check_hours,
+    evaluate,
+    next_due,
+)
 from app.services.trial_graduation_email import format_graduate_email
 from app.timezone import now_ist
 
@@ -108,8 +118,7 @@ async def _email_met(db: Any, video: dict[str, Any], send: SendEmail) -> None:
         channel=video.get("channel_id", ""),
         permalink=video.get("trial_check_permalink"),
         after_hours=float(video.get("trial_check_met_after_hours") or check_hours(check)[-1]),
-        match=check.get("match", "all"),
-        results=_results(video),
+        groups=_groups(video),
     )
     sent = await send(email.subject, email.text, email.html)
     update: dict[str, Any] = {"trial_check_email_attempts": int(video.get("trial_check_email_attempts", 0)) + 1}
@@ -118,11 +127,16 @@ async def _email_met(db: Any, video: dict[str, Any], send: SendEmail) -> None:
     await db.videos.update_one({"_id": video["_id"]}, {"$set": update})
 
 
-def _results(video: dict[str, Any]) -> list[Any]:
-    from app.services.trial_graduation import ConditionResult
-
-    stored = (video.get("trial_check_result") or {}).get("results", [])
-    return [ConditionResult(**r) for r in stored]
+def _groups(video: dict[str, Any]) -> list[GroupResult]:
+    result = video.get("trial_check_result") or {}
+    if "groups" in result:
+        return [GroupResult(**g) for g in result["groups"]]
+    # A result stored before groups existed: one flat list of "at least" conditions.
+    legacy = [
+        ConditionResult(metric=r["metric"], op="gte", value=r["minimum"], actual=r.get("actual"), passed=r["passed"])
+        for r in result.get("results", [])
+    ]
+    return [GroupResult(passed=bool(result.get("met")), results=legacy)] if legacy else []
 
 
 async def run_trial_checks(

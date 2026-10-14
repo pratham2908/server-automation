@@ -594,6 +594,27 @@ async def post_video_comment(
         raise e
 
 
+class TrialCheckRequest(BaseModel):
+    trial_check: TrialCheck
+
+
+@router.patch("/{video_id}/trial-check")
+async def update_trial_check(
+    channel_id: str,
+    video_id: str,
+    body: TrialCheckRequest,
+    service: VideoService = Depends(get_video_service),
+):
+    """Edit the graduate check of a published trial reel that is still waiting on a timer.
+
+    Checks that already ran stay as they were; the remaining ones, the conditions and the groups can change.
+    """
+    try:
+        return await service.update_trial_check(channel_id, video_id, body.trial_check)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @router.patch("/{video_id}/reschedule")
 async def reschedule_video(
     channel_id: str,
