@@ -153,3 +153,21 @@ def test_an_account_with_too_few_followers_gets_a_clear_failure_not_a_normal_ree
     svc._post = refuse  # type: ignore[method-assign]
     with pytest.raises(TrialReelNotAvailableError, match="enough followers"):
         svc.publish_reel_from_url("123", "https://r2/v.mp4", "cap", trial_graduation=MANUAL)
+
+
+def test_rescheduling_as_a_normal_reel_removes_the_graduate_check_too():
+    """Changing your mind before it publishes: no trial, and no timers left behind."""
+    check = {"after_hours": [24, 48], "match": "all", "conditions": [{"metric": "views", "minimum": 100}]}
+    db = _DB(
+        {
+            "_id": 1,
+            "channel_id": "c1",
+            "video_id": "v1",
+            "status": "queued",
+            "trial_graduation": MANUAL,
+            "trial_check": check,
+        }
+    )
+    asyncio.run(VideoService(db=db).reschedule_video("c1", "v1", now_ist() + timedelta(hours=1), None, ""))
+    assert db.videos.sets[0]["trial_graduation"] is None
+    assert db.videos.sets[0]["trial_check"] is None
