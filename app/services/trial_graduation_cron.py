@@ -19,7 +19,7 @@ from app.logger import get_logger
 from app.services.email_service import resolve_owner_email, send_email
 from app.services.error_reporting import report_error
 from app.services.instagram_reel_metrics import reel_metadata
-from app.services.trial_graduation import FAILED, MET, MISSED, PENDING, evaluate
+from app.services.trial_graduation import FAILED, MET, MISSED, PENDING, check_hours, evaluate, next_due
 from app.services.trial_graduation_email import format_graduate_email
 from app.timezone import now_ist
 
@@ -82,17 +82,23 @@ async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot) -> No
         return
 
     outcome = evaluate(video["trial_check"], snap.metrics)
-    await db.videos.update_one(
-        key,
-        {
-            "$set": {
-                "trial_check_state": MET if outcome.met else MISSED,
-                "trial_check_checked_at": now_ist(),
-                "trial_check_permalink": snap.permalink,
-                "trial_check_result": outcome.model_dump(),
-            }
-        },
-    )
+    stage = int(video.get("trial_check_stage", 0))
+    hours = check_hours(video["trial_check"])
+    later = None if outcome.met else next_due(video, stage + 1)
+    update: dict[str, Any] = {
+        "trial_check_checked_at": now_ist(),
+        "trial_check_permalink": snap.permalink,
+        "trial_check_result": outcome.model_dump(),
+        "trial_check_attempts": 0,
+    }
+    if outcome.met:
+        update.update({"trial_check_state": MET, "trial_check_met_after_hours": hours[min(stage, len(hours) - 1)]})
+    elif later is not None:
+        # Short of the bar, but a later check is still to come: the reel stays in the running.
+        update.update({"trial_check_stage": stage + 1, "trial_check_due_at": later})
+    else:
+        update["trial_check_state"] = MISSED
+    await db.videos.update_one(key, {"$set": update})
 
 
 async def _email_met(db: Any, video: dict[str, Any], send: SendEmail) -> None:
@@ -101,7 +107,7 @@ async def _email_met(db: Any, video: dict[str, Any], send: SendEmail) -> None:
         title=video.get("title") or video.get("video_id", "your reel"),
         channel=video.get("channel_id", ""),
         permalink=video.get("trial_check_permalink"),
-        after_hours=float(check["after_hours"]),
+        after_hours=float(video.get("trial_check_met_after_hours") or check_hours(check)[-1]),
         match=check.get("match", "all"),
         results=_results(video),
     )

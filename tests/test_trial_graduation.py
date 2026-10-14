@@ -87,7 +87,11 @@ def test_saying_nothing_changes_nothing():
 def test_the_timer_starts_at_publish():
     video = {"trial_graduation": "MANUAL", "trial_check": _check()}
     fields = arm_fields(video, NOW)
-    assert fields == {"trial_check_state": PENDING, "trial_check_due_at": NOW + timedelta(hours=24)}
+    assert fields == {
+        "trial_check_state": PENDING,
+        "trial_check_stage": 0,
+        "trial_check_due_at": NOW + timedelta(hours=24),
+    }
 
 
 def test_no_timer_without_a_check_or_a_manual_trial():
@@ -221,7 +225,7 @@ def test_a_due_reel_over_the_bar_is_emailed_once():
     assert again == []
 
 
-def test_a_reel_under_the_bar_sends_nothing():
+def test_a_reel_under_the_bar_on_its_only_timer_has_missed_and_sends_nothing():
     docs = [_video()]
     _, sent = _run(docs, Snapshot("https://ig/reel/1", {"views": 5}))
     assert docs[0]["trial_check_state"] == MISSED and sent == []
@@ -256,3 +260,62 @@ def test_an_unsent_email_is_retried_on_a_later_pass():
     docs = [_video(trial_check_state=MET, trial_check_result={"met": True, "results": []}, trial_check_due_at=None)]
     _, sent = _run(docs)
     assert len(sent) == 1 and docs[0]["trial_check_emailed"] is True
+
+
+# --- several timers -----------------------------------------------------------
+
+PUBLISHED = NOW - timedelta(hours=25)
+LOW = Snapshot("https://ig/reel/1", {"views": 5})
+
+
+def _two_timers(**over: Any) -> dict[str, Any]:
+    check = {**_check(views=1000), "after_hours": [24, 48]}
+    return _video(trial_check=check, published_at=PUBLISHED, **over)
+
+
+def test_up_to_three_timers_are_allowed_and_a_fourth_is_not():
+    cond = [{"metric": "views", "minimum": 1}]
+    assert TrialCheck(after_hours=[6, 24, 48], conditions=cond).after_hours == [6, 24, 48]
+    with pytest.raises(ValidationError):
+        TrialCheck(after_hours=[6, 12, 24, 48], conditions=cond)
+
+
+def test_timers_must_get_later():
+    with pytest.raises(ValidationError):
+        TrialCheck(after_hours=[48, 24], conditions=[{"metric": "views", "minimum": 1}])
+    with pytest.raises(ValidationError):
+        TrialCheck(after_hours=[24, 24], conditions=[{"metric": "views", "minimum": 1}])
+
+
+def test_a_miss_before_the_last_timer_keeps_the_reel_in_the_running():
+    docs = [_two_timers()]
+    _, sent = _run(docs, LOW)
+    doc = docs[0]
+    assert doc["trial_check_state"] == PENDING and doc["trial_check_stage"] == 1 and sent == []
+    assert doc["trial_check_due_at"] == PUBLISHED + timedelta(hours=48)
+
+
+def test_missing_the_last_timer_marks_it_missed():
+    docs = [_two_timers(trial_check_stage=1, trial_check_due_at=NOW - timedelta(minutes=1))]
+    _, sent = _run(docs, LOW)
+    assert docs[0]["trial_check_state"] == MISSED and sent == []
+
+
+def test_clearing_the_bar_at_the_last_timer_still_emails():
+    docs = [_two_timers(trial_check_stage=1, trial_check_due_at=NOW - timedelta(minutes=1))]
+    _, sent = _run(docs)
+    assert docs[0]["trial_check_state"] == MET and len(sent) == 1
+    assert docs[0]["trial_check_met_after_hours"] == 48
+
+
+def test_clearing_the_bar_early_ends_it_without_waiting_for_the_rest():
+    docs = [_two_timers()]
+    _, sent = _run(docs)
+    assert docs[0]["trial_check_state"] == MET and docs[0]["trial_check_met_after_hours"] == 24
+    assert len(sent) == 1
+
+
+def test_a_check_saved_with_one_number_still_reads_as_one_timer():
+    docs = [_video(published_at=PUBLISHED)]
+    _run(docs, LOW)
+    assert docs[0]["trial_check_state"] == MISSED
