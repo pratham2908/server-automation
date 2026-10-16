@@ -26,6 +26,7 @@ from app.services.instagram_tokens import (
     SECRET_CHANNEL_FIELDS,
     build_token_doc,
     normalise_provider,
+    provider_of,
     secret_projection,
     slot_for_store,
     summarise_slots,
@@ -1343,7 +1344,7 @@ async def get_instagram_token(
 
     Unlike YouTube, Instagram uses a single long-lived token (60 days).
     If the token is close to expiry (< 7 days left), it is automatically
-    refreshed using the Facebook token-refresh endpoint.
+    refreshed through the endpoint for its login type (Instagram or Facebook).
     """
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
@@ -1382,7 +1383,9 @@ async def get_instagram_token(
                 if app_id and app_secret:
                     from app.services.instagram import InstagramService
 
-                    svc = InstagramService(access_token, db=db, channel_id=channel_id)
+                    # The login type picks the refresh endpoint: an Instagram-login token
+                    # sent to Facebook's fb_exchange_token is rejected, so it would expire.
+                    svc = InstagramService(access_token, provider=provider_of(tokens), db=db, channel_id=channel_id)
                     new_token = await svc.refresh_token(app_id, app_secret)
                     if new_token:
                         access_token = new_token

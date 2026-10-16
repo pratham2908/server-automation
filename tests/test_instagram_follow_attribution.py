@@ -164,3 +164,59 @@ def test_a_day_built_from_far_apart_readings_is_shared_among_tracked_reels_only(
     }
     est = estimate_follows([account_day("2026-10-09", follows=40, reel_views=1000)], readings)
     assert est["a"].follows == pytest.approx(30) and est["b"].follows == pytest.approx(10)
+
+
+# ---- bio-link taps and reach (website_clicks, reach by follow_type) ----
+
+TOTALS_WITH_TAPS = {"data": [*TOTALS["data"], {"name": "website_clicks", "total_value": {"value": 4}}]}
+REACH = {
+    "data": [
+        {
+            "name": "reach",
+            "total_value": {
+                "value": 33328,
+                "breakdowns": [
+                    {
+                        "dimension_keys": ["follow_type"],
+                        "results": [
+                            {"dimension_values": ["FOLLOWER"], "value": 245},
+                            {"dimension_values": ["NON_FOLLOWER"], "value": 33132},
+                        ],
+                    }
+                ],
+            },
+        }
+    ]
+}
+
+
+def test_bio_link_taps_and_reach_split_are_parsed():
+    day = parse_account_day("2026-10-15", TOTALS_WITH_TAPS, VIEWS, FOLLOWS, REACH)
+    assert day.bio_link_taps == 4
+    assert (day.reach, day.reach_followers, day.reach_non_followers) == (33328, 245, 33132)
+
+
+def test_missing_reach_call_and_older_totals_leave_the_new_fields_unknown():
+    day = parse_account_day("2026-10-15", TOTALS, VIEWS, FOLLOWS)
+    assert day.bio_link_taps is None and day.reach is None and day.reach_non_followers is None
+
+
+def test_bio_link_taps_are_shared_out_like_profile_visits():
+    day = AccountDay(
+        date="2026-10-09",
+        profile_visits=40,
+        reel_views=100,
+        total_views=100,
+        follows=10,
+        unfollows=0,
+        interactions=None,
+        accounts_engaged=None,
+        bio_link_taps=8,
+    )
+    readings = {
+        "a": [ViewReading(at(9, 0), 0), ViewReading(at(10, 0), 75)],
+        "b": [ViewReading(at(9, 0), 0), ViewReading(at(10, 0), 25)],
+    }
+    est = estimate_follows([day], readings)
+    assert est["a"].bio_link_taps == pytest.approx(6)
+    assert est["b"].bio_link_taps == pytest.approx(2)

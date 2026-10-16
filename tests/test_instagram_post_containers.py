@@ -94,3 +94,20 @@ def test_insights_fall_back_to_per_metric_when_the_batch_is_refused():
     values, unavailable = svc.get_media_insights("m1", ["views", "reach"])
     assert values == {"reach": 7}
     assert unavailable == ["views"]
+
+
+def test_insights_without_fallback_report_a_refused_batch_in_one_call():
+    # Reels refuse follows/profile_visits/profile_activity together; asking them one
+    # by one would only spend three more calls to learn the same thing.
+    svc, _ = _svc()
+    asked: list[str] = []
+
+    def fake_get(endpoint, params=None):
+        asked.append(params["metric"])
+        raise requests.HTTPError("not supported for this media product type")
+
+    svc._get = fake_get  # type: ignore[method-assign]
+    metrics = ["follows", "profile_visits", "profile_activity"]
+    values, unavailable = svc.get_media_insights("m1", metrics, per_metric_fallback=False)
+    assert values == {} and unavailable == metrics
+    assert asked == ["follows,profile_visits,profile_activity"]

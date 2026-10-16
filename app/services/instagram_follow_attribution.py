@@ -1,9 +1,9 @@
-"""Estimating how many follows and profile visits each reel brought in.
+"""Estimating how many follows, profile visits and bio-link taps each reel brought in.
 
-Pure: no I/O. Instagram's API refuses ``follows`` and ``profile_visits`` for
-reels (they exist only for feed posts and stories), but it does report them for
-the account per day. So each day's follows are shared out across the reels in
-proportion to the views each reel got that day.
+Pure: no I/O. Instagram's API refuses ``follows``, ``profile_visits`` and
+``profile_activity`` (bio-link taps) for reels — they exist only for feed posts
+and stories — but it reports them for the account per day. So each day's totals
+are shared out across the reels in proportion to the views each reel got that day.
 
 A reel's views per day come from the cumulative view counts the sync records
 (its publish time counts as 0 views). Views gained between two readings are
@@ -50,6 +50,7 @@ class DayViews:
 class FollowEstimate:
     follows: float
     profile_visits: float
+    bio_link_taps: float
     quality: Quality
     # Last day with reported follows that the estimate includes.
     through: str
@@ -83,7 +84,7 @@ def estimate_follows(
     days: Sequence[AccountDay],
     readings_by_reel: Mapping[str, Sequence[ViewReading]],
 ) -> dict[str, FollowEstimate]:
-    """Each reel's share of the account's follows and profile visits.
+    """Each reel's share of the account's follows, profile visits and bio-link taps.
 
     A reel appears in the result only if at least one day with reported follows
     overlaps its views; a reel posted since then has nothing to estimate yet.
@@ -91,6 +92,7 @@ def estimate_follows(
     per_reel_days = {reel: views_by_day(readings) for reel, readings in readings_by_reel.items()}
     follows: dict[str, float] = {}
     visits: dict[str, float] = {}
+    taps: dict[str, float] = {}
     rough_follows: dict[str, float] = {}
     through: dict[str, str] = {}
 
@@ -116,10 +118,12 @@ def estimate_follows(
             reel_fraction = day.reel_views / day.total_views
         day_follows = day.follows * reel_fraction
         day_visits = (day.profile_visits or 0) * reel_fraction
+        day_taps = (day.bio_link_taps or 0) * reel_fraction
         for reel, share in shares.items():
             weight = share.views / denominator
             follows[reel] = follows.get(reel, 0.0) + day_follows * weight
             visits[reel] = visits.get(reel, 0.0) + day_visits * weight
+            taps[reel] = taps.get(reel, 0.0) + day_taps * weight
             if share.span_hours > ROUGH_SPAN_HOURS:
                 rough_follows[reel] = rough_follows.get(reel, 0.0) + day_follows * weight
             through[reel] = day.date
@@ -129,6 +133,10 @@ def estimate_follows(
         rough = rough_follows.get(reel, 0.0)
         quality: Quality = "rough" if total > 0 and rough > ROUGH_SHARE_LIMIT * total else "good"
         estimates[reel] = FollowEstimate(
-            follows=total, profile_visits=visits.get(reel, 0.0), quality=quality, through=through[reel]
+            follows=total,
+            profile_visits=visits.get(reel, 0.0),
+            bio_link_taps=taps.get(reel, 0.0),
+            quality=quality,
+            through=through[reel],
         )
     return estimates

@@ -29,6 +29,13 @@ class AccountDay:
     unfollows: int | None
     interactions: int | None
     accounts_engaged: int | None
+    # Taps on the link in the bio (Meta's ``website_clicks``). Like follows, the API
+    # gives this for the account only — reels refuse every profile metric.
+    bio_link_taps: int | None = None
+    # Distinct accounts reached, and how many of them already followed.
+    reach: int | None = None
+    reach_followers: int | None = None
+    reach_non_followers: int | None = None
 
 
 def _total_value(body: Mapping[str, Any] | None, name: str) -> Mapping[str, Any] | None:
@@ -62,8 +69,9 @@ def parse_account_day(
     totals_body: Mapping[str, Any] | None,
     views_body: Mapping[str, Any] | None,
     follows_body: Mapping[str, Any] | None,
+    reach_body: Mapping[str, Any] | None = None,
 ) -> AccountDay:
-    """Build an ``AccountDay`` from the three insight calls made for that day."""
+    """Build an ``AccountDay`` from the insight calls made for that day."""
     views_total = _total_value(views_body, "views")
     by_type = _breakdown(views_total)
     total_views = _value(views_total)
@@ -72,6 +80,8 @@ def parse_account_day(
         reel_views = by_type.get("REEL", 0)
 
     follow_split = _breakdown(_total_value(follows_body, "follows_and_unfollows"))
+    reach_total = _total_value(reach_body, "reach")
+    reach_split = _breakdown(reach_total)
     return AccountDay(
         date=date,
         profile_visits=_value(_total_value(totals_body, "profile_views")),
@@ -83,4 +93,9 @@ def parse_account_day(
         unfollows=follow_split.get("NON_FOLLOWER", 0) if follow_split is not None else None,
         interactions=_value(_total_value(totals_body, "total_interactions")),
         accounts_engaged=_value(_total_value(totals_body, "accounts_engaged")),
+        bio_link_taps=_value(_total_value(totals_body, "website_clicks")),
+        reach=_value(reach_total),
+        # Here follow_type means who was reached: FOLLOWER = already followed.
+        reach_followers=reach_split.get("FOLLOWER", 0) if reach_split is not None else None,
+        reach_non_followers=reach_split.get("NON_FOLLOWER", 0) if reach_split is not None else None,
     )

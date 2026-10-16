@@ -725,19 +725,20 @@ class InstagramService:
 
     def get_account_day_insights(
         self, ig_user_id: str, since: int, until: int
-    ) -> tuple[dict | None, dict | None, dict | None]:
-        """Raw bodies for one day of account totals: (totals, views by type, follows).
+    ) -> tuple[dict | None, dict | None, dict | None, dict | None]:
+        """Raw bodies for one day of account totals: (totals, views by type, follows, reach).
 
-        Three calls because each breakdown needs its own request. A refused call
+        One call per breakdown, since each needs its own request. A refused call
         (an account under 100 followers gets no follow data, for one) comes back
-        as ``None`` so the other two still count.
+        as ``None`` so the others still count.
         """
         node = self._user_node(ig_user_id)
         window = {"period": "day", "metric_type": "total_value", "since": since, "until": until}
         requests_by_part = (
-            {"metric": "profile_views,total_interactions,accounts_engaged"},
+            {"metric": "profile_views,total_interactions,accounts_engaged,website_clicks"},
             {"metric": "views", "breakdown": "media_product_type"},
             {"metric": "follows_and_unfollows", "breakdown": "follow_type"},
+            {"metric": "reach", "breakdown": "follow_type"},
         )
         bodies: list[dict | None] = []
         for extra in requests_by_part:
@@ -746,7 +747,7 @@ class InstagramService:
             except requests.HTTPError as exc:
                 logger.info("Account insight %s unavailable for %s: %s", extra["metric"], ig_user_id, exc)
                 bodies.append(None)
-        return bodies[0], bodies[1], bodies[2]
+        return bodies[0], bodies[1], bodies[2], bodies[3]
 
     # ------------------------------------------------------------------
     # Publishing (Reels)
@@ -1171,19 +1172,27 @@ class InstagramService:
 
     def get_media_snapshot(self, media_id: str) -> dict[str, Any]:
         """One media's link and public counts, for a reel we already know the id of."""
-        return self._get(media_id, {"fields": "id,permalink,thumbnail_url,like_count,comments_count,media_product_type"})
+        return self._get(
+            media_id, {"fields": "id,permalink,thumbnail_url,like_count,comments_count,media_product_type"}
+        )
 
-    def get_media_insights(self, media_id: str, metrics: list[str]) -> tuple[dict[str, int], list[str]]:
+    def get_media_insights(
+        self, media_id: str, metrics: list[str], *, per_metric_fallback: bool = True
+    ) -> tuple[dict[str, int], list[str]]:
         """Lifetime insights for one media, and the metrics it could not report.
 
         The insights endpoint fails the whole request when any one metric does
         not apply to the media type (a carousel has no ``views`` on some API
         versions, for instance). So ask for everything once, and only on an
         error fall back to one metric at a time to find out which were refused.
+        Without the fallback, a refused batch reports every metric unavailable.
         """
         try:
             return self._parse_insights(self._get(f"{media_id}/insights", {"metric": ",".join(metrics)})), []
         except requests.HTTPError as exc:
+            if not per_metric_fallback:
+                logger.info("Insights %s refused for %s: %s", ",".join(metrics), media_id, exc)
+                return {}, list(metrics)
             logger.info("Insights for %s refused as a batch (%s) — asking per metric", media_id, exc)
 
         values: dict[str, int] = {}
