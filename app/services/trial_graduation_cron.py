@@ -45,6 +45,7 @@ MAX_EMAIL_ATTEMPTS = 5
 class Snapshot:
     permalink: str | None
     metrics: dict[str, float]
+    thumbnail_url: str | None = None
 
 
 FetchSnapshot = Callable[[str, str], Awaitable[Snapshot]]
@@ -61,7 +62,11 @@ def fetch_snapshot_with(instagram_service_manager: Any) -> FetchSnapshot:
         basics = await asyncio.to_thread(svc.get_media_snapshot, media_id)
         insights = (await asyncio.to_thread(svc.get_reel_insights, [media_id])).get(media_id, {})
         meta = reel_metadata(basics.get("like_count"), basics.get("comments_count"), insights)
-        return Snapshot(permalink=basics.get("permalink"), metrics={k: float(v) for k, v in meta.items()})
+        return Snapshot(
+            permalink=basics.get("permalink"),
+            metrics={k: float(v) for k, v in meta.items()},
+            thumbnail_url=basics.get("thumbnail_url"),
+        )
 
     return fetch
 
@@ -98,6 +103,9 @@ async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot) -> No
     update: dict[str, Any] = {
         "trial_check_checked_at": now_ist(),
         "trial_check_permalink": snap.permalink,
+        # Fresh from Instagram at check time: the stored thumbnail is a presigned link that may have lapsed.
+        "trial_check_thumbnail_url": snap.thumbnail_url,
+        "trial_check_metrics": snap.metrics,
         "trial_check_result": outcome.model_dump(),
         "trial_check_attempts": 0,
     }
@@ -119,6 +127,8 @@ async def _email_met(db: Any, video: dict[str, Any], send: SendEmail) -> None:
         permalink=video.get("trial_check_permalink"),
         after_hours=float(video.get("trial_check_met_after_hours") or check_hours(check)[-1]),
         groups=_groups(video),
+        thumbnail_url=video.get("trial_check_thumbnail_url") or video.get("thumbnail_url"),
+        metrics=video.get("trial_check_metrics") or {},
     )
     sent = await send(email.subject, email.text, email.html)
     update: dict[str, Any] = {"trial_check_email_attempts": int(video.get("trial_check_email_attempts", 0)) + 1}

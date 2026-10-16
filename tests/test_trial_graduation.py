@@ -139,7 +139,7 @@ def test_the_email_carries_the_link_and_the_numbers():
         groups=outcome.groups,
     )
     assert "https://www.instagram.com/reel/abc/" in mail.text
-    assert "Views: 2500 (needed at least 1000)" in mail.text
+    assert "Views: 2,500 (needed at least 1,000)" in mail.text
     assert 'href="https://www.instagram.com/reel/abc/"' in mail.html
     assert "&lt;fast&gt;" in mail.html and "<fast>" not in mail.html
 
@@ -475,3 +475,47 @@ def test_an_email_still_owed_for_an_older_flat_result_is_still_sent():
     ]
     _, sent = _run(docs)
     assert len(sent) == 1
+
+
+# --- the email's look ---------------------------------------------------------
+
+
+def _mail(**over: Any):
+    outcome = evaluate(NESTED, {"skip_rate": 40, "views": 600, "saves": 3})
+    args: dict[str, Any] = {
+        "title": "Sorting",
+        "channel": "TryAlgoViz",
+        "permalink": "https://www.instagram.com/reel/abc/",
+        "after_hours": 24,
+        "groups": outcome.groups,
+    }
+    args.update(over)
+    return format_graduate_email(**args)
+
+
+def test_the_email_shows_the_thumbnail_when_there_is_one():
+    mail = _mail(thumbnail_url="https://cdn.example/t.jpg?a=1&b=2")
+    assert 'src="https://cdn.example/t.jpg?a=1&amp;b=2"' in mail.html
+
+
+def test_the_email_has_no_broken_image_without_a_thumbnail():
+    assert "<img" not in _mail().html
+
+
+def test_the_email_shows_the_headline_numbers_that_were_reported():
+    mail = _mail(metrics={"views": 12345, "skip_rate": 41.3, "saves": 7})
+    assert "12,345" in mail.html and "41.3%" in mail.html
+    assert "Shares" not in mail.html.split("What it had to reach")[0]
+    assert "Views: 12,345" in mail.text
+
+
+def test_a_long_caption_is_cut_down_and_escaped():
+    mail = _mail(title="<b>" + "word " * 100)
+    assert "<b>" not in mail.html and "&lt;b&gt;" in mail.html
+    assert len(mail.subject) < 100
+
+
+def test_the_button_is_replaced_by_a_note_when_there_is_no_link():
+    mail = _mail(permalink=None)
+    assert "Open the reel in Instagram</a>" not in mail.html
+    assert "No link was available" in mail.html
