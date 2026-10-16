@@ -252,6 +252,27 @@ class BatchUploadService:
 # ------------------------------------------------------------------
 
 
+class RetentionAnalysisFailedError(RuntimeError):
+    """The primary video's retention analysis recorded a failure instead of raising."""
+
+
+async def _mark_batch_item_failed(
+    db: AsyncIOMotorDatabase,
+    file_id: str,
+    channel_video_ids: list[dict],
+    message: str,
+) -> None:
+    await db.batch_analysis_queue.update_one(
+        {"file_id": file_id},
+        {"$set": {"status": "failed", "message": message, "completed_at": now_ist()}},
+    )
+    for cv in channel_video_ids:
+        await db.videos.update_one(
+            {"video_id": cv["video_id"]},
+            {"$set": {"packaging_status": "failed", "updated_at": now_ist()}},
+        )
+
+
 async def run_batch_analysis_worker(
     db: AsyncIOMotorDatabase,
     r2: R2Service,
@@ -373,6 +394,17 @@ async def _process_batch_item(
             local_video_path=temp_path,
         )
 
+        # run_retention_analysis records its own failures on the video instead of
+        # raising, so without this check a failed analysis is marked "completed"
+        # here and the sibling channel records are left "analyzing" for good.
+        analysed = await db.videos.find_one(
+            {"channel_id": primary_channel_id, "video_id": primary_video_id},
+            {"retention.status": 1, "retention.error_message": 1},
+        )
+        retention = (analysed or {}).get("retention") or {}
+        if retention.get("status") == "failed":
+            raise RetentionAnalysisFailedError(retention.get("error_message") or "unknown error")
+
         # run_retention_analysis already propagates packaging to siblings via
         # multi_channel_group_id. For items whose group_id == file_id, this
         # is handled automatically.
@@ -395,6 +427,11 @@ async def _process_batch_item(
         )
         logger.success("Batch item %s completed (%s)", file_id, filename)
 
+    except RetentionAnalysisFailedError as exc:
+        # Already logged and reported by run_retention_analysis; only the batch
+        # bookkeeping below is missing.
+        logger.warning("Batch item %s failed in retention analysis: %s", file_id, exc)
+        await _mark_batch_item_failed(db, file_id, channel_video_ids, str(exc))
     except Exception as exc:
         logger.error("Batch item %s failed: %s", file_id, exc, exc_info=True)
         await report_error(
@@ -403,15 +440,7 @@ async def _process_batch_item(
             exception=exc,
             context={"file_id": file_id, "r2_key": r2_key},
         )
-        await db.batch_analysis_queue.update_one(
-            {"file_id": file_id},
-            {"$set": {"status": "failed", "message": str(exc), "completed_at": now_ist()}},
-        )
-        for cv in channel_video_ids:
-            await db.videos.update_one(
-                {"video_id": cv["video_id"]},
-                {"$set": {"packaging_status": "failed", "updated_at": now_ist()}},
-            )
+        await _mark_batch_item_failed(db, file_id, channel_video_ids, str(exc))
     finally:
         if temp_path and os.path.exists(temp_path):
             try:
