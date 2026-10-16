@@ -80,28 +80,45 @@ def views_by_day(readings: Sequence[ViewReading]) -> dict[str, DayViews]:
     return {date: DayViews(views=totals[date], span_hours=spans[date]) for date in totals}
 
 
-def estimate_follows(
+@dataclass(frozen=True)
+class ReelDay:
+    """What one reel did on one IST day: its views, and its share of the account's actions."""
+
+    date: str
+    views: float
+    # None when Instagram hasn't reported the account's follows for that day —
+    # the last ~2 days (still filling in) or days older than our stored history.
+    follows: float | None
+    profile_visits: float | None
+    bio_link_taps: float | None
+    # The day's views were spread across a long gap between readings, so both the
+    # views and the share of follows are guesses about which day they fell on.
+    rough: bool
+
+
+def daily_attribution(
     days: Sequence[AccountDay],
     readings_by_reel: Mapping[str, Sequence[ViewReading]],
-) -> dict[str, FollowEstimate]:
-    """Each reel's share of the account's follows, profile visits and bio-link taps.
+) -> dict[str, list[ReelDay]]:
+    """Each reel's views and estimated follows, profile visits and bio-link taps, day by day.
 
-    A reel appears in the result only if at least one day with reported follows
-    overlaps its views; a reel posted since then has nothing to estimate yet.
+    Every day on which a reel gained views is listed, oldest first; days without
+    reported follows carry ``None`` for the estimated actions rather than 0.
     """
     per_reel_days = {reel: views_by_day(readings) for reel, readings in readings_by_reel.items()}
-    follows: dict[str, float] = {}
-    visits: dict[str, float] = {}
-    taps: dict[str, float] = {}
-    rough_follows: dict[str, float] = {}
-    through: dict[str, str] = {}
+    by_date = {day.date: day for day in days}
+    timelines: dict[str, list[ReelDay]] = {}
+    all_dates = sorted({date for by_day in per_reel_days.values() for date in by_day})
 
-    for day in sorted(days, key=lambda d: d.date):
-        if day.follows is None:
-            continue
-        shares = {reel: by_day[day.date] for reel, by_day in per_reel_days.items() if day.date in by_day}
+    for date in all_dates:
+        shares = {reel: by_day[date] for reel, by_day in per_reel_days.items() if date in by_day}
         tracked = sum(share.views for share in shares.values())
-        if tracked <= 0:
+        day = by_date.get(date)
+        if day is None or day.follows is None or tracked <= 0:
+            for reel, share in shares.items():
+                timelines.setdefault(reel, []).append(
+                    ReelDay(date, share.views, None, None, None, share.span_hours > ROUGH_SPAN_HOURS)
+                )
             continue
         # With close readings, Instagram's own reel total for the day keeps the share
         # of reels we don't track (archived, older than our records) unattributed;
@@ -121,22 +138,46 @@ def estimate_follows(
         day_taps = (day.bio_link_taps or 0) * reel_fraction
         for reel, share in shares.items():
             weight = share.views / denominator
-            follows[reel] = follows.get(reel, 0.0) + day_follows * weight
-            visits[reel] = visits.get(reel, 0.0) + day_visits * weight
-            taps[reel] = taps.get(reel, 0.0) + day_taps * weight
-            if share.span_hours > ROUGH_SPAN_HOURS:
-                rough_follows[reel] = rough_follows.get(reel, 0.0) + day_follows * weight
-            through[reel] = day.date
+            timelines.setdefault(reel, []).append(
+                ReelDay(
+                    date,
+                    share.views,
+                    day_follows * weight,
+                    day_visits * weight,
+                    day_taps * weight,
+                    share.span_hours > ROUGH_SPAN_HOURS,
+                )
+            )
+    return timelines
 
+
+def estimate_follows(
+    days: Sequence[AccountDay],
+    readings_by_reel: Mapping[str, Sequence[ViewReading]],
+) -> dict[str, FollowEstimate]:
+    """Each reel's share of the account's follows, profile visits and bio-link taps.
+
+    A reel appears in the result only if at least one day with reported follows
+    overlaps its views; a reel posted since then has nothing to estimate yet.
+    """
+    return estimates_from_timelines(daily_attribution(days, readings_by_reel))
+
+
+def estimates_from_timelines(timelines: Mapping[str, Sequence[ReelDay]]) -> dict[str, FollowEstimate]:
+    """Totals of :func:`daily_attribution`, so callers holding the timeline needn't recompute it."""
     estimates: dict[str, FollowEstimate] = {}
-    for reel, total in follows.items():
-        rough = rough_follows.get(reel, 0.0)
+    for reel, timeline in timelines.items():
+        reported = [entry for entry in timeline if entry.follows is not None]
+        if not reported:
+            continue
+        total = sum(entry.follows or 0.0 for entry in reported)
+        rough = sum(entry.follows or 0.0 for entry in reported if entry.rough)
         quality: Quality = "rough" if total > 0 and rough > ROUGH_SHARE_LIMIT * total else "good"
         estimates[reel] = FollowEstimate(
             follows=total,
-            profile_visits=visits.get(reel, 0.0),
-            bio_link_taps=taps.get(reel, 0.0),
+            profile_visits=sum(entry.profile_visits or 0.0 for entry in reported),
+            bio_link_taps=sum(entry.bio_link_taps or 0.0 for entry in reported),
             quality=quality,
-            through=through[reel],
+            through=reported[-1].date,
         )
     return estimates
