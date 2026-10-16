@@ -70,6 +70,14 @@ class InstagramAccountDayOut(BaseModel):
     reach: int | None = None
     reach_followers: int | None = None
     reach_non_followers: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
+    saves: int | None = None
+    reposts: int | None = None
+    replies: int | None = None
+    views_followers: int | None = None
+    views_non_followers: int | None = None
 
 
 class CategoryChangeRequest(BaseModel):

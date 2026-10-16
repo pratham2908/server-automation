@@ -36,6 +36,16 @@ class AccountDay:
     reach: int | None = None
     reach_followers: int | None = None
     reach_non_followers: int | None = None
+    # The account's daily engagement, all content types together.
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
+    saves: int | None = None
+    reposts: int | None = None
+    replies: int | None = None
+    # Views split by whether the viewer already followed.
+    views_followers: int | None = None
+    views_non_followers: int | None = None
 
 
 def _total_value(body: Mapping[str, Any] | None, name: str) -> Mapping[str, Any] | None:
@@ -70,6 +80,7 @@ def parse_account_day(
     views_body: Mapping[str, Any] | None,
     follows_body: Mapping[str, Any] | None,
     reach_body: Mapping[str, Any] | None = None,
+    views_by_follow_body: Mapping[str, Any] | None = None,
 ) -> AccountDay:
     """Build an ``AccountDay`` from the insight calls made for that day."""
     views_total = _total_value(views_body, "views")
@@ -82,6 +93,7 @@ def parse_account_day(
     follow_split = _breakdown(_total_value(follows_body, "follows_and_unfollows"))
     reach_total = _total_value(reach_body, "reach")
     reach_split = _breakdown(reach_total)
+    views_follow_split = _breakdown(_total_value(views_by_follow_body, "views"))
     return AccountDay(
         date=date,
         profile_visits=_value(_total_value(totals_body, "profile_views")),
@@ -98,4 +110,12 @@ def parse_account_day(
         # Here follow_type means who was reached: FOLLOWER = already followed.
         reach_followers=reach_split.get("FOLLOWER", 0) if reach_split is not None else None,
         reach_non_followers=reach_split.get("NON_FOLLOWER", 0) if reach_split is not None else None,
+        likes=_value(_total_value(totals_body, "likes")),
+        comments=_value(_total_value(totals_body, "comments")),
+        shares=_value(_total_value(totals_body, "shares")),
+        saves=_value(_total_value(totals_body, "saves")),
+        reposts=_value(_total_value(totals_body, "reposts")),
+        replies=_value(_total_value(totals_body, "replies")),
+        views_followers=views_follow_split.get("FOLLOWER", 0) if views_follow_split is not None else None,
+        views_non_followers=views_follow_split.get("NON_FOLLOWER", 0) if views_follow_split is not None else None,
     )

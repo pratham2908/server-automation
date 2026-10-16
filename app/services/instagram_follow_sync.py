@@ -34,6 +34,8 @@ SETTLED_AFTER_DAYS = 3
 # A day older than this is not asked for again even if a call was refused —
 # accounts under 100 followers are refused follow data for good.
 RETRY_REFUSED_FOR_DAYS = 7
+# Bump when an account day gains metrics, so settled days are fetched once more.
+ACCOUNT_DAY_VERSION = 2
 
 
 async def refresh_follow_estimates(
@@ -58,12 +60,12 @@ async def refresh_follow_estimates(
 async def _store_account_days(
     db: AsyncIOMotorDatabase, ig: InstagramService, channel_id: str, ig_user_id: str, today: date
 ) -> None:
-    # A settled day stored before bio-link taps were fetched is asked for once more,
-    # so the per-reel taps estimate covers the full 30 days rather than only new ones.
+    # A settled day stored by an older version (fewer metrics) is asked for once
+    # more, so new metrics cover the full 30 days rather than only new days.
     settled = {
         doc["date"]
         async for doc in db.instagram_account_daily.find(
-            {"channel_id": channel_id, "settled": True, "bio_link_taps": {"$exists": True}}, {"date": 1}
+            {"channel_id": channel_id, "settled": True, "version": {"$gte": ACCOUNT_DAY_VERSION}}, {"date": 1}
         )
     }
     # Today is still running, so it starts from yesterday.
@@ -74,15 +76,23 @@ async def _store_account_days(
             continue
         start = datetime(day.year, day.month, day.day, tzinfo=IST)
         until = start + timedelta(days=1)
-        totals, views, follows, reach = await asyncio.to_thread(
+        totals, views, follows, reach, views_by_follow = await asyncio.to_thread(
             ig.get_account_day_insights, ig_user_id, int(start.timestamp()), int(until.timestamp())
         )
-        parsed = parse_account_day(label, totals, views, follows, reach)
+        parsed = parse_account_day(label, totals, views, follows, reach, views_by_follow)
         refused = totals is None or views is None or follows is None
         is_settled = age >= SETTLED_AFTER_DAYS and (not refused or age >= RETRY_REFUSED_FOR_DAYS)
         await db.instagram_account_daily.update_one(
             {"channel_id": channel_id, "date": label},
-            {"$set": {**asdict(parsed), "channel_id": channel_id, "settled": is_settled, "fetched_at": now_ist()}},
+            {
+                "$set": {
+                    **asdict(parsed),
+                    "channel_id": channel_id,
+                    "settled": is_settled,
+                    "version": ACCOUNT_DAY_VERSION,
+                    "fetched_at": now_ist(),
+                }
+            },
             upsert=True,
         )
 
