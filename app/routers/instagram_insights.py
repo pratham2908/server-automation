@@ -1,9 +1,10 @@
-"""Instagram audience demographics and stories, as stored by the Instagram sync."""
+"""Instagram audience demographics, stories and per-reel analysis, as stored by the Instagram sync."""
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -12,6 +13,18 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services.instagram_audience import story_is_live
+from app.services.instagram_content_analysis import (
+    GroupStat,
+    PostingSlot,
+    ReelSummary,
+    content_groups,
+    day_status,
+    flatten_params,
+    parse_published_at,
+    per_1k,
+    posting_slots,
+    watch_through,
+)
 from app.timezone import now_ist, to_ist_iso
 
 router = APIRouter(
@@ -87,3 +100,186 @@ async def get_stories(
     now = now_ist()
     cursor = db.instagram_stories.find({"channel_id": channel_id}).sort("posted_at", -1).limit(limit)
     return [_story_out(doc, now) async for doc in cursor]
+
+
+class ReelDayOut(BaseModel):
+    date: str
+    views: float
+    follows: float | None = None
+    profile_visits: float | None = None
+    bio_link_taps: float | None = None
+    rough: bool
+    # "pending": Instagram hasn't reported that day's follows yet (last ~2 days).
+    # "unavailable": it never will — older than the stored account history.
+    status: Literal["estimated", "pending", "unavailable"]
+
+
+class ReelTimelineOut(BaseModel):
+    media_id: str
+    days: list[ReelDayOut] = []
+
+
+@router.get("/reels/{media_id}/timeline", response_model=ReelTimelineOut)
+async def get_reel_timeline(
+    channel_id: str, media_id: str, db: AsyncIOMotorDatabase = Depends(get_db)
+) -> ReelTimelineOut:
+    """A reel's views and estimated follows, profile visits and bio-link taps, day by day (IST)."""
+    today = now_ist().date()
+    cursor = db.instagram_reel_daily.find({"channel_id": channel_id, "media_id": media_id}).sort("date", 1)
+    days = [
+        ReelDayOut(
+            date=doc["date"],
+            views=doc.get("views") or 0.0,
+            follows=doc.get("follows"),
+            profile_visits=doc.get("profile_visits"),
+            bio_link_taps=doc.get("bio_link_taps"),
+            rough=bool(doc.get("rough")),
+            status=day_status(doc["date"], doc.get("follows") is not None, today),
+        )
+        async for doc in cursor
+    ]
+    return ReelTimelineOut(media_id=media_id, days=days)
+
+
+class ReelAnalysisOut(BaseModel):
+    media_id: str
+    video_id: str | None = None
+    title: str | None = None
+    thumbnail_url: str | None = None
+    category: str | None = None
+    published_at: str | None = None
+    views: float | None = None
+    skip_rate: float | None = None
+    avg_watch_seconds: float | None = None
+    duration_seconds: float | None = None
+    watch_through: float | None = None
+    shares_per_1k: float | None = None
+    saves_per_1k: float | None = None
+    estimated_follows: float | None = None
+    follow_quality: str | None = None
+    views_24h: float | None = None
+    views_48h: float | None = None
+    views_7d: float | None = None
+    hours_to_half_views: float | None = None
+    hours_to_90_views: float | None = None
+    picking_up: bool | None = None
+
+
+class PostingSlotOut(BaseModel):
+    slot: int
+    reels: int
+    measured: int
+    median_views_24h: float | None = None
+    mature: int
+    median_views: float | None = None
+
+
+class GroupStatOut(BaseModel):
+    dimension: str
+    value: str
+    reels: int
+    median_views: float | None = None
+    median_skip_rate: float | None = None
+    median_watch_through: float | None = None
+    median_shares_per_1k: float | None = None
+    median_saves_per_1k: float | None = None
+
+
+class ContentAnalysisOut(BaseModel):
+    channel_id: str
+    reels: list[ReelAnalysisOut] = []
+    # IST hour (0–23) and weekday (0 = Monday) each reel was posted.
+    posting_hours: list[PostingSlotOut] = []
+    posting_weekdays: list[PostingSlotOut] = []
+    groups: list[GroupStatOut] = []
+
+
+def _number(value: object) -> float | None:
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _rounded(value: float | None) -> float | None:
+    return None if value is None else round(value, 2)
+
+
+def _slot_out(slot: PostingSlot) -> PostingSlotOut:
+    return PostingSlotOut(**asdict(slot))
+
+
+def _group_out(group: GroupStat) -> GroupStatOut:
+    return GroupStatOut(**asdict(group))
+
+
+@router.get("/content-analysis", response_model=ContentAnalysisOut)
+async def get_content_analysis(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> ContentAnalysisOut:
+    """Per-reel speed, hook and follow rate, plus posting-time and topic/format breakdowns."""
+    reels: list[ReelAnalysisOut] = []
+    summaries: list[ReelSummary] = []
+    params: dict[str, dict[str, list[str]]] = {}
+    cursor = db.videos.find(
+        {"channel_id": channel_id, "instagram_media_id": {"$ne": None}, "status": "published"},
+        {
+            "instagram_media_id": 1,
+            "video_id": 1,
+            "title": 1,
+            "thumbnail_url": 1,
+            "category": 1,
+            "content_params": 1,
+            "published_at": 1,
+            "metadata": 1,
+        },
+    )
+    async for doc in cursor:
+        meta = doc.get("metadata") or {}
+        media_id = doc["instagram_media_id"]
+        published = parse_published_at(doc.get("published_at"))
+        views = _number(meta.get("views"))
+        through = watch_through(_number(meta.get("avg_view_duration_seconds")), _number(meta.get("duration_seconds")))
+        reel = ReelAnalysisOut(
+            media_id=media_id,
+            video_id=doc.get("video_id"),
+            title=doc.get("title"),
+            thumbnail_url=doc.get("thumbnail_url"),
+            category=doc.get("category"),
+            published_at=to_ist_iso(published),
+            views=views,
+            skip_rate=_number(meta.get("skip_rate")),
+            avg_watch_seconds=_number(meta.get("avg_view_duration_seconds")),
+            duration_seconds=_number(meta.get("duration_seconds")),
+            watch_through=None if through is None else round(through, 3),
+            shares_per_1k=_rounded(per_1k(_number(meta.get("shares")), views)),
+            saves_per_1k=_rounded(per_1k(_number(meta.get("saves")), views)),
+            estimated_follows=_number(meta.get("estimated_follows")),
+            follow_quality=meta.get("follow_estimate_quality"),
+            views_24h=_number(meta.get("views_24h")),
+            views_48h=_number(meta.get("views_48h")),
+            views_7d=_number(meta.get("views_7d")),
+            hours_to_half_views=_number(meta.get("hours_to_half_views")),
+            hours_to_90_views=_number(meta.get("hours_to_90_views")),
+            picking_up=meta.get("picking_up") if isinstance(meta.get("picking_up"), bool) else None,
+        )
+        reels.append(reel)
+        summaries.append(
+            ReelSummary(
+                media_id=media_id,
+                category=reel.category,
+                published_at=published,
+                views=reel.views,
+                skip_rate=reel.skip_rate,
+                watch_through=through,
+                shares_per_1k=reel.shares_per_1k,
+                saves_per_1k=reel.saves_per_1k,
+                views_24h=reel.views_24h,
+            )
+        )
+        params[media_id] = flatten_params(doc.get("content_params"))
+
+    hours, weekdays = posting_slots(summaries, now_ist())
+    reels.sort(key=lambda r: r.published_at or "", reverse=True)
+    return ContentAnalysisOut(
+        channel_id=channel_id,
+        reels=reels,
+        posting_hours=[_slot_out(s) for s in hours],
+        posting_weekdays=[_slot_out(s) for s in weekdays],
+        groups=[_group_out(g) for g in content_groups(summaries, params)],
+    )

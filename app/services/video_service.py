@@ -31,6 +31,7 @@ from app.services.instagram_audience_sync import refresh_audience, refresh_stori
 from app.services.instagram_follow_sync import refresh_follow_estimates
 from app.services.instagram_reel_metrics import reel_metadata
 from app.services.r2 import R2Service
+from app.services.reel_duration_sync import refresh_reel_durations
 from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
 from app.services.schedule_operation import (
     enqueue_video_for_youtube,
@@ -1842,7 +1843,7 @@ class VideoService:
     async def _refresh_instagram_account_insights(
         self, ig: InstagramService, channel_id: str, channel: dict[str, Any], views_by_media: dict[str, int]
     ) -> None:
-        """Account totals, per-reel follow estimates, demographics and stories, after the reels are saved.
+        """Account totals, per-reel follow estimates, demographics, stories and reel lengths, after the reels are saved.
 
         A failure here is logged, not raised: the reels' own numbers are already
         stored, and losing them to an account-insights hiccup would be worse than a
@@ -1862,6 +1863,10 @@ class VideoService:
             await refresh_stories(self.db, ig, channel_id, channel["instagram_user_id"])
         except Exception:
             logger.exception("Stories not refreshed for '%s'", channel_id)
+        try:
+            await refresh_reel_durations(self.db, ig, self.r2, channel_id)
+        except Exception:
+            logger.exception("Reel lengths not refreshed for '%s'", channel_id)
 
     async def _extract_params_and_categorize_batch(self, schema, cats, batch, instructions, platform):
         if not self.gemini:

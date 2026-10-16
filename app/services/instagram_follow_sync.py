@@ -6,7 +6,9 @@ The thin side-effect shell around ``instagram_account_insights`` and
 1. Record each reel's cumulative view count (``instagram_reel_snapshots``).
 2. Store the account's daily totals (``instagram_account_daily``) for the last
    30 days, which is as far back as Instagram serves them.
-3. Recompute every reel's estimated follows, profile visits and bio-link taps onto its video doc.
+3. Recompute every reel's estimated follows, profile visits and bio-link taps onto its video doc,
+   with its day-by-day split (``instagram_reel_daily``) and how fast it collected
+   its views.
 """
 
 from __future__ import annotations
@@ -18,11 +20,18 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import ReplaceOne
 
 from app.logger import get_logger
 from app.services.instagram import InstagramService
 from app.services.instagram_account_insights import AccountDay, parse_account_day
-from app.services.instagram_follow_attribution import ViewReading, estimate_follows
+from app.services.instagram_content_analysis import parse_published_at, view_speed
+from app.services.instagram_follow_attribution import (
+    ReelDay,
+    ViewReading,
+    daily_attribution,
+    estimates_from_timelines,
+)
 from app.timezone import IST, assume_utc, now_ist
 
 logger = get_logger(__name__)
@@ -114,26 +123,33 @@ def _account_day(doc: Mapping[str, Any]) -> AccountDay:
     )
 
 
-def _as_datetime(value: object) -> datetime | None:
-    """Older video docs hold ``published_at`` as an ISO string, newer ones as a datetime."""
-    if isinstance(value, datetime):
-        return assume_utc(value)
-    if isinstance(value, str) and value:
-        try:
-            return assume_utc(datetime.fromisoformat(value))
-        except ValueError:
-            return None
-    return None
+def _rounded(value: float | None, digits: int = 1) -> float | None:
+    return None if value is None else round(value, digits)
+
+
+def _daily_row(channel_id: str, media_id: str, day: ReelDay) -> dict[str, Any]:
+    return {
+        "channel_id": channel_id,
+        "media_id": media_id,
+        "date": day.date,
+        "views": round(day.views, 1),
+        "follows": _rounded(day.follows, 2),
+        "profile_visits": _rounded(day.profile_visits, 2),
+        "bio_link_taps": _rounded(day.bio_link_taps, 2),
+        "rough": day.rough,
+    }
 
 
 async def _write_estimates(db: AsyncIOMotorDatabase, channel_id: str) -> None:
     days = [_account_day(doc) async for doc in db.instagram_account_daily.find({"channel_id": channel_id})]
     readings: dict[str, list[ViewReading]] = {}
+    published_by_reel: dict[str, datetime | None] = {}
     async for video in db.videos.find(
         {"channel_id": channel_id, "instagram_media_id": {"$ne": None}},
         {"instagram_media_id": 1, "published_at": 1},
     ):
-        published = _as_datetime(video.get("published_at"))
+        published = parse_published_at(video.get("published_at"))
+        published_by_reel[video["instagram_media_id"]] = published
         # The publish moment is a free reading of 0 views; it is what lets a reel's
         # first sync place its views on the days since it went up.
         readings[video["instagram_media_id"]] = [ViewReading(at=published, views=0.0)] if published else []
@@ -143,16 +159,39 @@ async def _write_estimates(db: AsyncIOMotorDatabase, channel_id: str) -> None:
         if snap["media_id"] in readings:
             readings[snap["media_id"]].append(ViewReading(at=assume_utc(snap["at"]), views=float(snap["views"])))
 
-    for media_id, est in estimate_follows(days, readings).items():
-        await db.videos.update_one(
-            {"channel_id": channel_id, "instagram_media_id": media_id},
-            {
-                "$set": {
+    timelines = daily_attribution(days, readings)
+    estimates = estimates_from_timelines(timelines)
+    for media_id, reel_readings in readings.items():
+        speed = view_speed(published_by_reel.get(media_id), reel_readings)
+        set_doc: dict[str, Any] = {
+            "metadata.views_24h": _rounded(speed.views_24h, 0),
+            "metadata.views_48h": _rounded(speed.views_48h, 0),
+            "metadata.views_7d": _rounded(speed.views_7d, 0),
+            "metadata.hours_to_half_views": _rounded(speed.hours_to_half),
+            "metadata.hours_to_90_views": _rounded(speed.hours_to_90),
+            "metadata.picking_up": speed.picking_up,
+        }
+        est = estimates.get(media_id)
+        if est is not None:
+            set_doc.update(
+                {
                     "metadata.estimated_follows": round(est.follows, 1),
                     "metadata.estimated_profile_visits": round(est.profile_visits, 1),
                     "metadata.estimated_bio_link_taps": round(est.bio_link_taps, 1),
                     "metadata.follow_estimate_quality": est.quality,
                     "metadata.follow_estimate_through": est.through,
                 }
-            },
+            )
+        await db.videos.update_one({"channel_id": channel_id, "instagram_media_id": media_id}, {"$set": set_doc})
+
+    # Rows are replaced, not appended: a later reading or a newly reported day
+    # changes a day already written.
+    rows = [_daily_row(channel_id, media_id, day) for media_id, timeline in timelines.items() for day in timeline]
+    if rows:
+        await db.instagram_reel_daily.bulk_write(
+            [
+                ReplaceOne({"channel_id": channel_id, "media_id": r["media_id"], "date": r["date"]}, r, upsert=True)
+                for r in rows
+            ],
+            ordered=False,
         )
