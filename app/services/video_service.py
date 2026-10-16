@@ -27,6 +27,7 @@ from app.services.downloader import (
 from app.services.error_reporting import create_monitored_task, report_error
 from app.services.first_comment import pending_fields, platform_id_field, validate_comment
 from app.services.instagram import InstagramService
+from app.services.instagram_audience_sync import refresh_audience, refresh_stories
 from app.services.instagram_follow_sync import refresh_follow_estimates
 from app.services.instagram_reel_metrics import reel_metadata
 from app.services.r2 import R2Service
@@ -1534,7 +1535,11 @@ class VideoService:
             raise ValueError("Only a published reel's running check can be edited here; reschedule it instead")
         fields = edit_running_check(video, check)
         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": {**fields, "updated_at": now_ist()}})
-        return {"ok": True, "trial_check": fields["trial_check"], "next_check_at": to_ist_iso(fields["trial_check_due_at"])}
+        return {
+            "ok": True,
+            "trial_check": fields["trial_check"],
+            "next_check_at": to_ist_iso(fields["trial_check_due_at"]),
+        }
 
     async def _reschedule_on_youtube(
         self,
@@ -1787,7 +1792,7 @@ class VideoService:
                 )
 
         if not new_vids:
-            await self._refresh_instagram_follow_estimates(ig, channel_id, channel, views_by_media)
+            await self._refresh_instagram_account_insights(ig, channel_id, channel, views_by_media)
             return {"ok": True, "synced": 0, "missing": missing}
         schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
         cats = [
@@ -1831,13 +1836,13 @@ class VideoService:
                     }
                 )
                 inserted += 1
-        await self._refresh_instagram_follow_estimates(ig, channel_id, channel, views_by_media)
+        await self._refresh_instagram_account_insights(ig, channel_id, channel, views_by_media)
         return {"ok": True, "synced": inserted, "missing": missing}
 
-    async def _refresh_instagram_follow_estimates(
+    async def _refresh_instagram_account_insights(
         self, ig: InstagramService, channel_id: str, channel: dict[str, Any], views_by_media: dict[str, int]
     ) -> None:
-        """Account follow totals and per-reel follow estimates, after the reels are saved.
+        """Account totals, per-reel follow estimates, demographics and stories, after the reels are saved.
 
         A failure here is logged, not raised: the reels' own numbers are already
         stored, and losing them to an account-insights hiccup would be worse than a
@@ -1847,6 +1852,16 @@ class VideoService:
             await refresh_follow_estimates(self.db, ig, channel_id, channel["instagram_user_id"], views_by_media)
         except Exception:
             logger.exception("Follow estimates not refreshed for '%s'", channel_id)
+        # Audience and stories are independent of the follow estimate and of each
+        # other; one failing must not cost the others their refresh.
+        try:
+            await refresh_audience(self.db, ig, channel_id, channel["instagram_user_id"])
+        except Exception:
+            logger.exception("Audience demographics not refreshed for '%s'", channel_id)
+        try:
+            await refresh_stories(self.db, ig, channel_id, channel["instagram_user_id"])
+        except Exception:
+            logger.exception("Stories not refreshed for '%s'", channel_id)
 
     async def _extract_params_and_categorize_batch(self, schema, cats, batch, instructions, platform):
         if not self.gemini:

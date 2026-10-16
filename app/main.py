@@ -345,6 +345,7 @@ from app.routers import (
     discovery,
     errors,
     growth,
+    instagram_insights,
     observability,
     posts,
     preview_analysis,
@@ -390,6 +391,7 @@ app.include_router(ui.router)
 app.include_router(system.router)
 app.include_router(observability.router)
 app.include_router(growth.router)
+app.include_router(instagram_insights.router)
 
 
 @app.get("/health", tags=["health"])

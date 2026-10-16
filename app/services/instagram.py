@@ -725,8 +725,10 @@ class InstagramService:
 
     def get_account_day_insights(
         self, ig_user_id: str, since: int, until: int
-    ) -> tuple[dict | None, dict | None, dict | None, dict | None]:
-        """Raw bodies for one day of account totals: (totals, views by type, follows, reach).
+    ) -> tuple[dict | None, dict | None, dict | None, dict | None, dict | None]:
+        """Raw bodies for one day of account totals.
+
+        In order: totals, views by media type, follows, reach by follower, views by follower.
 
         One call per breakdown, since each needs its own request. A refused call
         (an account under 100 followers gets no follow data, for one) comes back
@@ -735,10 +737,14 @@ class InstagramService:
         node = self._user_node(ig_user_id)
         window = {"period": "day", "metric_type": "total_value", "since": since, "until": until}
         requests_by_part = (
-            {"metric": "profile_views,total_interactions,accounts_engaged,website_clicks"},
+            {
+                "metric": "profile_views,total_interactions,accounts_engaged,website_clicks,"
+                "likes,comments,shares,saves,reposts,replies"
+            },
             {"metric": "views", "breakdown": "media_product_type"},
             {"metric": "follows_and_unfollows", "breakdown": "follow_type"},
             {"metric": "reach", "breakdown": "follow_type"},
+            {"metric": "views", "breakdown": "follow_type"},
         )
         bodies: list[dict | None] = []
         for extra in requests_by_part:
@@ -747,7 +753,52 @@ class InstagramService:
             except requests.HTTPError as exc:
                 logger.info("Account insight %s unavailable for %s: %s", extra["metric"], ig_user_id, exc)
                 bodies.append(None)
-        return bodies[0], bodies[1], bodies[2], bodies[3]
+        return bodies[0], bodies[1], bodies[2], bodies[3], bodies[4]
+
+    def get_demographics(self, ig_user_id: str, metric: str, breakdown: str, timeframe: str) -> dict | None:
+        """One demographics breakdown for the account; ``None`` when Instagram refuses it.
+
+        Demographics only answer to this exact shape: lifetime period, total_value,
+        one breakdown, and a timeframe.
+        """
+        params = {
+            "metric": metric,
+            "period": "lifetime",
+            "metric_type": "total_value",
+            "breakdown": breakdown,
+            "timeframe": timeframe,
+        }
+        try:
+            return self._get(f"{self._user_node(ig_user_id)}/insights", params)
+        except requests.HTTPError as exc:
+            logger.info("Demographics %s/%s/%s unavailable for %s: %s", metric, breakdown, timeframe, ig_user_id, exc)
+            return None
+
+    def get_live_stories(self, ig_user_id: str) -> list[dict[str, Any]]:
+        """Stories currently up (Instagram lists a story only during its 24 hours)."""
+        fields = "id,media_type,media_product_type,thumbnail_url,media_url,permalink,timestamp,caption"
+        data = self._get(f"{self._user_node(ig_user_id)}/stories", {"fields": fields})
+        return list(data.get("data", []))
+
+    @property
+    def provider(self) -> str:
+        """Which login this token is: ``facebook`` or ``instagram``."""
+        return self._provider
+
+    def get_story_insights(self, story_id: str, metrics: tuple[str, ...]) -> dict:
+        """Lifetime insights for one story. Raises ``HTTPError`` when Instagram refuses,
+        e.g. a fresh story with too few viewers yet."""
+        return self._get(f"{story_id}/insights", {"metric": ",".join(metrics)})
+
+    def get_story_navigation(self, story_id: str) -> dict | None:
+        """How viewers moved through a story: taps forward/back, exits, swipes."""
+        try:
+            return self._get(
+                f"{story_id}/insights", {"metric": "navigation", "breakdown": "story_navigation_action_type"}
+            )
+        except requests.HTTPError as exc:
+            logger.info("Story navigation unavailable for %s: %s", story_id, exc)
+            return None
 
     # ------------------------------------------------------------------
     # Publishing (Reels)
