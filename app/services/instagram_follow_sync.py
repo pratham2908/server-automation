@@ -6,7 +6,7 @@ The thin side-effect shell around ``instagram_account_insights`` and
 1. Record each reel's cumulative view count (``instagram_reel_snapshots``).
 2. Store the account's daily totals (``instagram_account_daily``) for the last
    30 days, which is as far back as Instagram serves them.
-3. Recompute every reel's estimated follows and profile visits onto its video doc.
+3. Recompute every reel's estimated follows, profile visits and bio-link taps onto its video doc.
 """
 
 from __future__ import annotations
@@ -58,9 +58,13 @@ async def refresh_follow_estimates(
 async def _store_account_days(
     db: AsyncIOMotorDatabase, ig: InstagramService, channel_id: str, ig_user_id: str, today: date
 ) -> None:
+    # A settled day stored before bio-link taps were fetched is asked for once more,
+    # so the per-reel taps estimate covers the full 30 days rather than only new ones.
     settled = {
         doc["date"]
-        async for doc in db.instagram_account_daily.find({"channel_id": channel_id, "settled": True}, {"date": 1})
+        async for doc in db.instagram_account_daily.find(
+            {"channel_id": channel_id, "settled": True, "bio_link_taps": {"$exists": True}}, {"date": 1}
+        )
     }
     # Today is still running, so it starts from yesterday.
     for age in range(1, ACCOUNT_HISTORY_DAYS + 1):
@@ -70,10 +74,10 @@ async def _store_account_days(
             continue
         start = datetime(day.year, day.month, day.day, tzinfo=IST)
         until = start + timedelta(days=1)
-        totals, views, follows = await asyncio.to_thread(
+        totals, views, follows, reach = await asyncio.to_thread(
             ig.get_account_day_insights, ig_user_id, int(start.timestamp()), int(until.timestamp())
         )
-        parsed = parse_account_day(label, totals, views, follows)
+        parsed = parse_account_day(label, totals, views, follows, reach)
         refused = totals is None or views is None or follows is None
         is_settled = age >= SETTLED_AFTER_DAYS and (not refused or age >= RETRY_REFUSED_FOR_DAYS)
         await db.instagram_account_daily.update_one(
@@ -93,6 +97,10 @@ def _account_day(doc: Mapping[str, Any]) -> AccountDay:
         unfollows=doc.get("unfollows"),
         interactions=doc.get("interactions"),
         accounts_engaged=doc.get("accounts_engaged"),
+        bio_link_taps=doc.get("bio_link_taps"),
+        reach=doc.get("reach"),
+        reach_followers=doc.get("reach_followers"),
+        reach_non_followers=doc.get("reach_non_followers"),
     )
 
 
@@ -132,6 +140,7 @@ async def _write_estimates(db: AsyncIOMotorDatabase, channel_id: str) -> None:
                 "$set": {
                     "metadata.estimated_follows": round(est.follows, 1),
                     "metadata.estimated_profile_visits": round(est.profile_visits, 1),
+                    "metadata.estimated_bio_link_taps": round(est.bio_link_taps, 1),
                     "metadata.follow_estimate_quality": est.quality,
                     "metadata.follow_estimate_through": est.through,
                 }

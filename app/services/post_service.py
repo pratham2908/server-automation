@@ -51,6 +51,9 @@ logger = get_logger(__name__)
 PREVIEW_URL_TTL = 3600
 HANDOFF_URL_TTL = 24 * 3600
 INSIGHT_METRICS = ["views", "reach", "likes", "comments", "saved", "shares", "total_interactions"]
+# Feed posts and carousels report these; reels refuse all three, together. They go
+# in their own request so a reel's refusal costs one call, not a per-metric retry.
+PROFILE_INSIGHT_METRICS = ["follows", "profile_visits", "profile_activity"]
 MAX_FEED_LIMIT = 50
 
 
@@ -581,9 +584,14 @@ class PostService:
         service, _ = await self._instagram(channel_id)
         try:
             values, unavailable = await asyncio.to_thread(service.get_media_insights, media_id, INSIGHT_METRICS)
+            profile, profile_missing = await asyncio.to_thread(
+                service.get_media_insights, media_id, PROFILE_INSIGHT_METRICS, per_metric_fallback=False
+            )
         except Exception as exc:
             raise UpstreamError(f"Instagram did not return insights: {exc}")
-        return MediaInsightsOut(media_id=media_id, metrics=values, unavailable=unavailable)
+        return MediaInsightsOut(
+            media_id=media_id, metrics={**values, **profile}, unavailable=unavailable + profile_missing
+        )
 
 
 def feed_item(media: dict[str, Any], ours: dict[str, str]) -> FeedItem:

@@ -66,6 +66,10 @@ class InstagramAccountDayOut(BaseModel):
     profile_visits: int | None = None
     reel_views: int | None = None
     total_views: int | None = None
+    bio_link_taps: int | None = None
+    reach: int | None = None
+    reach_followers: int | None = None
+    reach_non_followers: int | None = None
 
 
 class CategoryChangeRequest(BaseModel):
@@ -275,7 +279,7 @@ async def instagram_account_daily(
     days: int = Query(30, ge=1, le=365),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> list[InstagramAccountDayOut]:
-    """Daily follows, unfollows and profile visits for an Instagram channel, newest first.
+    """Daily follows, profile visits, bio-link taps and reach for an Instagram channel, newest first.
 
     Filled by the Instagram sync; Instagram reports these for the account only,
     never per reel.
@@ -628,7 +632,9 @@ async def reschedule_video(
     record. The new time must be in the future; a video that has already gone public cannot be moved.
     """
     try:
-        return await service.reschedule_video(channel_id, video_id, body.scheduled_at, body.first_comment, body.trial_graduation, body.trial_check)
+        return await service.reschedule_video(
+            channel_id, video_id, body.scheduled_at, body.first_comment, body.trial_graduation, body.trial_check
+        )
     except Exception as e:
         error_service = get_error_service(service.db)
         await error_service.log_error(
