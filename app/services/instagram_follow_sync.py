@@ -46,8 +46,9 @@ RETRY_REFUSED_FOR_DAYS = 7
 # Bump when an account day gains metrics, so settled days are fetched once more.
 ACCOUNT_DAY_VERSION = 2
 # A day Instagram is still filling in is re-read at most this often. Syncs run
-# hourly while a reel is fresh; these totals move slowly and cost five calls a day.
-UNSETTLED_REFRESH_HOURS = 6
+# hourly while a reel is fresh, but these totals only feed the per-day follow
+# split, so once a day is enough (the owner's call) and saves ~10 calls a run.
+UNSETTLED_REFRESH_HOURS = 24
 
 
 async def refresh_follow_estimates(
@@ -80,7 +81,7 @@ async def _store_account_days(
             {"channel_id": channel_id, "settled": True, "version": {"$gte": ACCOUNT_DAY_VERSION}}, {"date": 1}
         )
     }
-    # Unsettled days read recently are skipped too; they come round again in a few hours.
+    # Unsettled days read in the last day are skipped too; they come round again tomorrow.
     skip |= {
         doc["date"]
         async for doc in db.instagram_account_daily.find(
