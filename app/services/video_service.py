@@ -30,6 +30,7 @@ from app.services.first_comment import pending_fields, platform_id_field, valida
 from app.services.instagram import InstagramService
 from app.services.instagram_audience_sync import refresh_audience, refresh_stories
 from app.services.instagram_follow_sync import refresh_follow_estimates
+from app.services.instagram_reel_hourly import HOURLY_METRICS
 from app.services.instagram_reel_metrics import reel_metadata
 from app.services.r2 import R2Service
 from app.services.reel_duration_sync import refresh_reel_durations
@@ -1773,7 +1774,7 @@ class VideoService:
         insights_map = ig.get_reel_insights(to_read)
 
         new_vids = []
-        views_by_media: dict[str, int] = {}
+        counts_by_media: dict[str, dict[str, int]] = {}
         for r in ig_reels:
             mid = r["id"]
             ins = insights_map.get(mid, {})
@@ -1781,7 +1782,7 @@ class VideoService:
             # Likes and comments come on the media object; everything else from insights.
             metadata = reel_metadata(r.get("like_count"), r.get("comments_count"), ins)
             if "views" in metadata:
-                views_by_media[mid] = int(metadata["views"])
+                counts_by_media[mid] = {k: int(metadata[k]) for k in HOURLY_METRICS if k in metadata}
 
             if mid not in db_ids:
                 new_vids.append(
@@ -1818,7 +1819,7 @@ class VideoService:
                 )
 
         if not new_vids:
-            await self._refresh_instagram_account_insights(ig, channel_id, channel, views_by_media)
+            await self._refresh_instagram_account_insights(ig, channel_id, channel, counts_by_media)
             return {"ok": True, "synced": 0, "missing": missing}
         schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
         cats = [
@@ -1863,11 +1864,11 @@ class VideoService:
                     }
                 )
                 inserted += 1
-        await self._refresh_instagram_account_insights(ig, channel_id, channel, views_by_media)
+        await self._refresh_instagram_account_insights(ig, channel_id, channel, counts_by_media)
         return {"ok": True, "synced": inserted, "missing": missing}
 
     async def _refresh_instagram_account_insights(
-        self, ig: InstagramService, channel_id: str, channel: dict[str, Any], views_by_media: dict[str, int]
+        self, ig: InstagramService, channel_id: str, channel: dict[str, Any], counts_by_media: dict[str, dict[str, int]]
     ) -> None:
         """Account totals, per-reel follow estimates, demographics, stories and reel lengths, after the reels are saved.
 
@@ -1876,7 +1877,7 @@ class VideoService:
         follow estimate one sync out of date.
         """
         try:
-            await refresh_follow_estimates(self.db, ig, channel_id, channel["instagram_user_id"], views_by_media)
+            await refresh_follow_estimates(self.db, ig, channel_id, channel["instagram_user_id"], counts_by_media)
         except Exception:
             logger.exception("Follow estimates not refreshed for '%s'", channel_id)
         # Audience and stories are independent of the follow estimate and of each
