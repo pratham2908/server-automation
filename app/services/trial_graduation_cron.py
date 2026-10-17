@@ -1,9 +1,15 @@
 """Watches published manual trial reels and emails when one clears its bar.
 
-The timer is state on the video, not a task in memory: ``arm_fields`` stamps
-``trial_check_due_at`` when the reel publishes, and every tick asks Mongo what is
-due. A restart therefore loses nothing - whatever came due while the server was
-down is simply found on the first tick afterwards.
+Each reel is checked every hour until its "check until" time. The next check is
+state on the video, not a task in memory: ``arm_fields`` stamps
+``trial_check_due_at`` when the reel publishes, each check moves it an hour on,
+and every tick asks Mongo what is due. A restart therefore loses nothing -
+whatever came due while the server was down is simply found on the first tick
+afterwards.
+
+Each check reads the reel itself (one call) rather than waiting on the channel's
+auto-sync: auto-sync is opt-in per channel, and a trial reel on a channel
+without it must still be checked.
 """
 
 from __future__ import annotations
@@ -26,12 +32,12 @@ from app.services.trial_graduation import (
     PENDING,
     ConditionResult,
     GroupResult,
-    check_hours,
+    check_until_hours,
     evaluate,
-    next_due,
+    next_check_at,
 )
 from app.services.trial_graduation_email import format_graduate_email
-from app.timezone import now_ist
+from app.timezone import assume_utc, now_ist
 
 logger = get_logger(__name__)
 
@@ -71,7 +77,7 @@ def fetch_snapshot_with(instagram_service_manager: Any) -> FetchSnapshot:
     return fetch
 
 
-async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot) -> None:
+async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot, now: datetime) -> None:
     key = {"_id": video["_id"]}
     media_id = video.get("instagram_media_id")
     if not media_id:
@@ -97,11 +103,9 @@ async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot) -> No
         return
 
     outcome = evaluate(video["trial_check"], snap.metrics)
-    stage = int(video.get("trial_check_stage", 0))
-    hours = check_hours(video["trial_check"])
-    later = None if outcome.met else next_due(video, stage + 1)
+    later = None if outcome.met else next_check_at(video, now)
     update: dict[str, Any] = {
-        "trial_check_checked_at": now_ist(),
+        "trial_check_checked_at": now,
         "trial_check_permalink": snap.permalink,
         # Fresh from Instagram at check time: the stored thumbnail is a presigned link that may have lapsed.
         "trial_check_thumbnail_url": snap.thumbnail_url,
@@ -110,10 +114,11 @@ async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot) -> No
         "trial_check_attempts": 0,
     }
     if outcome.met:
-        update.update({"trial_check_state": MET, "trial_check_met_after_hours": hours[min(stage, len(hours) - 1)]})
+        elapsed = (now - assume_utc(video["published_at"])).total_seconds() / 3600
+        update.update({"trial_check_state": MET, "trial_check_met_after_hours": round(elapsed, 2)})
     elif later is not None:
-        # Short of the bar, but a later check is still to come: the reel stays in the running.
-        update.update({"trial_check_stage": stage + 1, "trial_check_due_at": later})
+        # Short of the bar, but the window is still open: check again in an hour.
+        update["trial_check_due_at"] = later
     else:
         update["trial_check_state"] = MISSED
     await db.videos.update_one(key, {"$set": update})
@@ -143,7 +148,7 @@ async def _email_met(db: Any, video: dict[str, Any], send: SendEmail) -> None:
         title=video.get("title") or video.get("video_id", "your reel"),
         channel=video.get("channel_id", ""),
         permalink=video.get("trial_check_permalink"),
-        after_hours=float(video.get("trial_check_met_after_hours") or check_hours(check)[-1]),
+        after_hours=float(video.get("trial_check_met_after_hours") or check_until_hours(check)),
         groups=_groups(video),
         thumbnail_url=video.get("trial_check_thumbnail_url") or video.get("thumbnail_url"),
         metrics=video.get("trial_check_metrics") or {},
@@ -178,7 +183,7 @@ async def run_trial_checks(
         length=limit
     )
     for video in due:
-        await _check_one(db, video, fetch)
+        await _check_one(db, video, fetch, now)
 
     owed = await db.videos.find(
         {

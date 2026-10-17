@@ -1,4 +1,4 @@
-"""Graduate checks for manual trial reels: the bar, the timer, and the email."""
+"""Graduate checks for manual trial reels: the bar, the hourly checks, and the email."""
 
 from __future__ import annotations
 
@@ -16,8 +16,10 @@ from app.services.trial_graduation import (
     PENDING,
     TrialCheck,
     arm_fields,
+    check_until_hours,
     edit_running_check,
     evaluate,
+    next_check_at,
     trial_fields,
     upgrade_check,
 )
@@ -40,18 +42,18 @@ def _check(match: str = "all", **mins: float) -> dict[str, Any]:
 
 def test_a_check_needs_at_least_one_condition():
     with pytest.raises(ValidationError):
-        TrialCheck(after_hours=24, conditions=[])
+        TrialCheck(check_until_hours=24, conditions=[])
 
 
 @pytest.mark.parametrize("hours", [0, 0.1, 169])
 def test_hours_outside_the_sensible_range_are_refused(hours):
     with pytest.raises(ValidationError):
-        TrialCheck(after_hours=hours, conditions=[{"metric": "views", "minimum": 1}])
+        TrialCheck(check_until_hours=hours, conditions=[{"metric": "views", "minimum": 1}])
 
 
 def test_an_unknown_metric_is_refused():
     with pytest.raises(ValidationError):
-        TrialCheck(after_hours=24, conditions=[{"metric": "clicks", "minimum": 1}])
+        TrialCheck(check_until_hours=24, conditions=[{"metric": "clicks", "minimum": 1}])
 
 
 def test_a_check_is_stored_alongside_a_manual_strategy():
@@ -83,17 +85,33 @@ def test_saying_nothing_changes_nothing():
     assert trial_fields(None, None, "MANUAL", "instagram") == {}
 
 
-# --- the timer ----------------------------------------------------------------
+# --- the hourly checks --------------------------------------------------------
 
 
-def test_the_timer_starts_at_publish():
+def test_the_first_check_is_an_hour_after_publish():
     video = {"trial_graduation": "MANUAL", "trial_check": _check()}
-    fields = arm_fields(video, NOW)
-    assert fields == {
-        "trial_check_state": PENDING,
-        "trial_check_stage": 0,
-        "trial_check_due_at": NOW + timedelta(hours=24),
-    }
+    assert arm_fields(video, NOW) == {"trial_check_state": PENDING, "trial_check_due_at": NOW + timedelta(hours=1)}
+
+
+def test_a_window_shorter_than_an_hour_is_checked_once_at_its_end():
+    video = {"trial_graduation": "MANUAL", "trial_check": {**_check(), "after_hours": 0.5}}
+    assert arm_fields(video, NOW)["trial_check_due_at"] == NOW + timedelta(minutes=30)
+
+
+def test_checks_come_hourly_and_the_last_lands_on_the_end():
+    video = {"trial_check": {**_check(), "after_hours": 24}, "published_at": NOW - timedelta(hours=10)}
+    assert next_check_at(video, NOW) == NOW + timedelta(hours=1)
+    # 40 minutes before the end: the next check is the end itself, not an hour on.
+    late = NOW + timedelta(hours=13, minutes=20)
+    assert next_check_at(video, late) == NOW + timedelta(hours=14)
+    assert next_check_at(video, NOW + timedelta(hours=14)) is None
+
+
+def test_old_fixed_check_times_read_as_checking_until_the_last_one():
+    assert check_until_hours({**_check(), "after_hours": [6, 24, 48]}) == 48
+    assert check_until_hours({**_check(), "after_hours": 24}) == 24
+    upgraded = TrialCheck.model_validate({**_check(), "after_hours": [6, 24]}).model_dump()
+    assert upgraded["check_until_hours"] == 24 and "after_hours" not in upgraded
 
 
 def test_no_timer_without_a_check_or_a_manual_trial():
@@ -196,6 +214,8 @@ def _video(**over: Any) -> dict[str, Any]:
         "trial_check": _check(views=1000),
         "trial_check_state": PENDING,
         "trial_check_due_at": NOW - timedelta(minutes=1),
+        # A day into a 24h window: this check is the last.
+        "published_at": NOW - timedelta(hours=24),
     }
     doc.update(over)
     return doc
@@ -226,7 +246,7 @@ def test_a_due_reel_over_the_bar_is_emailed_once():
     assert again == []
 
 
-def test_a_reel_under_the_bar_on_its_only_timer_has_missed_and_sends_nothing():
+def test_a_reel_under_the_bar_at_the_end_of_its_window_has_missed_and_sends_nothing():
     docs = [_video()]
     _, sent = _run(docs, Snapshot("https://ig/reel/1", {"views": 5}))
     assert docs[0]["trial_check_state"] == MISSED and sent == []
@@ -240,7 +260,7 @@ def test_a_reel_that_is_not_due_yet_is_left_alone():
 
 def test_a_restart_picks_up_a_check_that_came_due_while_the_server_was_down():
     """State lives on the video, so a due check from hours ago is found like any other."""
-    docs = [_video(trial_check_due_at=NOW - timedelta(hours=9))]
+    docs = [_video(trial_check_due_at=NOW - timedelta(hours=9), published_at=NOW - timedelta(hours=20))]
     _, sent = _run(docs)
     assert len(sent) == 1
 
@@ -263,70 +283,50 @@ def test_an_unsent_email_is_retried_on_a_later_pass():
     assert len(sent) == 1 and docs[0]["trial_check_emailed"] is True
 
 
-# --- several timers -----------------------------------------------------------
+# --- checking every hour ------------------------------------------------------
 
 PUBLISHED = NOW - timedelta(hours=25)
 LOW = Snapshot("https://ig/reel/1", {"views": 5})
 
 
-def _two_timers(**over: Any) -> dict[str, Any]:
-    check = {**_check(views=1000), "after_hours": [24, 48]}
-    return _video(trial_check=check, published_at=PUBLISHED, **over)
+def _two_days(**over: Any) -> dict[str, Any]:
+    check = {**_check(views=1000), "after_hours": 48}
+    return _video(**{"trial_check": check, "published_at": PUBLISHED, **over})
 
 
-def test_up_to_three_timers_are_allowed_and_a_fourth_is_not():
-    cond = [{"metric": "views", "minimum": 1}]
-    assert TrialCheck(after_hours=[6, 24, 48], conditions=cond).after_hours == [6, 24, 48]
-    with pytest.raises(ValidationError):
-        TrialCheck(after_hours=[6, 12, 24, 48], conditions=cond)
-
-
-def test_timers_must_get_later():
-    with pytest.raises(ValidationError):
-        TrialCheck(after_hours=[48, 24], conditions=[{"metric": "views", "minimum": 1}])
-    with pytest.raises(ValidationError):
-        TrialCheck(after_hours=[24, 24], conditions=[{"metric": "views", "minimum": 1}])
-
-
-def test_a_miss_before_the_last_timer_keeps_the_reel_in_the_running():
-    docs = [_two_timers()]
+def test_a_miss_inside_the_window_checks_again_in_an_hour():
+    docs = [_two_days()]
     _, sent = _run(docs, LOW)
     doc = docs[0]
-    assert doc["trial_check_state"] == PENDING and doc["trial_check_stage"] == 1 and sent == []
-    assert doc["trial_check_due_at"] == PUBLISHED + timedelta(hours=48)
+    assert doc["trial_check_state"] == PENDING and sent == []
+    assert doc["trial_check_due_at"] == NOW + timedelta(hours=1)
 
 
-def test_missing_the_last_timer_marks_it_missed():
-    docs = [_two_timers(trial_check_stage=1, trial_check_due_at=NOW - timedelta(minutes=1))]
+def test_missing_at_the_end_of_the_window_marks_it_missed():
+    docs = [_two_days(published_at=NOW - timedelta(hours=48))]
     _, sent = _run(docs, LOW)
     assert docs[0]["trial_check_state"] == MISSED and sent == []
 
 
-def test_clearing_the_bar_at_the_last_timer_still_emails():
-    docs = [_two_timers(trial_check_stage=1, trial_check_due_at=NOW - timedelta(minutes=1))]
+def test_clearing_the_bar_at_the_end_still_emails():
+    docs = [_two_days(published_at=NOW - timedelta(hours=48))]
     _, sent = _run(docs)
     assert docs[0]["trial_check_state"] == MET and len(sent) == 1
     assert docs[0]["trial_check_met_after_hours"] == 48
 
 
-def test_clearing_the_bar_early_ends_it_without_waiting_for_the_rest():
-    docs = [_two_timers()]
+def test_clearing_the_bar_early_ends_it_and_records_when():
+    docs = [_two_days()]
     _, sent = _run(docs)
-    assert docs[0]["trial_check_state"] == MET and docs[0]["trial_check_met_after_hours"] == 24
+    assert docs[0]["trial_check_state"] == MET and docs[0]["trial_check_met_after_hours"] == 25
     assert len(sent) == 1
-
-
-def test_a_check_saved_with_one_number_still_reads_as_one_timer():
-    docs = [_video(published_at=PUBLISHED)]
-    _run(docs, LOW)
-    assert docs[0]["trial_check_state"] == MISSED
 
 
 # --- groups and comparisons ---------------------------------------------------
 
 # (skip rate under 50% AND over 500 views) OR (over 2000 views) OR (over 50 saves)
 NESTED: dict[str, Any] = {
-    "after_hours": [24],
+    "check_until_hours": 24,
     "groups": [
         {
             "conditions": [
@@ -410,56 +410,53 @@ def test_the_email_names_which_option_passed():
 
 
 def _live(**over: Any) -> dict[str, Any]:
-    check = {"after_hours": [24, 48], "groups": [{"conditions": [{"metric": "views", "op": "gte", "value": 1000}]}]}
+    check = {"check_until_hours": 48, "groups": [{"conditions": [{"metric": "views", "op": "gte", "value": 1000}]}]}
     doc = {
         "trial_graduation": "MANUAL",
         "trial_check": check,
         "trial_check_state": PENDING,
-        "trial_check_stage": 0,
+        "trial_check_due_at": NOW + timedelta(minutes=20),
         "published_at": PUBLISHED,
     }
     doc.update(over)
     return doc
 
 
-def _new(hours: list[float], value: float = 5000) -> TrialCheck:
-    return TrialCheck(after_hours=hours, groups=[{"conditions": [{"metric": "views", "op": "gte", "value": value}]}])
+def _new(until: float, value: float = 5000) -> TrialCheck:
+    return TrialCheck(
+        check_until_hours=until, groups=[{"conditions": [{"metric": "views", "op": "gte", "value": value}]}]
+    )
 
 
-def test_a_running_check_can_change_its_conditions_and_timers():
-    fields = edit_running_check(_live(), _new([12, 72], 5000))
-    assert fields["trial_check"]["after_hours"] == [12, 72]
+def test_a_running_check_can_change_its_conditions_and_window():
+    fields = edit_running_check(_live(), _new(72, 5000), NOW)
+    assert fields["trial_check"]["check_until_hours"] == 72
     assert fields["trial_check"]["groups"][0]["conditions"][0]["value"] == 5000
-    assert fields["trial_check_due_at"] == PUBLISHED + timedelta(hours=12)
+    # The next hourly check keeps its slot.
+    assert fields["trial_check_due_at"] == NOW + timedelta(minutes=20)
 
 
-def test_editing_after_the_first_check_keeps_it_and_moves_the_next_one():
-    video = _live(trial_check_stage=1)
-    fields = edit_running_check(video, _new([24, 96]))
-    assert fields["trial_check_due_at"] == PUBLISHED + timedelta(hours=96)
+def test_shortening_the_window_below_the_next_check_moves_it_to_the_new_end():
+    fields = edit_running_check(_live(trial_check_due_at=NOW + timedelta(hours=1)), _new(25.5), NOW)
+    assert fields["trial_check_due_at"] == PUBLISHED + timedelta(hours=25.5)
 
 
-def test_a_check_that_already_ran_cannot_be_changed():
-    with pytest.raises(ValueError, match="already run"):
-        edit_running_check(_live(trial_check_stage=1), _new([12, 48]))
-
-
-def test_at_least_one_check_must_remain():
-    with pytest.raises(ValueError, match="at least one"):
-        edit_running_check(_live(trial_check_stage=1), _new([24]))
+def test_a_window_that_has_already_closed_is_refused():
+    with pytest.raises(ValueError, match="up 25h"):
+        edit_running_check(_live(), _new(24), NOW)
 
 
 @pytest.mark.parametrize("state", ["met", "missed", "failed"])
 def test_a_finished_check_cannot_be_edited(state):
     with pytest.raises(ValueError, match="finished"):
-        edit_running_check(_live(trial_check_state=state), _new([24, 48]))
+        edit_running_check(_live(trial_check_state=state), _new(48), NOW)
 
 
 def test_a_reel_without_a_check_has_nothing_to_edit():
     with pytest.raises(ValueError, match="no graduate check"):
-        edit_running_check(_live(trial_check=None), _new([24]))
+        edit_running_check(_live(trial_check=None), _new(48), NOW)
     with pytest.raises(ValueError, match="no graduate check"):
-        edit_running_check(_live(trial_graduation="SS_PERFORMANCE"), _new([24]))
+        edit_running_check(_live(trial_graduation="SS_PERFORMANCE"), _new(48), NOW)
 
 
 def test_an_email_still_owed_for_an_older_flat_result_is_still_sent():

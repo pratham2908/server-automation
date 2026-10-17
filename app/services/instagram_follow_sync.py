@@ -45,6 +45,9 @@ SETTLED_AFTER_DAYS = 3
 RETRY_REFUSED_FOR_DAYS = 7
 # Bump when an account day gains metrics, so settled days are fetched once more.
 ACCOUNT_DAY_VERSION = 2
+# A day Instagram is still filling in is re-read at most this often. Syncs run
+# hourly while a reel is fresh; these totals move slowly and cost five calls a day.
+UNSETTLED_REFRESH_HOURS = 6
 
 
 async def refresh_follow_estimates(
@@ -71,17 +74,29 @@ async def _store_account_days(
 ) -> None:
     # A settled day stored by an older version (fewer metrics) is asked for once
     # more, so new metrics cover the full 30 days rather than only new days.
-    settled = {
+    skip = {
         doc["date"]
         async for doc in db.instagram_account_daily.find(
             {"channel_id": channel_id, "settled": True, "version": {"$gte": ACCOUNT_DAY_VERSION}}, {"date": 1}
+        )
+    }
+    # Unsettled days read recently are skipped too; they come round again in a few hours.
+    skip |= {
+        doc["date"]
+        async for doc in db.instagram_account_daily.find(
+            {
+                "channel_id": channel_id,
+                "version": {"$gte": ACCOUNT_DAY_VERSION},
+                "fetched_at": {"$gte": now_ist() - timedelta(hours=UNSETTLED_REFRESH_HOURS)},
+            },
+            {"date": 1},
         )
     }
     # Today is still running, so it starts from yesterday.
     for age in range(1, ACCOUNT_HISTORY_DAYS + 1):
         day = today - timedelta(days=age)
         label = day.isoformat()
-        if label in settled:
+        if label in skip:
             continue
         start = datetime(day.year, day.month, day.day, tzinfo=IST)
         until = start + timedelta(days=1)
