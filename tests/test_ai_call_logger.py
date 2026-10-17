@@ -435,12 +435,36 @@ async def test_generate_falls_through_the_model_chain_until_one_succeeds(logger_
 
     service = object.__new__(GeminiService)
     service._client = SimpleNamespace(generate_content=flaky)
+    # A three-model chain, so the fall-through itself is exercised whatever the live chain holds.
+    service._TEXT_MODEL_CHAIN = ["text-a", "text-b", "text-c"]
 
     result = await service._generate("prompt", task="channel_analysis")
 
     assert result == '{"ok": true}'
-    assert attempted == GeminiService._MODEL_CHAIN
+    assert attempted == ["text-a", "text-b", "text-c"]
     assert len(captured_logs) == 3
+
+
+@pytest.mark.asyncio
+async def test_text_calls_go_to_grok_not_gemini(logger_db, captured_logs):
+    """One AI refuses Gemini for plain text; a text call must name a model it reroutes."""
+    from app.services.gemini import GeminiService
+    from one_ai import CallCost, OneAIResult
+
+    asked: list[str] = []
+
+    def reply(body):
+        asked.append(body["model"])
+        return OneAIResult(
+            data=_vertex_response('{"ok": true}', 10, 5),
+            cost=CallCost("id", body["model"], 0.0001, True, "estimate", {}),
+        )
+
+    service = object.__new__(GeminiService)
+    service._client = SimpleNamespace(generate_content=reply)
+    await service._generate("prompt", task="platform_packaging")
+    assert asked == ["grok-4.7"]
+    assert not any(m.startswith("gemini") for m in GeminiService._TEXT_MODEL_CHAIN)
 
 
 @pytest.mark.asyncio
@@ -489,3 +513,46 @@ async def test_thumbnail_analysis_sends_the_image_as_inline_base64(tmp_path, log
     inline = sent["contents"][0]["inlineData"]
     assert base64.b64decode(inline["data"]) == image.read_bytes()
     assert inline["mimeType"] == "image/jpeg"
+
+
+def test_packaging_needs_a_caption_on_instagram_and_titles_elsewhere():
+    from app.services.gemini import packaging_is_usable
+
+    assert packaging_is_usable({"suggested_titles": [], "suggested_description": "Why Florida..."}, "instagram")
+    # The shape Grok once returned: the caption nested under a key nobody asked for.
+    assert not packaging_is_usable(
+        {"suggested_titles": [], "swapped_fields": {"suggested_description": "x"}}, "instagram"
+    )
+    assert packaging_is_usable({"suggested_titles": ["Why Florida Has a Panhandle"]}, "youtube")
+    assert not packaging_is_usable({"suggested_titles": [" "], "suggested_description": "x"}, "youtube")
+
+
+@pytest.mark.asyncio
+async def test_a_packaging_reply_in_the_wrong_shape_is_asked_for_again(logger_db, captured_logs):
+    from app.services.gemini import GeminiService
+
+    replies = iter(
+        ['{"suggested_titles": [], "swapped_fields": {}}', '{"suggested_titles": [], "suggested_description": "ok"}']
+    )
+    service = object.__new__(GeminiService)
+
+    async def fake_generate(prompt, specific_model=None, task="unknown"):
+        return next(replies)
+
+    service._generate = fake_generate
+    out = await service.generate_platform_packaging(analysis_result={}, platform="instagram", channel_name="c")
+    assert out["suggested_description"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_packaging_that_never_comes_back_usable_is_refused(logger_db, captured_logs):
+    from app.services.gemini import GeminiService
+
+    service = object.__new__(GeminiService)
+
+    async def fake_generate(prompt, specific_model=None, task="unknown"):
+        return '{"suggested_titles": []}'
+
+    service._generate = fake_generate
+    with pytest.raises(ValueError, match="No usable instagram packaging"):
+        await service.generate_platform_packaging(analysis_result={}, platform="instagram", channel_name="c")

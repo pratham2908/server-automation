@@ -61,6 +61,66 @@ def extract_thumbnail(video_path: str, timestamp: float, output_path: str) -> bo
 _TERMINAL_PACKAGING = {"completed", "skipped"}
 
 
+async def package_sibling(
+    db: AsyncIOMotorDatabase,
+    gemini_service: GeminiService,
+    analysis: dict[str, Any],
+    sibling: dict[str, Any],
+    thumb_url: str | None,
+) -> bool:
+    """Write packaging for one multi-channel sibling from its primary's analysis, then promote it.
+
+    The sibling (another channel's copy of the same video) needs its own platform's
+    title, caption and tags but not a second look at the video. A failure marks its
+    packaging failed, which keeps it out of the posting queue, and is logged; the
+    caller carries on with the other siblings. Returns whether packaging was written.
+    """
+    sib_channel_id = sibling["channel_id"]
+    sib_video_id = sibling["video_id"]
+    now = now_ist()
+    try:
+        sib_channel = await db.channels.find_one({"channel_id": sib_channel_id})
+        sib_platform = (sib_channel or {}).get("platform", "youtube")
+        sib_packaging = await gemini_service.generate_platform_packaging(
+            analysis_result=analysis,
+            platform=sib_platform,
+            channel_name=(sib_channel or {}).get("name", ""),
+            default_description=(sib_channel or {}).get("default_description", ""),
+            default_tags=(sib_channel or {}).get("default_tags") or [],
+        )
+        if thumb_url:
+            sib_packaging["thumbnail_url"] = thumb_url
+
+        sib_updates: dict[str, Any] = {
+            "packaging_status": "completed",
+            "ai_packaging": sib_packaging,
+            "updated_at": now,
+        }
+        sib_titles = sib_packaging.get("suggested_titles")
+        if sib_titles and isinstance(sib_titles, list):
+            sib_updates["title"] = sib_titles[0]
+        sib_desc = sib_packaging.get("suggested_description")
+        if sib_desc:
+            sib_updates["description"] = sib_desc
+        sib_tags = sib_packaging.get("suggested_tags")
+        if sib_tags:
+            sib_updates["tags"] = (
+                sib_tags if isinstance(sib_tags, list) else [t.strip() for t in sib_tags.split(",") if t.strip()]
+            )
+
+        await db.videos.update_one({"channel_id": sib_channel_id, "video_id": sib_video_id}, {"$set": sib_updates})
+        await promote_processing_to_ready(db, sib_channel_id, sib_video_id)
+        logger.info("Propagated packaging to sibling %s (%s)", sib_video_id, sib_platform)
+        return True
+    except Exception as e:
+        logger.error("Failed to generate packaging for sibling %s: %s", sib_video_id, e)
+        await db.videos.update_one(
+            {"channel_id": sib_channel_id, "video_id": sib_video_id},
+            {"$set": {"packaging_status": "failed", "updated_at": now}},
+        )
+        return False
+
+
 async def promote_processing_to_ready(
     db: AsyncIOMotorDatabase,
     channel_id: str,
@@ -323,56 +383,7 @@ async def run_retention_analysis(
                 ).to_list(length=None)
 
                 for sibling in siblings:
-                    sib_channel_id = sibling["channel_id"]
-                    sib_video_id = sibling["video_id"]
-                    try:
-                        sib_channel = await db.channels.find_one({"channel_id": sib_channel_id})
-                        sib_platform = (sib_channel or {}).get("platform", "youtube")
-                        sib_name = (sib_channel or {}).get("name", "")
-                        sib_default_desc = (sib_channel or {}).get("default_description", "")
-                        sib_default_tags = (sib_channel or {}).get("default_tags") or []
-
-                        sib_packaging = await gemini_service.generate_platform_packaging(
-                            analysis_result=result,
-                            platform=sib_platform,
-                            channel_name=sib_name,
-                            default_description=sib_default_desc,
-                            default_tags=sib_default_tags,
-                        )
-                        if thumb_url:
-                            sib_packaging["thumbnail_url"] = thumb_url
-
-                        sib_updates: dict[str, Any] = {
-                            "packaging_status": "completed",
-                            "ai_packaging": sib_packaging,
-                            "updated_at": now,
-                        }
-                        sib_titles = sib_packaging.get("suggested_titles")
-                        if sib_titles and isinstance(sib_titles, list) and sib_titles:
-                            sib_updates["title"] = sib_titles[0]
-                        sib_desc = sib_packaging.get("suggested_description")
-                        if sib_desc:
-                            sib_updates["description"] = sib_desc
-                        sib_tags = sib_packaging.get("suggested_tags")
-                        if sib_tags:
-                            sib_updates["tags"] = (
-                                sib_tags
-                                if isinstance(sib_tags, list)
-                                else [t.strip() for t in sib_tags.split(",") if t.strip()]
-                            )
-
-                        await db.videos.update_one(
-                            {"channel_id": sib_channel_id, "video_id": sib_video_id},
-                            {"$set": sib_updates},
-                        )
-                        await promote_processing_to_ready(db, sib_channel_id, sib_video_id)
-                        logger.info("Propagated packaging to sibling %s (%s)", sib_video_id, sib_platform)
-                    except Exception as e:
-                        logger.error("Failed to generate packaging for sibling %s: %s", sib_video_id, e)
-                        await db.videos.update_one(
-                            {"channel_id": sib_channel_id, "video_id": sib_video_id},
-                            {"$set": {"packaging_status": "failed", "updated_at": now}},
-                        )
+                    await package_sibling(db, gemini_service, result, sibling, thumb_url)
 
         else:
             # The retention pass succeeded but returned no packaging, so no

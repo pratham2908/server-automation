@@ -121,15 +121,34 @@ REPLY_VOICE_RULES = """Write it the way a real person types on their phone:
 - Do not explain that you are an AI or describe what you are doing."""
 
 
+PACKAGING_ATTEMPTS = 2
+
+
+def packaging_is_usable(packaging: dict[str, Any], platform: str) -> bool:
+    """Whether a packaging reply carries what the post needs: a caption on Instagram, titles elsewhere."""
+    if platform == "instagram":
+        caption = packaging.get("suggested_description")
+        return isinstance(caption, str) and bool(caption.strip())
+    titles = packaging.get("suggested_titles")
+    return isinstance(titles, list) and any(isinstance(t, str) and t.strip() for t in titles)
+
+
 class GeminiService:
     """Provides AI-powered analysis and content generation via Gemini."""
 
-    # Model fallback chain — tried in order. If a model fails, the next
-    # one is attempted.  Edit this list to change priority.
+    # Model fallback chain for calls that send a video or an image — tried in
+    # order. If a model fails, the next one is attempted.
     _MODEL_CHAIN = [
         "gemini-3-flash-preview",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
+    ]
+    # Text-only calls. One AI refuses Gemini for plain text and JSON (it is kept
+    # for image/video input, images and speech), and reroutes a Gemini-shaped
+    # call naming one of these to Bedrock, translating both ways — so only the
+    # model name changes. Grok for now; Claude once Bedrock can bill for it.
+    _TEXT_MODEL_CHAIN = [
+        "grok-4.7",
     ]
 
     def __init__(self) -> None:
@@ -141,14 +160,14 @@ class GeminiService:
     # ------------------------------------------------------------------
 
     async def _generate(self, prompt: str, specific_model: str | None = None, task: str = "unknown") -> str:
-        """Try each model in the fallback chain until one succeeds."""
+        """A text-only call: try each text model in turn until one succeeds."""
         import asyncio
         import time
 
         from app.services.metrics import metrics_service
 
         last_error: Exception | None = None
-        models_to_try = [specific_model] if specific_model else self._MODEL_CHAIN
+        models_to_try = [specific_model] if specific_model else self._TEXT_MODEL_CHAIN
 
         for model in models_to_try:
             start_time = time.time()
@@ -181,10 +200,10 @@ class GeminiService:
                     # Raised inside the loop so the chain falls through to the
                     # next model; returning "" would only fail later, in the
                     # caller's JSON parser, with no fallback left to try.
-                    raise ValueError("Gemini returned empty response text")
+                    raise ValueError(f"{model} returned empty response text")
 
                 logger.info(
-                    "Gemini response from model '%s' (%.2fms, $%s)",
+                    "Text response from model '%s' (%.2fms, $%s)",
                     model,
                     duration,
                     "unpriced" if cost_usd is None else f"{cost_usd:.6f}",
@@ -203,7 +222,7 @@ class GeminiService:
                 last_error = exc
                 is_last = model == models_to_try[-1]
                 if is_last:
-                    logger.error(f"🚨 All Gemini models tried failed! Last error: {exc}")
+                    logger.error(f"🚨 Every text model failed! Last error: {exc}")
                 else:
                     logger.warning(
                         "⚠️ Model '%s' failed (%.2fms): %s — trying next fallback",
@@ -1062,12 +1081,21 @@ Return ONLY valid JSON matching this schema (no markdown, no explanation):
 
 For Instagram, put the full caption in `suggested_description` and leave `suggested_titles` as an empty list."""
 
-        text = await self._generate(prompt, task="platform_packaging")
-        try:
-            return _loads_json_object(text)
-        except (json.JSONDecodeError, TypeError):
-            logger.error("Failed to parse platform packaging response: %s", text)
-            raise ValueError("Failed to parse platform packaging response")
+        # The packaging becomes the post's caption and titles, and a "completed"
+        # packaging releases the video to post. A reply in the wrong shape (seen
+        # once from Grok: the caption nested under an invented key) would release
+        # it with no caption, so it is asked for again, then refused.
+        for attempt in range(1, PACKAGING_ATTEMPTS + 1):
+            text = await self._generate(prompt, task="platform_packaging")
+            try:
+                packaging = _loads_json_object(text)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Platform packaging attempt %d unparseable: %s", attempt, text[:500])
+                continue
+            if packaging_is_usable(packaging, platform):
+                return packaging
+            logger.warning("Platform packaging attempt %d missing its caption/titles: %s", attempt, text[:500])
+        raise ValueError(f"No usable {platform} packaging after {PACKAGING_ATTEMPTS} attempts")
 
     # ------------------------------------------------------------------
     # Comment sentiment classification (for auto-reply)
