@@ -1,9 +1,10 @@
 """Background cron loop for per-channel auto-sync + analysis.
 
 Only channels that opt in via ``automation_config.auto_sync.enabled`` are
-synced, each on its own ``interval_hours``. A tick every few minutes picks the
-channels whose ``last_tasks.auto_sync`` is older than their interval, and for
-each one:
+synced: Instagram channels hourly while they have a reel in its first week and
+daily otherwise, YouTube channels on their own ``interval_hours`` (see
+``auto_sync_schedule``). A tick every few minutes picks the channels whose
+``last_tasks.auto_sync`` is older than their interval, and for each one:
 
 1. Refreshes the channel's numbers (subscribers, views, profile).
 2. Calls the existing video sync logic (YouTube or Instagram).
@@ -17,6 +18,7 @@ global kill switch (``enabled``) and the ``analysis_threshold``.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
@@ -26,7 +28,7 @@ from app.database import get_channel_platform, not_paused_query, update_channel_
 from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
 from app.services.analysis_engine import run_analysis
-from app.services.auto_sync_schedule import AUTO_SYNC_TASK, is_auto_sync_due
+from app.services.auto_sync_schedule import AUTO_SYNC_TASK, FRESH_REEL_DAYS, is_auto_sync_due
 from app.services.channel_stats import refresh_channel_stats
 from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
@@ -62,6 +64,12 @@ async def _count_unanalyzed_videos(
         }
     )
     return count
+
+
+async def _channels_with_fresh_reels(db: AsyncIOMotorDatabase, now: datetime) -> set[str]:
+    """Channels with a video published in the last week — those sync hourly."""
+    since = now - timedelta(days=FRESH_REEL_DAYS)
+    return set(await db.videos.distinct("channel_id", {"status": "published", "published_at": {"$gte": since}}))
 
 
 async def run_sync_analysis_for_channel(
@@ -119,10 +127,9 @@ async def run_sync_analysis_for_channel(
 
     # --- Sync ---
     try:
-        await service.sync_videos(
-            channel_id=channel_id,
-            instructions=None,
-        )
+        # Incremental: an hourly sync re-reads only fresh reels every time and older
+        # ones once a day, so its cost doesn't grow with the back catalogue.
+        await service.sync_videos(channel_id=channel_id, instructions=None, incremental=True)
         result["sync"] = "ok"
         logger.info(
             "Auto-sync completed for '%s' (%s)",
@@ -233,7 +240,12 @@ async def run_sync_analysis_cron(
             candidates = await db.channels.find(
                 {"automation_config.auto_sync.enabled": True, **not_paused_query()}
             ).to_list(length=None)
-            due = [c for c in candidates if c.get("channel_id") and is_auto_sync_due(c, now)]
+            fresh = await _channels_with_fresh_reels(db, now)
+            due = [
+                c
+                for c in candidates
+                if c.get("channel_id") and is_auto_sync_due(c, now, has_fresh_reel=c["channel_id"] in fresh)
+            ]
             if not due:
                 continue
 

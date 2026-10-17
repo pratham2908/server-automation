@@ -4,12 +4,15 @@ A trial reel set to ``MANUAL`` stays with non-followers until the owner shares i
 from the Instagram app. The API cannot graduate it, so the best we can do is
 watch the numbers and tell the owner when the reel is worth the tap.
 
-The owner states the bar when scheduling: up to three check times (hours after
-publish) and a set of *groups* of conditions. Every condition in a group must
-hold; any one group holding is enough ("(skip rate under 50% AND over 500 views)
-OR over 2,000 views"). The first check that passes ends it and sends the email;
-if the last check still falls short the reel is marked as having missed its bar.
-The clock starts at publish, since a trial reel only exists once it is live.
+The owner states the bar when scheduling: how long to keep checking (hours
+after publish) and a set of *groups* of conditions. Every condition in a group
+must hold; any one group holding is enough ("(skip rate under 50% AND over 500
+views) OR over 2,000 views"). The reel is checked every hour until then; the
+first check that passes ends it and sends the email, and if the last one still
+falls short the reel is marked as having missed its bar. There is no "not
+before" on purpose: a condition that needs volume to mean anything says so
+itself (over 500 views AND skip rate under 50%). The clock starts at publish,
+since a trial reel only exists once it is live.
 
 Everything here is pure; the cron that reads Instagram and sends the email lives
 in ``trial_graduation_cron``.
@@ -42,10 +45,10 @@ METRIC_LABELS: dict[str, str] = {
 }
 
 # Instagram judges a trial over about 72 hours; a week is the most a check can
-# sensibly wait before the numbers stop meaning "trial performance".
-MIN_AFTER_HOURS = 0.25
-MAX_AFTER_HOURS = 168.0
-MAX_TIMERS = 3
+# sensibly run before the numbers stop meaning "trial performance".
+MIN_UNTIL_HOURS = 0.25
+MAX_UNTIL_HOURS = 168.0
+CHECK_EVERY_HOURS = 1.0
 
 PENDING = "pending"
 MET = "met"
@@ -74,9 +77,10 @@ class ConditionGroup(BaseModel):
 
 
 class TrialCheck(BaseModel):
-    """The bar a trial reel has to clear, and when it is looked at, as the owner set it."""
+    """The bar a trial reel has to clear, and how long it is checked for, as the owner set it."""
 
-    after_hours: list[float] = Field(..., min_length=1, max_length=MAX_TIMERS)
+    # Checked every hour after publish until this many hours have passed.
+    check_until_hours: float
     # Any one group holding is enough.
     groups: list[ConditionGroup] = Field(..., min_length=1, max_length=MAX_GROUPS)
 
@@ -85,39 +89,47 @@ class TrialCheck(BaseModel):
     def _read_older_shapes(cls, raw: Any) -> Any:
         return upgrade_check(raw)
 
-    @field_validator("after_hours", mode="before")
+    @field_validator("check_until_hours")
     @classmethod
-    def _single_hours_is_one_timer(cls, value: Any) -> Any:
-        # A check saved before there could be several stored one number.
-        return [value] if isinstance(value, int | float) else value
-
-    @field_validator("after_hours")
-    @classmethod
-    def _timers_are_in_range_and_ascending(cls, hours: list[float]) -> list[float]:
-        if any(h < MIN_AFTER_HOURS or h > MAX_AFTER_HOURS for h in hours):
-            raise ValueError(f"Each check must be between {MIN_AFTER_HOURS} and {MAX_AFTER_HOURS} hours after posting")
-        if any(later <= earlier for earlier, later in zip(hours, hours[1:], strict=False)):
-            raise ValueError("Check times must each be later than the one before")
+    def _until_is_in_range(cls, hours: float) -> float:
+        if hours < MIN_UNTIL_HOURS or hours > MAX_UNTIL_HOURS:
+            raise ValueError(f"Check for between {MIN_UNTIL_HOURS} and {MAX_UNTIL_HOURS:g} hours after posting")
         return hours
 
 
 def upgrade_check(raw: Any) -> Any:
-    """Turn a check saved as one flat list (``match`` all/any, ``minimum``) into groups.
+    """Read a check saved in an older shape as the current one.
 
-    "all" becomes one group holding every condition; "any" becomes one group per
-    condition, since any single one passing is enough. Anything already in the
-    current shape, or not a mapping at all, is returned as it came.
+    - Conditions as one flat list (``match`` all/any, ``minimum``) become groups:
+      "all" is one group holding every condition, "any" one group per condition.
+    - Fixed check times (``after_hours``, one number or up to three) become
+      hourly checks until the last of them, which keeps every moment the owner
+      asked about inside the window.
+
+    Anything already in the current shape, or not a mapping at all, is returned as it came.
     """
-    if not isinstance(raw, Mapping) or "groups" in raw or "conditions" not in raw:
+    if not isinstance(raw, Mapping):
         return raw
-    flat = [{"metric": c["metric"], "op": "gte", "value": c["minimum"]} for c in raw["conditions"]]
-    groups = [{"conditions": flat}] if raw.get("match", "all") == "all" else [{"conditions": [c]} for c in flat]
-    return {"after_hours": raw["after_hours"], "groups": groups}
+    upgraded = dict(raw)
+    if "groups" not in upgraded and "conditions" in upgraded:
+        flat = [{"metric": c["metric"], "op": "gte", "value": c["minimum"]} for c in upgraded.pop("conditions")]
+        match = upgraded.pop("match", "all")
+        upgraded["groups"] = [{"conditions": flat}] if match == "all" else [{"conditions": [c]} for c in flat]
+    if "check_until_hours" not in upgraded and "after_hours" in upgraded:
+        hours = upgraded.pop("after_hours")
+        upgraded["check_until_hours"] = max(hours) if isinstance(hours, list) and hours else hours
+    upgraded.pop("after_hours", None)
+    return upgraded
 
 
-def check_hours(check: Mapping[str, Any]) -> list[float]:
-    """The check times of a stored check, whether it was saved with one or several."""
-    return list(TrialCheck.model_validate(check).after_hours)
+def check_until_hours(check: Mapping[str, Any]) -> float:
+    """How long a stored check runs, in hours after publish, whatever shape it was saved in."""
+    return TrialCheck.model_validate(check).check_until_hours
+
+
+def check_ends_at(video: Mapping[str, Any]) -> datetime:
+    """The moment a reel's check stops: publish time plus its "check until" hours."""
+    return assume_utc(video["published_at"]) + timedelta(hours=check_until_hours(video["trial_check"]))
 
 
 def trial_fields(
@@ -148,23 +160,27 @@ def trial_fields(
 
 
 def arm_fields(video: Mapping[str, Any], published_at: datetime) -> dict[str, Any]:
-    """The fields that start the timer, written in the same update that marks the reel published."""
+    """The fields that start the checks, written in the same update that marks the reel published."""
     check = video.get("trial_check")
     if video.get("trial_graduation") != MANUAL or not check:
         return {}
+    first = min(CHECK_EVERY_HOURS, check_until_hours(check))
     return {
         "trial_check_state": PENDING,
-        "trial_check_stage": 0,
-        "trial_check_due_at": published_at + timedelta(hours=check_hours(check)[0]),
+        "trial_check_due_at": published_at + timedelta(hours=first),
     }
 
 
-def next_due(video: Mapping[str, Any], stage: int) -> datetime | None:
-    """When timer ``stage`` falls due (counted from publish), or ``None`` if there is no such timer."""
-    hours = check_hours(video["trial_check"])
-    if stage >= len(hours):
+def next_check_at(video: Mapping[str, Any], now: datetime) -> datetime | None:
+    """When to check next after a check at ``now`` fell short; ``None`` once the window has closed.
+
+    An hour on, but never past the end: the last check lands exactly when the
+    owner said to stop, so a reel crossing the bar in the final hour still counts.
+    """
+    end = check_ends_at(video)
+    if now >= end:
         return None
-    return assume_utc(video["published_at"]) + timedelta(hours=hours[stage])
+    return min(now + timedelta(hours=CHECK_EVERY_HOURS), end)
 
 
 class ConditionResult(BaseModel):
@@ -210,28 +226,27 @@ def evaluate(check: Mapping[str, Any], metrics: Mapping[str, float]) -> Evaluati
     return Evaluation(met=any(g.passed for g in groups), groups=groups)
 
 
-def edit_running_check(video: Mapping[str, Any], new_check: TrialCheck) -> dict[str, Any]:
+def edit_running_check(video: Mapping[str, Any], new_check: TrialCheck, now: datetime) -> dict[str, Any]:
     """The fields to write when the owner changes the check of a reel that is already live.
 
-    Only a check still waiting on a timer can change. The timers already run are
-    history, so they cannot move, and at least one must remain to run. The due time
-    is recomputed from the publish time for the timer that is next in line.
+    Only a check still running can change, and its new end must still be ahead:
+    an end already past would leave nothing to check. The next hourly check keeps
+    its slot unless the new end comes sooner.
     """
     if video.get("trial_graduation") != MANUAL or not video.get("trial_check"):
         raise ValueError("This reel has no graduate check to edit")
     state = video.get("trial_check_state")
     if state != PENDING:
         raise ValueError("This reel's check has already finished, so it can no longer be changed")
-    stage = int(video.get("trial_check_stage", 0))
-    old_hours = check_hours(video["trial_check"])
-    new_hours = new_check.after_hours
-    if new_hours[:stage] != old_hours[:stage]:
-        raise ValueError("Checks that have already run cannot be changed")
-    if len(new_hours) <= stage:
-        raise ValueError("Keep at least one check still to come")
     candidate = {**video, "trial_check": new_check.model_dump()}
+    end = check_ends_at(candidate)
+    if end <= now:
+        elapsed = (now - assume_utc(video["published_at"])).total_seconds() / 3600
+        raise ValueError(f"The reel has been up {elapsed:.0f}h already; check until a later hour than that")
+    due = video.get("trial_check_due_at")
+    next_at = min(assume_utc(due), end) if isinstance(due, datetime) else min(now, end)
     return {
         "trial_check": new_check.model_dump(),
-        "trial_check_due_at": next_due(candidate, stage),
+        "trial_check_due_at": next_at,
         "trial_check_attempts": 0,
     }

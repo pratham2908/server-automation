@@ -7,7 +7,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.routers.channels import ChannelUpdate
-from app.services.auto_sync_schedule import auto_sync_config, is_auto_sync_due, next_auto_sync_at
+from app.services.auto_sync_schedule import (
+    auto_sync_config,
+    is_auto_sync_due,
+    needs_reel_insights,
+    next_auto_sync_at,
+)
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
 
@@ -54,7 +59,7 @@ class TestIsAutoSyncDue:
         # Mongo returns naive UTC. Read as IST it would look 5h30 older and fire early.
         naive = (NOW - timedelta(hours=1)).replace(tzinfo=None)
         ch = _channel({"enabled": True, "interval_hours": 6}, last=naive)
-        assert next_auto_sync_at(ch) == NOW + timedelta(hours=5)
+        assert next_auto_sync_at(ch, 6) == NOW + timedelta(hours=5)
         assert is_auto_sync_due(ch, NOW) is False
 
 
@@ -69,3 +74,43 @@ class TestChannelUpdateValidation:
             "auto_sync": {"enabled": True, "interval_hours": 6},
             "auto_scheduler": {"enabled": False},
         }
+
+
+class TestInstagramCadence:
+    """Instagram syncs hourly while a reel is in its first week, daily otherwise; YouTube keeps its interval."""
+
+    def _ig(self, last: datetime) -> dict:
+        return {**_channel({"enabled": True, "interval_hours": 6}, last=last), "platform": "instagram"}
+
+    def test_hourly_with_a_fresh_reel(self):
+        ch = self._ig(NOW - timedelta(hours=1))
+        assert is_auto_sync_due(ch, NOW, has_fresh_reel=True) is True
+        assert is_auto_sync_due(ch, NOW - timedelta(minutes=1), has_fresh_reel=True) is False
+
+    def test_daily_without_one_whatever_the_stored_interval(self):
+        ch = self._ig(NOW - timedelta(hours=7))
+        assert is_auto_sync_due(ch, NOW, has_fresh_reel=False) is False
+        assert is_auto_sync_due(self._ig(NOW - timedelta(hours=24)), NOW, has_fresh_reel=False) is True
+
+    def test_a_new_reel_switches_an_idle_channel_to_hourly_at_once(self):
+        # Last synced 3h ago on the daily cadence: a reel going up makes it due now.
+        assert is_auto_sync_due(self._ig(NOW - timedelta(hours=3)), NOW, has_fresh_reel=True) is True
+
+    def test_youtube_keeps_its_interval(self):
+        ch = _channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=2))
+        assert is_auto_sync_due(ch, NOW, has_fresh_reel=True) is False
+
+
+class TestNeedsReelInsights:
+    def test_a_fresh_reel_is_read_every_time(self):
+        assert needs_reel_insights(NOW - timedelta(days=6), NOW - timedelta(minutes=5), NOW) is True
+
+    def test_an_older_reel_is_read_about_once_a_day(self):
+        published = NOW - timedelta(days=30)
+        assert needs_reel_insights(published, NOW - timedelta(hours=5), NOW) is False
+        # An hour of slack, so a daily run starting seconds early still reads it.
+        assert needs_reel_insights(published, NOW - timedelta(hours=23, minutes=59, seconds=50), NOW) is True
+
+    def test_a_reel_never_read_or_without_a_date_is_read(self):
+        assert needs_reel_insights(NOW - timedelta(days=30), None, NOW) is True
+        assert needs_reel_insights(None, NOW, NOW) is True

@@ -117,8 +117,9 @@ class ScheduleRequest(BaseModel):
     )
     trial_check: TrialCheck | None = Field(
         None,
-        description="With MANUAL: check the reel's numbers after_hours after it publishes and email a link "
-        "if it clears the conditions, so it can be graduated in the Instagram app",
+        description="With MANUAL: check the reel's numbers every hour after it publishes, until "
+        "check_until_hours, and email a link the first time it clears the conditions, so it can be "
+        "graduated in the Instagram app",
     )
 
 

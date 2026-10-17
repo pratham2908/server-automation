@@ -20,6 +20,7 @@ from app.database import (
 )
 from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
+from app.services.auto_sync_schedule import needs_reel_insights
 from app.services.downloader import (
     download_instagram_media_to_r2,
     download_youtube_video_to_r2,
@@ -1528,13 +1529,13 @@ class VideoService:
         return {"ok": True, "scheduled_at": to_ist_iso(new_time) if new_time else None}
 
     async def update_trial_check(self, channel_id: str, video_id: str, check: TrialCheck) -> dict[str, Any]:
-        """Change the graduate check of a manual trial reel that is already live and still waiting on a timer."""
+        """Change the graduate check of a manual trial reel that is already live and still being checked."""
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
             raise ValueError("Video not found")
         if video.get("status") != "published":
             raise ValueError("Only a published reel's running check can be edited here; reschedule it instead")
-        fields = edit_running_check(video, check)
+        fields = edit_running_check(video, check, now_ist())
         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": {**fields, "updated_at": now_ist()}})
         return {
             "ok": True,
@@ -1604,7 +1605,15 @@ class VideoService:
         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
         return {"ok": True}
 
-    async def sync_videos(self, channel_id: str, instructions: str | None = None) -> dict[str, Any]:
+    async def sync_videos(
+        self, channel_id: str, instructions: str | None = None, incremental: bool = False
+    ) -> dict[str, Any]:
+        """Bring a channel's videos and their numbers up to date.
+
+        ``incremental`` (the auto-sync) re-reads an Instagram reel's numbers only
+        when it is under a week old or hasn't been read for a day; a sync someone
+        asked for re-reads everything.
+        """
         channel = await self.db.channels.find_one({"channel_id": channel_id})
         if not channel:
             raise ValueError("Channel not found")
@@ -1612,7 +1621,7 @@ class VideoService:
         if platform == "youtube":
             result = await self._sync_youtube_videos(channel_id, channel, instructions)
         elif platform == "instagram":
-            result = await self._sync_instagram_videos(channel_id, channel, instructions)
+            result = await self._sync_instagram_videos(channel_id, channel, instructions, incremental)
         else:
             return {"ok": True, "message": "Platform not supported"}
         await update_channel_task_status(self.db, channel_id, "video_sync")
@@ -1732,22 +1741,36 @@ class VideoService:
                 inserted += 1
         return {"ok": True, "synced": inserted, "missing": missing}
 
-    async def _sync_instagram_videos(self, channel_id: str, channel: dict, instructions: str | None) -> dict[str, Any]:
+    async def _sync_instagram_videos(
+        self, channel_id: str, channel: dict, instructions: str | None, incremental: bool = False
+    ) -> dict[str, Any]:
         ig = await self._get_instagram_service(channel_id)
         if not ig:
             raise ChannelNotConnectedError("No Instagram token")
         ig_reels = ig.get_reels(channel["instagram_user_id"])
-        db_ids = {
-            doc["instagram_media_id"]
+        last_read = {
+            doc["instagram_media_id"]: doc.get("insights_synced_at")
             async for doc in self.db.videos.find(
                 {"channel_id": channel_id, "instagram_media_id": {"$ne": None}},
-                {"instagram_media_id": 1},
+                {"instagram_media_id": 1, "insights_synced_at": 1},
             )
         }
-        # Batch fetch insights for all media IDs
+        db_ids = set(last_read)
         media_ids = [r["id"] for r in ig_reels]
         missing = await self._archive_missing_instagram_videos(channel_id, set(media_ids))
-        insights_map = ig.get_reel_insights(media_ids)
+        # One insights call per reel, so an incremental sync skips the reels whose
+        # numbers were read recently enough; likes and comments still come free
+        # with the listing for every reel.
+        now = now_ist()
+        to_read = [
+            r["id"]
+            for r in ig_reels
+            if not incremental
+            or needs_reel_insights(
+                isoparse(r["timestamp"]) if r.get("timestamp") else None, last_read.get(r["id"]), now
+            )
+        ]
+        insights_map = ig.get_reel_insights(to_read)
 
         new_vids = []
         views_by_media: dict[str, int] = {}
@@ -1782,6 +1805,8 @@ class VideoService:
                     "status": "published",
                     "updated_at": now_ist(),
                 }
+                if mid in insights_map:
+                    set_doc["insights_synced_at"] = now
                 if thumb and not self._has_thumbnail_url(existing):
                     set_doc["thumbnail_url"] = thumb
                 await self.db.videos.update_one(
@@ -1831,6 +1856,7 @@ class VideoService:
                         "published_at": v["published_at"],
                         "thumbnail_url": v.get("thumbnail_url"),
                         "metadata": v.get("metadata", {}),
+                        "insights_synced_at": now if v["instagram_media_id"] in insights_map else None,
                         "content_params": ana.get("content_params"),
                         "verification_status": "unverified",
                         "created_at": now_ist(),
