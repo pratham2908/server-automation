@@ -183,6 +183,7 @@ def _html(
     groups: list[GroupResult],
     thumbnail_url: str | None,
     metrics: Mapping[str, float],
+    story_html: str = "",
 ) -> str:
     safe_title = escape(_short(title))
     preheader = f"Cleared its bar {_hours(after_hours)} after posting. Open it and share it with your followers."
@@ -232,6 +233,7 @@ def _html(
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>{thumb}
       <td valign="top" style="font:600 15px/1.45 {_FONT};color:{_INK};">{safe_title}</td></tr></table>
     {button}
+    {story_html}
     {_stats_grid(metrics)}
     <div style="font:700 13px {_FONT};color:{_INK};">What it had to reach</div>
     {blocks}
@@ -253,14 +255,21 @@ def format_graduate_email(
     groups: list[GroupResult],
     thumbnail_url: str | None = None,
     metrics: Mapping[str, float] | None = None,
+    story_html: str = "",
+    story_text: str = "",
 ) -> TrialEmail:
-    """Subject and both bodies. The link is the whole point: it opens the reel on a phone."""
+    """Subject and both bodies. The link is the whole point: it opens the reel on a phone.
+
+    ``story_html``/``story_text`` carry the reel's story card when it has one: a trial gets no story when
+    it is posted, so this email is where the owner is handed the story kit.
+    """
     numbers = metrics or {}
     return TrialEmail(
         subject=f"Trial reel ready to graduate: {_short(title, _MAX_SUBJECT_TITLE)}",
         text=_text(
             title=title, channel=channel, permalink=permalink, after_hours=after_hours, groups=groups, metrics=numbers
-        ),
+        )
+        + ("\n" + story_text if story_text else ""),
         html=_html(
             title=title,
             channel=channel,
@@ -269,5 +278,6 @@ def format_graduate_email(
             groups=groups,
             thumbnail_url=thumbnail_url,
             metrics=numbers,
+            story_html=story_html,
         ),
     )

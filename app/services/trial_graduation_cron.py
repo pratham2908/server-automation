@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.config import Settings, get_settings
@@ -119,8 +119,26 @@ async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot) -> No
     await db.videos.update_one(key, {"$set": update})
 
 
+async def _story_card(db: Any, video: dict[str, Any]) -> tuple[str, str]:
+    """The story card for a graduated trial, or two empty strings. A failure here must not stop the email."""
+    slug = video.get("story_slug")
+    if not slug or not video.get("scheduled_at"):
+        return "", ""
+    try:
+        from app.routers.story_kit import make_kit, page_url
+        from app.services import story_kit as kit
+
+        doc = await make_kit(db, video.get("channel_id", ""), [(video, slug)], datetime.now(timezone.utc))
+        url, when = page_url(doc["token"]), "as soon as you graduate it"
+        return kit.story_card_html(url, when), kit.story_card_text(url, when)
+    except Exception:  # noqa: BLE001 - the story card is a bonus; the graduation nudge matters more
+        logger.exception("Story card for %s failed; sending the graduation email without it", video.get("video_id"))
+        return "", ""
+
+
 async def _email_met(db: Any, video: dict[str, Any], send: SendEmail) -> None:
     check = video["trial_check"]
+    story_html, story_text = await _story_card(db, video)
     email = format_graduate_email(
         title=video.get("title") or video.get("video_id", "your reel"),
         channel=video.get("channel_id", ""),
@@ -129,6 +147,8 @@ async def _email_met(db: Any, video: dict[str, Any], send: SendEmail) -> None:
         groups=_groups(video),
         thumbnail_url=video.get("trial_check_thumbnail_url") or video.get("thumbnail_url"),
         metrics=video.get("trial_check_metrics") or {},
+        story_html=story_html,
+        story_text=story_text,
     )
     sent = await send(email.subject, email.text, email.html)
     update: dict[str, Any] = {"trial_check_email_attempts": int(video.get("trial_check_email_attempts", 0)) + 1}
