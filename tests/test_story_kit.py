@@ -1,4 +1,4 @@
-"""The story kit: link, times, token, email, page, expiry. All pure; no network."""
+"""The story kit: link, times, token, email, and the channel's one story page. All pure; no network."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -52,13 +52,82 @@ def test_email_lists_each_reel_with_its_story_time_and_one_button():
 
 def test_page_has_a_card_a_button_and_the_sticker_text_per_reel():
     page = kit.kit_page("tok", [_item()])
-    assert 'data-link="https://tryalgoviz.com/r/two-sum-3-ways/?utm_medium=story&amp;utm_campaign=two-sum-3-ways"' in page
+    assert (
+        'data-link="https://tryalgoviz.com/r/two-sum-3-ways/?utm_medium=story&amp;utm_campaign=two-sum-3-ways"' in page
+    )
     assert "/s/tok/vid-1/video" in page and "/s/tok/vid-1/cover" in page
     assert kit.STICKER_TEXT in page and "noindex" in page and "Scheduled</label>" in page
+    # The tick is saved on the server, not in one phone's storage.
+    assert 'data-url="/s/tok/vid-1/done"' in page and "localStorage" not in page
+
+
+def test_scheduled_reels_sink_to_their_own_section_ticked():
+    page = kit.kit_page("tok", [_item(), _item("weird-sorts")._replace(video_id="vid-2", done=True)])
+    todo, done = page.split("Scheduled (1)")
+    assert "card-vid-1" in todo and "card-vid-2" in done
+    assert 'data-url="/s/tok/vid-2/done" checked' in done
+
+
+def test_an_empty_page_says_so():
+    assert "Nothing to schedule right now." in kit.kit_page("tok", [])
+
+
+# --- which reels the page lists -----------------------------------------------
+
+NOW = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
+
+
+def _video(video_id: str, hours_from_now: float, **over):
+    doc = {
+        "video_id": video_id,
+        "story_slug": f"slug-{video_id}",
+        "title": video_id,
+        "status": "scheduled",
+        # Mongo hands back naive UTC.
+        "scheduled_at": (NOW + timedelta(hours=hours_from_now)).replace(tzinfo=None),
+    }
+    doc.update(over)
+    return doc
+
+
+def test_page_lists_coming_and_recent_stories_soonest_first_and_done_last():
+    videos = [
+        _video("later", 30),
+        _video("soon", 2),
+        _video("yesterday", -24, status="published", story_scheduled_at=NOW),
+        _video("ago-2d", -48, status="published"),
+    ]
+    assert [i.video_id for i in kit.page_items(videos, NOW)] == ["ago-2d", "soon", "later", "yesterday"]
+    assert [i.done for i in kit.page_items(videos, NOW)] == [False, False, False, True]
+
+
+def test_a_story_drops_off_three_days_after_its_time():
+    kept = _video("edge", -71)
+    gone = _video("old", -73)
+    assert [i.video_id for i in kit.page_items([kept, gone], NOW)] == ["edge"]
+
+
+def test_trial_reels_wait_until_they_graduate():
+    pending = _video("trial", -5, trial_graduation="MANUAL", trial_check_state="pending")
+    met = _video(
+        "grad",
+        -100,
+        trial_graduation="MANUAL",
+        trial_check_state="met",
+        trial_check_checked_at=NOW - timedelta(hours=1),
+    )
+    [item] = kit.page_items([pending, met], NOW)
+    # Graduated an hour ago, so it is listed though its reel went up four days back.
+    assert item.video_id == "grad" and item.graduated
+    assert "as soon as you share it to followers" in kit.kit_page("t", [item])
+
+
+def test_archived_or_slugless_reels_are_left_off():
+    assert kit.page_items([_video("a", 2, status="archived"), _video("b", 2, story_slug=None)], NOW) == []
 
 
 def test_page_escapes_a_hostile_title():
-    bad = kit.KitItem("v", "s", '<script>alert(1)</script>', REEL, None)
+    bad = kit.KitItem("v", "s", "<script>alert(1)</script>", REEL, None)
     assert "<script>alert(1)" not in kit.kit_page("t", [bad]).split("<script>")[0]
     assert "&lt;script&gt;" in kit.kit_page("t", [bad])
 

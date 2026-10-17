@@ -4,9 +4,12 @@ Instagram's API cannot add a link sticker, and stories can only be scheduled in 
 phone app, so the owner does it on the phone. This module is the pure part: the link, the time, the
 token, and the page and email markup. The routes and the database live in ``app/routers/story_kit.py``.
 
-A kit is one page behind an unguessable token. Each reel on it is a card with ONE button that, in one tap,
-copies the story link and opens the iPhone share sheet with the video file so it can be saved to Photos
-(Business Suite's gallery picker cannot see Files, and is not in the share sheet).
+Each channel has ONE story page behind an unguessable token, built live from the reels on every load:
+every reel whose story is still to come or went up in the last three days, plus trial reels that have
+graduated. Every email links to that same page. Each reel on it is a card with ONE button that, in one
+tap, copies the story link and opens the iPhone share sheet with the video file so it can be saved to
+Photos (Business Suite's gallery picker cannot see Files, and is not in the share sheet). "Scheduled" is
+ticked on the server, so it holds on any device, and ticked reels sink to the bottom.
 """
 
 from __future__ import annotations
@@ -23,7 +26,8 @@ SITE = "https://tryalgoviz.com"
 # The story goes up this long after its reel: far enough that the reel's first minutes are not diluted,
 # close enough that followers who saw the reel still see the story.
 STORY_DELAY = timedelta(minutes=7)
-# A forwarded email must not leak our files for long.
+# A reel stays on the page this long after its story time (or its graduation): long enough to catch up
+# on a missed one, short enough that a forwarded link only ever exposes a few days of files.
 KIT_LIFETIME = timedelta(days=3)
 STICKER_TEXT = "Play this one yourself"
 
@@ -38,6 +42,10 @@ class KitItem(NamedTuple):
     reel_time: datetime  # when the reel goes live, tz-aware
     # In the email: a link to the cover image. On the page: the cover's storage key (the page serves it itself).
     thumbnail_url: str | None = None
+    # Ticked "Scheduled" on the page.
+    done: bool = False
+    # A trial reel that cleared its bar: its story goes up as soon as it is graduated, not at a set time.
+    graduated: bool = False
 
     @property
     def story_time(self) -> datetime:
@@ -145,6 +153,8 @@ _PAGE_CSS = (
     f".done{{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:15px}}"
     ".done input{width:22px;height:22px}"
     "img.cover{width:64px;border-radius:8px;float:right;margin-left:10px}"
+    f"h2.section{{font-size:14px;color:{_MUTED};text-transform:uppercase;letter-spacing:.06em;margin:22px 0 10px}}"
+    ".card.is-done{opacity:.6}"
 )
 
 # The click handler must stay synchronous up to navigator.share: iOS Safari refuses to share files if an
@@ -176,20 +186,29 @@ function go(id) {
   }
 }
 document.querySelectorAll('.card[data-id]').forEach(prepare);
+// Saved on the server so it holds on every device; a failed save is undone so the box never lies.
 document.querySelectorAll('.done input').forEach(box => {
-  const key = 'story-done-' + box.dataset.id; try { box.checked = localStorage.getItem(key) === '1'; } catch (e) {}
-  box.addEventListener('change', () => { try { localStorage.setItem(key, box.checked ? '1' : '0'); } catch (e) {} });
+  box.addEventListener('change', () => {
+    const want = box.checked, id = box.dataset.id;
+    fetch(box.dataset.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ done: want }) })
+      .then(res => { if (!res.ok) throw new Error(res.status); document.getElementById('card-' + id).classList.toggle('is-done', want); })
+      .catch(() => { box.checked = !want; say(id, 'Could not save that. Try again.'); });
+  });
 });
 """
 
 
 def kit_page(token: str, items: list[KitItem]) -> str:
-    cards = "".join(_card(token, it) for it in items)
+    todo = [it for it in items if not it.done]
+    done = [it for it in items if it.done]
+    body = "".join(_card(token, it) for it in todo) or '<p class="when">Nothing to schedule right now.</p>'
+    if done:
+        body += f'<h2 class="section">Scheduled ({len(done)})</h2>' + "".join(_card(token, it) for it in done)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        '<meta name="robots" content="noindex,nofollow"><title>Story kit</title>'
-        f"<style>{_PAGE_CSS}</style></head><body><div class=\"wrap\"><h1>Stories to schedule</h1>{cards}</div>"
+        '<meta name="robots" content="noindex,nofollow"><title>Stories to schedule</title>'
+        f'<style>{_PAGE_CSS}</style></head><body><div class="wrap"><h1>Stories to schedule</h1>{body}</div>'
         f"<script>{_PAGE_JS}</script></body></html>"
     )
 
@@ -198,21 +217,55 @@ def _card(token: str, it: KitItem) -> str:
     vid = escape(it.video_id, quote=True)
     base = f"/s/{token}/{vid}"
     cover = f'<img class="cover" src="{base}/cover" alt="">' if it.thumbnail_url else ""
+    when = (
+        "Graduated: schedule the story <b>as soon as you share it to followers</b>"
+        if it.graduated
+        else f"Schedule the story for <b>{escape(day_clock(it.story_time))}</b>"
+    )
+    checked = " checked" if it.done else ""
     return (
-        f'<div class="card" id="card-{vid}" data-id="{vid}" data-video="{base}/video" data-name="{escape(it.slug, quote=True)}.mp4"'
-        f' data-link="{escape(story_link(it.slug), quote=True)}">{cover}'
+        f'<div class="card{" is-done" if it.done else ""}" id="card-{vid}" data-id="{vid}" data-video="{base}/video"'
+        f' data-name="{escape(it.slug, quote=True)}.mp4" data-link="{escape(story_link(it.slug), quote=True)}">{cover}'
         f"<h2>{escape(_short(it.title))}</h2>"
-        f'<div class="when">Schedule the story for <b>{escape(day_clock(it.story_time))}</b></div>'
+        f'<div class="when">{when}</div>'
         f'<div class="sticker">Sticker text: {escape(STICKER_TEXT)}</div>'
         f'<button id="btn-{vid}" onclick="go(\'{vid}\')" disabled>Preparing video…</button>'
         f'<div class="msg" id="msg-{vid}"></div>'
-        f'<label class="done"><input type="checkbox" data-id="{vid}"> Scheduled</label></div>'
+        f'<label class="done"><input type="checkbox" data-id="{vid}" data-url="{base}/done"{checked}> Scheduled</label></div>'
     )
 
 
-def items_from_doc(doc: dict[str, Any]) -> list[KitItem]:
-    """Stored kit items back into KitItem objects. On the page, `thumbnail_url` holds the cover's storage key."""
-    return [
-        KitItem(i["video_id"], i["slug"], i["title"], assume_utc(i["reel_time"]), i.get("thumb_key"))
-        for i in doc.get("items", [])
-    ]
+def page_items(videos: list[dict[str, Any]], now: datetime) -> list[KitItem]:
+    """The reels the channel's story page shows right now, still-to-do first, each group by story time.
+
+    A reel with a story slug is listed until three days after its story time. A trial reel gets no story
+    when it posts (it is meant for non-followers) and appears only once it clears its graduation bar,
+    for three days from that check. Archived reels are left off.
+    """
+    cutoff = assume_utc(now) - KIT_LIFETIME
+    items: list[KitItem] = []
+    for v in videos:
+        slug, scheduled = v.get("story_slug"), v.get("scheduled_at")
+        if not slug or not isinstance(scheduled, datetime) or v.get("status") == "archived":
+            continue
+        reel_time = reel_time_ist(scheduled)
+        graduated = bool(v.get("trial_graduation")) and v.get("trial_check_state") == "met"
+        if v.get("trial_graduation") and not graduated:
+            continue
+        checked = v.get("trial_check_checked_at")
+        anchor = assume_utc(checked) if graduated and isinstance(checked, datetime) else reel_time + STORY_DELAY
+        if anchor < cutoff:
+            continue
+        items.append(
+            KitItem(
+                video_id=v["video_id"],
+                slug=slug,
+                title=v.get("title") or slug,
+                reel_time=reel_time,
+                thumbnail_url=v.get("thumbnail_r2_key"),
+                done=v.get("story_scheduled_at") is not None,
+                graduated=graduated,
+            )
+        )
+    items.sort(key=lambda it: (it.done, it.story_time))
+    return items
