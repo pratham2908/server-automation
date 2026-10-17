@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from app.config import Settings, get_settings
@@ -130,11 +130,12 @@ async def _story_card(db: Any, video: dict[str, Any]) -> tuple[str, str]:
     if not slug or not video.get("scheduled_at"):
         return "", ""
     try:
-        from app.routers.story_kit import make_kit, page_url
+        from app.routers.story_kit import channel_page_url
         from app.services import story_kit as kit
 
-        doc = await make_kit(db, video.get("channel_id", ""), [(video, slug)], datetime.now(timezone.utc))
-        url, when = page_url(doc["token"]), "as soon as you graduate it"
+        # The channel's one story page lists a graduated trial from now on; the anchor jumps to its card.
+        page = await channel_page_url(db, video.get("channel_id", ""))
+        url, when = f"{page}#card-{video.get('video_id', '')}", "as soon as you graduate it"
         return kit.story_card_html(url, when), kit.story_card_text(url, when)
     except Exception:  # noqa: BLE001 - the story card is a bonus; the graduation nudge matters more
         logger.exception("Story card for %s failed; sending the graduation email without it", video.get("video_id"))
