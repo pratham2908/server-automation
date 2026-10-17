@@ -56,14 +56,15 @@ async def refresh_follow_estimates(
     ig: InstagramService,
     channel_id: str,
     ig_user_id: str,
-    views_by_media: Mapping[str, int],
+    counts_by_media: Mapping[str, Mapping[str, int]],
 ) -> None:
     now = now_ist()
-    if views_by_media:
+    if counts_by_media:
+        # Views drive the follow estimate; the other counts feed the hourly chart.
         await db.instagram_reel_snapshots.insert_many(
             [
-                {"channel_id": channel_id, "media_id": media_id, "at": now, "views": views}
-                for media_id, views in views_by_media.items()
+                {"channel_id": channel_id, "media_id": media_id, "at": now, **counts}
+                for media_id, counts in counts_by_media.items()
             ]
         )
     await _store_account_days(db, ig, channel_id, ig_user_id, now.date())

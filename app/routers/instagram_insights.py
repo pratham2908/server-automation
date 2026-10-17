@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -25,7 +25,8 @@ from app.services.instagram_content_analysis import (
     posting_slots,
     watch_through,
 )
-from app.timezone import now_ist, to_ist_iso
+from app.services.instagram_reel_hourly import HOURLY_METRICS, MAX_GAP_HOURS, MAX_HOURS, MetricReading, hourly_gains
+from app.timezone import assume_utc, now_ist, to_ist_iso
 
 router = APIRouter(
     prefix="/api/v1/channels/{channel_id}/instagram",
@@ -139,6 +140,44 @@ async def get_reel_timeline(
         async for doc in cursor
     ]
     return ReelTimelineOut(media_id=media_id, days=days)
+
+
+class ReelHourOut(BaseModel):
+    # Start of the IST clock hour.
+    start: str
+    # Gains in that hour; None where a long gap between readings can't place them.
+    views: float | None = None
+    likes: float | None = None
+    comments: float | None = None
+    shares: float | None = None
+    saves: float | None = None
+
+
+class ReelHourlyOut(BaseModel):
+    media_id: str
+    max_gap_hours: float
+    hours: list[ReelHourOut] = []
+
+
+@router.get("/reels/{media_id}/hourly", response_model=ReelHourlyOut)
+async def get_reel_hourly(channel_id: str, media_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> ReelHourlyOut:
+    """A reel's views, likes, comments, shares and saves gained in each IST hour, from the sync's readings."""
+    video = await db.videos.find_one({"channel_id": channel_id, "instagram_media_id": media_id}, {"published_at": 1})
+    published = parse_published_at(video.get("published_at")) if video else None
+    # One reading before the window is needed to place the window's first hour.
+    since = now_ist() - timedelta(hours=MAX_HOURS) - timedelta(days=1)
+    cursor = db.instagram_reel_snapshots.find(
+        {"channel_id": channel_id, "media_id": media_id, "at": {"$gte": since}}
+    ).sort("at", 1)
+    readings = [
+        MetricReading(
+            at=assume_utc(snap["at"]),
+            values={m: float(snap[m]) for m in HOURLY_METRICS if isinstance(snap.get(m), int | float)},
+        )
+        async for snap in cursor
+    ]
+    hours = [ReelHourOut(start=h.start.isoformat(), **h.values) for h in hourly_gains(published, readings)]
+    return ReelHourlyOut(media_id=media_id, max_gap_hours=MAX_GAP_HOURS, hours=hours)
 
 
 class ReelAnalysisOut(BaseModel):
