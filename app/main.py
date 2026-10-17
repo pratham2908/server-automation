@@ -352,6 +352,7 @@ from app.routers import (
     retention_analysis,
     scorecard,
     source_callbacks,
+    story_kit,
     sync_analysis,
     system,
     thumbnail_analysis,
@@ -367,6 +368,8 @@ app.include_router(competitor_feed.router)
 app.include_router(source_callbacks.router)
 app.include_router(errors.router)
 app.include_router(videos.router)
+app.include_router(story_kit.api_router)
+app.include_router(story_kit.page_router)
 app.include_router(posts.router)
 app.include_router(video_sources.router)
 app.include_router(video_sources.imports_router)
