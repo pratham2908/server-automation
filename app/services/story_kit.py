@@ -84,7 +84,9 @@ def is_expired(expires_at: datetime, now: datetime) -> bool:
 # --- the email -------------------------------------------------------------------------------------
 
 
-def kit_email(items: list[KitItem], page_url: str, reminder: bool = False) -> tuple[str, str, str]:
+def kit_email(
+    items: list[KitItem], page_url: str, reminder: bool = False, graduated: bool = False
+) -> tuple[str, str, str]:
     """Subject, text and html for reels that are live and need a story posted. One row per reel.
 
     The first send is the go-live prompt; ``reminder`` is the second, for a story still unticked hours on.
@@ -92,12 +94,17 @@ def kit_email(items: list[KitItem], page_url: str, reminder: bool = False) -> tu
     n = len(items)
     s = "s" if n != 1 else ""
     if reminder:
-        subject, lead = f"Story not posted yet: {n} reel{s}", "live for a while, and the story is not ticked as posted yet"
+        subject, lead = (
+            f"Story not posted yet: {n} reel{s}",
+            "live for a while, and the story is not ticked as posted yet",
+        )
+    elif graduated:
+        subject, lead = f"Post this story now: {n} reel{s}", "just graduated to followers"
     else:
         subject, lead = f"Post this story now: {n} reel{s}", "just went live"
     lines = [f"{n} reel{s} {lead}. Post a story for each:", ""]
     for it in items:
-        lines.append(f"- {it.title}: live since {clock(it.reel_time)}")
+        lines.append(f"- {it.title}" if graduated else f"- {it.title}: live since {clock(it.reel_time)}")
     lines += ["", f"Open on your phone: {page_url}", "", "The page works for 3 days."]
     rows = "".join(
         f'<tr><td style="padding:12px 0;border-top:1px solid {_LINE};font-family:{_FONT};color:{_INK}">'
@@ -107,8 +114,13 @@ def kit_email(items: list[KitItem], page_url: str, reminder: bool = False) -> tu
             else ""
         )
         + f'<div style="font-size:15px;font-weight:600">{escape(_short(it.title))}</div>'
-        f'<div style="font-size:14px;color:{_MUTED};margin-top:4px">Live since '
-        f'<b style="color:{_INK}">{escape(clock(it.reel_time))}</b></div></td></tr>'
+        f'<div style="font-size:14px;color:{_MUTED};margin-top:4px">'
+        + (
+            "Graduated to followers"
+            if graduated
+            else f'Live since <b style="color:{_INK}">{escape(clock(it.reel_time))}</b>'
+        )
+        + "</div></td></tr>"
         for it in items
     )
     html = (
@@ -255,10 +267,12 @@ def page_items(videos: list[dict[str, Any]], now: datetime) -> list[KitItem]:
         if not slug or not isinstance(scheduled, datetime) or v.get("status") != "published":
             continue
         reel_time = reel_time_ist(scheduled)
-        graduated = bool(v.get("trial_graduation")) and v.get("trial_check_state") == "met"
+        graduated = bool(v.get("trial_graduation")) and (
+            v.get("trial_check_state") == "met" or bool(v.get("graduated_at"))
+        )
         if v.get("trial_graduation") and not graduated:
             continue
-        checked = v.get("trial_check_checked_at")
+        checked = _graduated_at(v)
         anchor = assume_utc(checked) if graduated and isinstance(checked, datetime) else reel_time + STORY_DELAY
         if anchor < cutoff:
             continue
@@ -283,6 +297,14 @@ GRADUATED_REMINDER_DELAY = timedelta(hours=3)
 LIVE_REMINDER_DELAY = timedelta(hours=2, minutes=30)
 # A reel that went live longer ago than this gets no go-live email: it would be a stale prompt.
 LIVE_EMAIL_WINDOW = timedelta(hours=6)
+
+
+def _graduated_at(v: dict[str, Any]) -> datetime | None:
+    """When a trial was graduated: the grid flip if the sync saw one, else the check that cleared the bar."""
+    for key in ("graduated_at", "trial_check_checked_at"):
+        if isinstance(v.get(key), datetime):
+            return v[key]
+    return None
 
 
 def _owes_story(v: dict[str, Any]) -> bool:
@@ -317,8 +339,8 @@ def reminders_due(videos: list[dict[str, Any]], now: datetime) -> list[dict[str,
         if v.get("story_scheduled_at") is not None or v.get("story_reminded_at") is not None:
             continue
         if v.get("trial_graduation"):
-            checked = v.get("trial_check_checked_at")
-            if v.get("trial_check_state") != "met" or not isinstance(checked, datetime):
+            checked = _graduated_at(v)
+            if not (v.get("trial_check_state") == "met" or v.get("graduated_at")) or checked is None:
                 continue
             anchor, ready = assume_utc(checked), assume_utc(checked) + GRADUATED_REMINDER_DELAY
         else:
@@ -329,3 +351,24 @@ def reminders_due(videos: list[dict[str, Any]], now: datetime) -> list[dict[str,
         if ready <= now and anchor + KIT_LIFETIME > now:
             due.append(v)
     return due
+
+
+def flip_due(videos: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    """Trials the sync saw join the profile grid whose graduation no email has covered yet.
+
+    This is the graduation of a trial that Instagram graduated itself (``SS_PERFORMANCE``) or that the
+    owner graduated before our check emailed. A reel the graduation email already went out for is skipped,
+    since that email carried the story card. A flip noticed more than six hours late is not worth a prompt.
+    """
+    now = assume_utc(now)
+    return [
+        v
+        for v in videos
+        if _owes_story(v)
+        and v.get("trial_graduation")
+        and isinstance(v.get("graduated_at"), datetime)
+        and not v.get("trial_check_emailed")
+        and v.get("story_scheduled_at") is None
+        and v.get("story_flip_emailed_at") is None
+        and now - assume_utc(v["graduated_at"]) <= LIVE_EMAIL_WINDOW
+    ]

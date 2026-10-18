@@ -96,7 +96,7 @@ def test_send_story_emails_prompts_then_reminds_each_exactly_once(monkeypatch):
 
     class Videos:
         def find(self, q):
-            stamp = next(k for k in q if k in ("story_live_emailed_at", "story_reminded_at"))
+            stamp = next(k for k in q if k in ("story_live_emailed_at", "story_reminded_at", "story_flip_emailed_at"))
             return Cursor(stamp)
 
         async def update_one(self, key, update):
@@ -114,3 +114,38 @@ def test_send_story_emails_prompts_then_reminds_each_exactly_once(monkeypatch):
     assert run(NOW + timedelta(hours=1)) == 0
     assert run(NOW + timedelta(hours=3)) == 1 and sent[-1] == "Story not posted yet: 1 reel"
     assert run(NOW + timedelta(hours=6)) == 0 and len(sent) == 2
+
+
+# --- a trial seen joining the grid -------------------------------------------
+
+
+def _trial(**over):
+    return _video(**{"trial_graduation": "SS_PERFORMANCE", "graduated_at": _ago(minutes=30), **over})
+
+
+def test_a_trial_that_joined_the_grid_gets_a_story_email():
+    assert kit.flip_due([_trial()], NOW)
+
+
+def test_the_flip_email_skips_what_the_graduation_email_already_covered():
+    assert not kit.flip_due([_trial(trial_check_emailed=True)], NOW)
+    assert not kit.flip_due([_trial(story_flip_emailed_at=NOW)], NOW)
+    assert not kit.flip_due([_trial(story_scheduled_at=NOW)], NOW)
+    assert not kit.flip_due([_video()], NOW)  # not a trial
+    assert not kit.flip_due([_video(trial_graduation="MANUAL")], NOW)  # never seen on the grid
+
+
+def test_a_flip_noticed_hours_late_gets_no_prompt():
+    assert not kit.flip_due([_trial(graduated_at=_ago(hours=7))], NOW)
+
+
+def test_a_flipped_trial_is_reminded_three_hours_on_and_listed_on_the_page():
+    old = _trial(graduated_at=_ago(hours=4))
+    assert kit.reminders_due([old], NOW)
+    assert [i.graduated for i in kit.page_items([old], NOW)] == [True]
+
+
+def test_the_graduated_email_says_so():
+    subject, text, html = kit.kit_email([kit.KitItem("v", "s", "A reel", NOW)], "https://x/s/t", graduated=True)
+    assert subject == "Post this story now: 1 reel" and "just graduated to followers" in text
+    assert "Graduated to followers" in html and "live since" not in text
