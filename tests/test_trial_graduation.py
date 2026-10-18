@@ -221,6 +221,15 @@ def _video(**over: Any) -> dict[str, Any]:
     return doc
 
 
+def _readings(*views_by_hour: tuple[float, float]) -> list[dict[str, Any]]:
+    """Earlier readings: (hours before NOW, views then)."""
+    return [{"at": NOW - timedelta(hours=h), "views": v} for h, v in views_by_hour]
+
+
+# Earlier readings that already show the push dying, so the bar being met is enough to email.
+_PEAKED = {"trial_check_readings": _readings((3, 4000), (2, 6000), (1, 6100))}
+
+
 def _run(docs, snapshot=None, error=None):
     sent: list[str] = []
 
@@ -260,7 +269,7 @@ def test_a_reel_that_is_not_due_yet_is_left_alone():
 
 def test_a_restart_picks_up_a_check_that_came_due_while_the_server_was_down():
     """State lives on the video, so a due check from hours ago is found like any other."""
-    docs = [_video(trial_check_due_at=NOW - timedelta(hours=9), published_at=NOW - timedelta(hours=20))]
+    docs = [_video(trial_check_due_at=NOW - timedelta(hours=9), published_at=NOW - timedelta(hours=20), **_PEAKED)]
     _, sent = _run(docs)
     assert len(sent) == 1
 
@@ -316,7 +325,7 @@ def test_clearing_the_bar_at_the_end_still_emails():
 
 
 def test_clearing_the_bar_early_ends_it_and_records_when():
-    docs = [_two_days()]
+    docs = [_two_days(**_PEAKED)]
     _, sent = _run(docs)
     assert docs[0]["trial_check_state"] == MET and docs[0]["trial_check_met_after_hours"] == 25
     assert len(sent) == 1
@@ -516,3 +525,49 @@ def test_the_button_is_replaced_by_a_note_when_there_is_no_link():
     mail = _mail(permalink=None)
     assert "Open the reel in Instagram</a>" not in mail.html
     assert "No link was available" in mail.html
+
+
+# --- the push has to peak before the email ------------------------------------
+
+
+def test_a_reel_still_accelerating_is_held_even_though_it_cleared_the_bar():
+    # +2.0k, +2.7k, +3.5k an hour: the push is still climbing, so keep checking.
+    readings = _readings((2, 2000), (1, 4700))
+    docs = [_video(published_at=NOW - timedelta(hours=3), trial_check_readings=readings)]
+    _, sent = _run(docs, Snapshot("https://ig/reel/1", {"views": 8200}))
+    assert sent == [] and docs[0]["trial_check_state"] == PENDING
+    assert docs[0]["trial_check_first_met_hours"] == 3
+    assert docs[0]["trial_check_due_at"] == NOW + timedelta(hours=1)
+
+
+def test_the_email_goes_once_the_rate_collapses_and_says_where_it_peaked():
+    readings = _readings((3, 2000), (2, 4700), (1, 8200))
+    docs = [_video(published_at=NOW - timedelta(hours=4), trial_check_readings=readings)]
+    _, sent = _run(docs, Snapshot("https://ig/reel/1", {"views": 8558}))
+    assert len(sent) == 1 and docs[0]["trial_check_state"] == MET
+    assert docs[0]["trial_check_peak_rate"] == 3500 and docs[0]["trial_check_peak_at_hours"] == 3 and docs[0]["trial_check_push_peaked"] is True
+    assert docs[0]["trial_check_rate_at_email"] < 1100
+
+
+def test_a_reel_still_climbing_at_the_end_of_the_window_is_emailed_anyway():
+    readings = _readings((2, 2000), (1, 4700))
+    docs = [_video(published_at=NOW - timedelta(hours=24), trial_check_readings=readings)]
+    _, sent = _run(docs, Snapshot("https://ig/reel/1", {"views": 9000}))
+    assert len(sent) == 1 and docs[0]["trial_check_push_peaked"] is False
+
+
+def test_push_summary_reads_two_falls_in_a_row_or_a_collapse():
+    from app.services.trial_graduation import push_summary
+
+    t0 = NOW - timedelta(hours=4)
+
+    def hourly(*views):
+        return [{"at": t0 + timedelta(hours=i + 1), "views": v} for i, v in enumerate(views)]
+
+    assert push_summary(t0, []) is None
+    assert push_summary(t0, hourly(1000)).peaked is False  # one reading cannot say
+    assert push_summary(t0, hourly(1000, 2500, 3500)).peaked is False  # still climbing
+    assert push_summary(t0, hourly(1000, 3000, 4500, 5200)).peaked is True  # 1000, 2000, 1500, 700: down twice
+    assert push_summary(t0, hourly(2000, 4700, 8200, 8558)).peaked is True  # 358/h vs 3500/h peak
+    flat = push_summary(t0, hourly(1000, 2000, 3000))
+    assert flat.peaked is False and flat.peak_rate == 1000

@@ -42,6 +42,25 @@ _MAX_TITLE = 110
 _MAX_SUBJECT_TITLE = 60
 
 
+class PushNote(NamedTuple):
+    """How the reel's hourly view gain moved, so the owner knows if it is done growing among non-followers."""
+
+    peak_rate: float
+    peak_at_hours: float
+    rate_now: float
+    peaked: bool
+    first_met_hours: float | None = None
+
+
+def _push_line(push: PushNote | None) -> str:
+    if push is None:
+        return ""
+    base = f"{_number(push.peak_rate)} views/h at {push.peak_at_hours:.1f} h; now {_number(push.rate_now)}/h"
+    if push.peaked:
+        return f"Push peaked at {base}."
+    return f"Still growing when the check window ended. Best hour {base}."
+
+
 class TrialEmail(NamedTuple):
     subject: str
     text: str
@@ -93,12 +112,15 @@ def _text(
     after_hours: float,
     groups: list[GroupResult],
     metrics: Mapping[str, float],
+    push: PushNote | None = None,
 ) -> str:
     where = permalink or "(no link available - open the reel from your profile)"
     parts = [
         f'Your trial reel "{_short(title)}" on {channel} cleared its bar {_hours(after_hours)} after posting.',
         f"Open it: {where}",
     ]
+    if push is not None:
+        parts.insert(1, _push_line(push))
     glance = [f"{label}: {_stat(key, metrics[key])}" for key, label in _HEADLINE if key in metrics]
     if glance:
         parts.append("At a glance\n" + "\n".join(f"  {g}" for g in glance))
@@ -184,6 +206,7 @@ def _html(
     thumbnail_url: str | None,
     metrics: Mapping[str, float],
     story_html: str = "",
+    push: PushNote | None = None,
 ) -> str:
     safe_title = escape(_short(title))
     preheader = f"Cleared its bar {_hours(after_hours)} after posting. Open it and share it with your followers."
@@ -218,6 +241,11 @@ def _html(
             start=1,
         )
     )
+    push_html = (
+        f'<p style="font:600 14px/1.5 {_FONT};color:{_INK};margin:-8px 0 18px;">{escape(_push_line(push))}</p>'
+        if push
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light"><title>Trial reel ready to graduate</title></head>
@@ -229,7 +257,7 @@ def _html(
   <tr><td bgcolor="{_CARD}" style="background:{_CARD};border-radius:16px;padding:28px 24px;border:1px solid {_LINE};">
     <span style="display:inline-block;font:700 11px {_FONT};color:{_GOOD};background:{_GOOD_BG};border-radius:999px;padding:4px 10px;letter-spacing:.06em;">READY TO GRADUATE</span>
     <h1 style="font:700 22px/1.3 {_FONT};color:{_INK};margin:14px 0 6px;">Your trial reel cleared its bar</h1>
-    <p style="font:400 14px/1.5 {_FONT};color:{_MUTED};margin:0 0 18px;">{escape(_hours(after_hours))} after posting, it met the conditions you set.</p>
+    <p style="font:400 14px/1.5 {_FONT};color:{_MUTED};margin:0 0 18px;">{escape(_hours(after_hours))} after posting, it met the conditions you set.</p>{push_html}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>{thumb}
       <td valign="top" style="font:600 15px/1.45 {_FONT};color:{_INK};">{safe_title}</td></tr></table>
     {button}
@@ -257,6 +285,7 @@ def format_graduate_email(
     metrics: Mapping[str, float] | None = None,
     story_html: str = "",
     story_text: str = "",
+    push: PushNote | None = None,
 ) -> TrialEmail:
     """Subject and both bodies. The link is the whole point: it opens the reel on a phone.
 
@@ -267,7 +296,13 @@ def format_graduate_email(
     return TrialEmail(
         subject=f"Trial reel ready to graduate: {_short(title, _MAX_SUBJECT_TITLE)}",
         text=_text(
-            title=title, channel=channel, permalink=permalink, after_hours=after_hours, groups=groups, metrics=numbers
+            title=title,
+            channel=channel,
+            permalink=permalink,
+            after_hours=after_hours,
+            groups=groups,
+            metrics=numbers,
+            push=push,
         )
         + ("\n" + story_text if story_text else ""),
         html=_html(
@@ -279,5 +314,6 @@ def format_graduate_email(
             thumbnail_url=thumbnail_url,
             metrics=numbers,
             story_html=story_html,
+            push=push,
         ),
     )

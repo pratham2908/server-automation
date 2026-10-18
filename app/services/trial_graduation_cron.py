@@ -36,8 +36,9 @@ from app.services.trial_graduation import (
     check_until_hours,
     evaluate,
     next_check_at,
+    push_summary,
 )
-from app.services.trial_graduation_email import format_graduate_email
+from app.services.trial_graduation_email import PushNote, format_graduate_email
 from app.timezone import assume_utc, now_ist
 
 logger = get_logger(__name__)
@@ -104,7 +105,12 @@ async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot, now: 
         return
 
     outcome = evaluate(video["trial_check"], snap.metrics)
-    later = None if outcome.met else next_check_at(video, now)
+    later = next_check_at(video, now)
+    views = snap.metrics.get("views")
+    readings = list(video.get("trial_check_readings") or [])
+    if views is not None:
+        readings.append({"at": now, "views": views})
+    push = push_summary(video["published_at"], readings)
     update: dict[str, Any] = {
         "trial_check_checked_at": now,
         "trial_check_permalink": snap.permalink,
@@ -113,10 +119,36 @@ async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot, now: 
         "trial_check_metrics": snap.metrics,
         "trial_check_result": outcome.model_dump(),
         "trial_check_attempts": 0,
+        "trial_check_readings": readings,
     }
+    elapsed = (now - assume_utc(video["published_at"])).total_seconds() / 3600
     if outcome.met:
-        elapsed = (now - assume_utc(video["published_at"])).total_seconds() / 3600
-        update.update({"trial_check_state": MET, "trial_check_met_after_hours": round(elapsed, 2)})
+        # Hold the email while the push is still accelerating, unless there is no way to tell or no time left.
+        waiting = push is not None and not push.peaked and later is not None
+        update.setdefault("trial_check_first_met_hours", video.get("trial_check_first_met_hours") or round(elapsed, 2))
+        if waiting:
+            update["trial_check_due_at"] = later
+        else:
+            update.update({"trial_check_state": MET, "trial_check_met_after_hours": round(elapsed, 2)})
+            if push is not None:
+                update.update(
+                    {
+                        "trial_check_peak_rate": round(push.peak_rate),
+                        "trial_check_peak_at_hours": round(push.peak_at_hours, 2),
+                        "trial_check_rate_at_email": round(push.rate_now),
+                        "trial_check_push_peaked": push.peaked,
+                    }
+                )
+                logger.info(
+                    "Trial %s graduating at %.1fh: bar first met at %.1fh, peak %d views/h at %.1fh, now %d/h (%s)",
+                    video.get("video_id"),
+                    elapsed,
+                    update["trial_check_first_met_hours"],
+                    push.peak_rate,
+                    push.peak_at_hours,
+                    push.rate_now,
+                    "peaked" if push.peaked else "window ended before it peaked",
+                )
     elif later is not None:
         # Short of the bar, but the window is still open: check again in an hour.
         update["trial_check_due_at"] = later
@@ -156,12 +188,25 @@ async def _email_met(db: Any, video: dict[str, Any], send: SendEmail) -> None:
         metrics=video.get("trial_check_metrics") or {},
         story_html=story_html,
         story_text=story_text,
+        push=_push_note(video),
     )
     sent = await send(email.subject, email.text, email.html)
     update: dict[str, Any] = {"trial_check_email_attempts": int(video.get("trial_check_email_attempts", 0)) + 1}
     if sent:
         update["trial_check_emailed"] = True
     await db.videos.update_one({"_id": video["_id"]}, {"$set": update})
+
+
+def _push_note(video: dict[str, Any]) -> PushNote | None:
+    if video.get("trial_check_peak_rate") is None:
+        return None
+    return PushNote(
+        peak_rate=float(video["trial_check_peak_rate"]),
+        peak_at_hours=float(video.get("trial_check_peak_at_hours") or 0),
+        rate_now=float(video.get("trial_check_rate_at_email") or 0),
+        peaked=bool(video.get("trial_check_push_peaked")),
+        first_met_hours=video.get("trial_check_first_met_hours"),
+    )
 
 
 def _groups(video: dict[str, Any]) -> list[GroupResult]:
