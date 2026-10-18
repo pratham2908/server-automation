@@ -36,6 +36,7 @@ from app.services.trial_graduation import (
     evaluate,
     next_check_at,
 )
+from app.services.story_reminder import send_story_reminders
 from app.services.trial_graduation_email import format_graduate_email
 from app.timezone import assume_utc, now_ist
 
@@ -213,7 +214,8 @@ async def run_trial_graduation_cron(db: Any, instagram_service_manager: Any) -> 
     while True:
         try:
             stats = await run_trial_checks(db, fetch, send)
-            if stats["checked"] or stats["emails_attempted"]:
+            stats["story_reminders"] = await send_story_reminders(db, send)
+            if any(stats.values()):
                 logger.info("Trial graduation tick: %s", stats)
         except Exception as exc:  # noqa: BLE001 - the loop must survive one bad tick
             logger.error("Trial graduation cron tick failed: %s", exc)

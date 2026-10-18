@@ -85,11 +85,15 @@ def is_expired(expires_at: datetime, now: datetime) -> bool:
 # --- the email -------------------------------------------------------------------------------------
 
 
-def kit_email(items: list[KitItem], page_url: str) -> tuple[str, str, str]:
-    """Subject, text and html for one scheduling run. One row per reel, one button to the kit."""
+def kit_email(items: list[KitItem], page_url: str, reminder: bool = False) -> tuple[str, str, str]:
+    """Subject, text and html for one scheduling run. One row per reel, one button to the kit.
+
+    ``reminder`` is the second send, for a story still unticked once its reel is live.
+    """
     n = len(items)
-    subject = f"Stories to schedule: {n} reel{'s' if n != 1 else ''}"
-    lines = [f"{n} reel{'s' if n != 1 else ''} just scheduled. Schedule a story for each:", ""]
+    subject = f"Story not scheduled yet: {n} reel{'s' if n != 1 else ''}" if reminder else f"Stories to schedule: {n} reel{'s' if n != 1 else ''}"
+    lead = "now live, and the story is not ticked as scheduled yet" if reminder else "just scheduled"
+    lines = [f"{n} reel{'s' if n != 1 else ''} {lead}. Schedule a story for each:", ""]
     for it in items:
         lines.append(f"- {it.title}: story at {day_clock(it.story_time)}")
     lines += ["", f"Open on your phone: {page_url}", "", "The page works for 3 days."]
@@ -269,3 +273,33 @@ def page_items(videos: list[dict[str, Any]], now: datetime) -> list[KitItem]:
         )
     items.sort(key=lambda it: (it.done, it.story_time))
     return items
+
+
+# A graduated trial's story goes up as soon as it graduates; the reminder gives that a few hours first.
+GRADUATED_REMINDER_DELAY = timedelta(hours=3)
+
+
+def reminders_due(videos: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    """Videos whose story is still unticked when it should be done, and not yet reminded about.
+
+    A normal reel is due once it is live; a graduated trial three hours after it graduated. Each gets
+    one reminder (``story_reminded_at``), and none after the page has dropped it three days on.
+    """
+    now = assume_utc(now)
+    due = []
+    for v in videos:
+        scheduled = v.get("scheduled_at")
+        if not v.get("story_slug") or not isinstance(scheduled, datetime) or v.get("status") == "archived":
+            continue
+        if v.get("story_scheduled_at") is not None or v.get("story_reminded_at") is not None:
+            continue
+        if v.get("trial_graduation"):
+            checked = v.get("trial_check_checked_at")
+            if v.get("trial_check_state") != "met" or not isinstance(checked, datetime):
+                continue
+            ready, anchor = assume_utc(checked) + GRADUATED_REMINDER_DELAY, assume_utc(checked)
+        else:
+            ready = anchor = reel_time_ist(scheduled)
+        if ready <= now and anchor + KIT_LIFETIME > now:
+            due.append(v)
+    return due
