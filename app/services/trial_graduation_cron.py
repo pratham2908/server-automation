@@ -25,6 +25,7 @@ from app.logger import get_logger
 from app.services.email_service import resolve_owner_email, send_email
 from app.services.error_reporting import report_error
 from app.services.instagram_reel_metrics import reel_metadata
+from app.services.story_reminder import send_story_emails
 from app.services.trial_graduation import (
     FAILED,
     MET,
@@ -36,7 +37,6 @@ from app.services.trial_graduation import (
     evaluate,
     next_check_at,
 )
-from app.services.story_reminder import send_story_reminders
 from app.services.trial_graduation_email import format_graduate_email
 from app.timezone import assume_utc, now_ist
 
@@ -214,7 +214,7 @@ async def run_trial_graduation_cron(db: Any, instagram_service_manager: Any) -> 
     while True:
         try:
             stats = await run_trial_checks(db, fetch, send)
-            stats["story_reminders"] = await send_story_reminders(db, send)
+            stats["story_emails"] = await send_story_emails(db, send)
             if any(stats.values()):
                 logger.info("Trial graduation tick: %s", stats)
         except Exception as exc:  # noqa: BLE001 - the loop must survive one bad tick

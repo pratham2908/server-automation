@@ -43,11 +43,11 @@ def test_a_kit_expires_after_three_days():
     assert kit.is_expired(datetime(2026, 10, 20), datetime(2026, 10, 21))
 
 
-def test_email_lists_each_reel_with_its_story_time_and_one_button():
+def test_email_lists_each_live_reel_and_has_one_button():
     subject, text, html = kit.kit_email([_item(), _item("weird-sorts")], "https://s/s/tok")
-    assert subject == "Stories to schedule: 2 reels"
-    assert "9:37 AM" in text and "https://s/s/tok" in text
-    assert html.count("Schedule the story for") == 2 and html.count("Get stories") == 1
+    assert subject == "Post this story now: 2 reels"
+    assert "live since 9:30 AM" in text and "https://s/s/tok" in text
+    assert html.count("Live since") == 2 and html.count("Get stories") == 1
 
 
 def test_page_has_a_card_a_button_and_the_sticker_text_per_reel():
@@ -56,20 +56,20 @@ def test_page_has_a_card_a_button_and_the_sticker_text_per_reel():
         'data-link="https://tryalgoviz.com/r/two-sum-3-ways/?utm_medium=story&amp;utm_campaign=two-sum-3-ways"' in page
     )
     assert "/s/tok/vid-1/video" in page and "/s/tok/vid-1/cover" in page
-    assert kit.STICKER_TEXT in page and "noindex" in page and "Scheduled</label>" in page
+    assert kit.STICKER_TEXT in page and "noindex" in page and "Posted</label>" in page
     # The tick is saved on the server, not in one phone's storage.
     assert 'data-url="/s/tok/vid-1/done"' in page and "localStorage" not in page
 
 
-def test_scheduled_reels_sink_to_their_own_section_ticked():
+def test_posted_reels_sink_to_their_own_section_ticked():
     page = kit.kit_page("tok", [_item(), _item("weird-sorts")._replace(video_id="vid-2", done=True)])
-    todo, done = page.split("Scheduled (1)")
+    todo, done = page.split("Posted (1)")
     assert "card-vid-1" in todo and "card-vid-2" in done
     assert 'data-url="/s/tok/vid-2/done" checked' in done
 
 
 def test_an_empty_page_says_so():
-    assert "Nothing to schedule right now." in kit.kit_page("tok", [])
+    assert "Nothing to post right now." in kit.kit_page("tok", [])
 
 
 # --- which reels the page lists -----------------------------------------------
@@ -82,7 +82,7 @@ def _video(video_id: str, hours_from_now: float, **over):
         "video_id": video_id,
         "story_slug": f"slug-{video_id}",
         "title": video_id,
-        "status": "scheduled",
+        "status": "published",
         # Mongo hands back naive UTC.
         "scheduled_at": (NOW + timedelta(hours=hours_from_now)).replace(tzinfo=None),
     }
@@ -90,10 +90,14 @@ def _video(video_id: str, hours_from_now: float, **over):
     return doc
 
 
-def test_page_lists_coming_and_recent_stories_soonest_first_and_done_last():
+def test_reels_not_yet_live_are_left_off():
+    assert kit.page_items([_video("queued", 2, status="scheduled")], NOW) == []
+
+
+def test_page_lists_live_stories_soonest_first_and_done_last():
     videos = [
-        _video("later", 30),
-        _video("soon", 2),
+        _video("later", -1),
+        _video("soon", -2),
         _video("yesterday", -24, status="published", story_scheduled_at=NOW),
         _video("ago-2d", -48, status="published"),
     ]

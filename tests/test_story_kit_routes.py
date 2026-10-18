@@ -87,6 +87,7 @@ def _video(vid, trial=None):
         "r2_object_key": f"v/{vid}.mp4",
         "thumbnail_r2_key": f"t/{vid}.jpg",
         "scheduled_at": REEL_AT,
+        "status": "published",
         "trial_graduation": trial,
     }
 
@@ -103,17 +104,7 @@ def world(monkeypatch):
     app.include_router(routes.page_router)
     app.dependency_overrides[get_db] = lambda: db
     monkeypatch.setattr(routes, "_r2", FakeR2)
-    sent = []
-
-    async def fake_send(settings, to, subject, text, html=None):
-        sent.append((subject, text))
-        return True
-
-    async def fake_owner(db, settings):
-        return "owner@x"
-
-    monkeypatch.setattr(routes, "send_email", fake_send)
-    monkeypatch.setattr(routes, "resolve_owner_email", fake_owner)
+    sent = []  # nothing in the routes sends mail any more; the test proves it stays empty
     return SimpleNamespace(db=db, client=TestClient(app), sent=sent)
 
 
@@ -123,11 +114,11 @@ def _post(world, reels):
     )
 
 
-def test_kit_emails_normal_posts_only_and_remembers_the_trial_slug(world):
+def test_queueing_saves_every_slug_and_sends_no_email(world):
     res = _post(world, [{"video_id": "a", "slug": "alpha"}, {"video_id": "b", "slug": "beta"}]).json()
-    assert res["emailed"] is True and res["trials_without_story"] == ["b"]
-    assert [s["video_id"] for s in res["stories"]] == ["a"]
-    assert world.sent[0][0] == "Stories to schedule: 1 reel" and "9:37 AM" in world.sent[0][1]
+    assert res["emailed"] is False and res["trials_without_story"] == ["b"]
+    assert world.sent == []  # the story email goes out when the reel goes live
+    assert world.db.videos.docs[0]["story_slug"] == "alpha"
     assert world.db.videos.docs[1]["story_slug"] == "beta"  # saved for the graduation email
 
 
@@ -156,10 +147,10 @@ def test_every_run_lands_on_the_same_page_which_keeps_earlier_reels(world):
     assert "alpha" in page and "gamma" in page
 
 
-def test_scheduled_is_saved_on_the_server_and_can_be_undone(world):
+def test_posted_is_saved_on_the_server_and_can_be_undone(world):
     token = _post(world, [{"video_id": "a", "slug": "alpha"}]).json()["kit"].rsplit("/", 1)[1]
     assert world.client.post(f"/s/{token}/a/done", json={"done": True}).json() == {"done": True}
-    assert "Scheduled (1)" in world.client.get(f"/s/{token}").text
+    assert "Posted (1)" in world.client.get(f"/s/{token}").text
     world.client.post(f"/s/{token}/a/done", json={"done": False})
     assert "story_scheduled_at" not in world.db.videos.docs[0]
     assert world.client.post(f"/s/{token}/b/done", json={"done": True}).status_code == 404

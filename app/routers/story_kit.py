@@ -20,12 +20,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.services import story_kit as kit
-from app.services.email_service import resolve_owner_email, send_email
 
 logger = get_logger(__name__)
 
@@ -111,12 +109,12 @@ async def _page_items(db: Any, channel_id: str) -> list[kit.KitItem]:
 
 @api_router.post("")
 async def create_kit(channel_id: str, body: KitRequest, db: Any = Depends(get_db)) -> dict[str, Any]:
-    """Record each reel's story slug, then email a kit for the normal posts.
+    """Record each reel's story slug. No email: the story email goes out when the reel goes live.
 
-    A trial is meant for non-followers, so it gets no story when posted. Its slug is still saved on the
-    video, and the graduation email builds its story card from that if the trial clears its bar.
+    Business Suite cannot schedule the story, so a prompt at queue time (often a day ahead) is one the
+    owner cannot act on. The graduation and go-live crons build their emails from the saved slug.
+    ``send_email`` is still accepted so older callers keep working, and is ignored.
     """
-    normal: list[tuple[dict[str, Any], str]] = []
     trials: list[str] = []
     for r in body.reels:
         video = await db.videos.find_one({"channel_id": channel_id, "video_id": r.video_id})
@@ -125,29 +123,7 @@ async def create_kit(channel_id: str, body: KitRequest, db: Any = Depends(get_db
         await db.videos.update_one({"_id": video["_id"]}, {"$set": {"story_slug": r.slug}})
         if video.get("trial_graduation"):
             trials.append(r.video_id)
-        else:
-            normal.append((video, r.slug))
-    url = await channel_page_url(db, channel_id)
-    if not normal:
-        return {"emailed": False, "kit": url, "trials_without_story": trials}
-    r2 = _r2()
-    items = []
-    for video, slug in normal:
-        key = video.get("thumbnail_r2_key")
-        thumb = r2.generate_presigned_url(key, expires_in=int(kit.KIT_LIFETIME.total_seconds())) if key else None
-        title = video.get("title") or slug
-        items.append(kit.KitItem(video["video_id"], slug, title, kit.reel_time_ist(video["scheduled_at"]), thumb))
-    subject, text, html = kit.kit_email(items, url)
-    sent = False
-    if body.send_email:
-        settings = get_settings()
-        sent = await send_email(settings, await resolve_owner_email(db, settings), subject, text, html)
-    return {
-        "emailed": sent,
-        "kit": url,
-        "stories": [{"video_id": i.video_id, "story_at": i.story_time.isoformat()} for i in items],
-        "trials_without_story": trials,
-    }
+    return {"emailed": False, "kit": await channel_page_url(db, channel_id), "trials_without_story": trials}
 
 
 async def _channel_for(db: Any, token: str) -> str:
