@@ -61,6 +61,11 @@ async def connect_db(
     await _db.instagram_account_daily.create_index([("channel_id", 1), ("date", 1)], unique=True)
     await _db.instagram_reel_snapshots.create_index([("channel_id", 1), ("media_id", 1), ("at", 1)])
     await _db.instagram_reel_daily.create_index([("channel_id", 1), ("media_id", 1), ("date", 1)], unique=True)
+    await _db.youtube_video_snapshots.create_index([("channel_id", 1), ("youtube_video_id", 1), ("at", 1)])
+    await _db.youtube_video_daily.create_index([("channel_id", 1), ("youtube_video_id", 1), ("date", 1)], unique=True)
+    await _db.youtube_channel_daily.create_index([("channel_id", 1), ("date", 1)], unique=True)
+    await _db.youtube_audience.create_index([("channel_id", 1)], unique=True)
+    await _db.youtube_retention.create_index([("channel_id", 1), ("youtube_video_id", 1)], unique=True)
     await _db.videos.create_index("retention.status")
     await _db.videos.create_index("performance.analyzed_at")
     # Backs the "already imported?" dedup check when listing a channel app's videos.

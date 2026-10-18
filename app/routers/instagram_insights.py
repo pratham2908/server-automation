@@ -12,6 +12,18 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.dependencies import verify_api_key
+from app.models.content_analysis import (
+    ContentAnalysisOut,
+    ReelAnalysisOut,
+    ReelDayOut,
+    ReelHourlyOut,
+    ReelHourOut,
+    ReelTimelineOut,
+    group_out,
+    number_or_none,
+    rounded,
+    slot_out,
+)
 from app.services.instagram_audience import story_is_live
 from app.services.instagram_content_analysis import (
     GroupStat,
@@ -103,23 +115,6 @@ async def get_stories(
     return [_story_out(doc, now) async for doc in cursor]
 
 
-class ReelDayOut(BaseModel):
-    date: str
-    views: float
-    follows: float | None = None
-    profile_visits: float | None = None
-    bio_link_taps: float | None = None
-    rough: bool
-    # "pending": Instagram hasn't reported that day's follows yet (last ~2 days).
-    # "unavailable": it never will — older than the stored account history.
-    status: Literal["estimated", "pending", "unavailable"]
-
-
-class ReelTimelineOut(BaseModel):
-    media_id: str
-    days: list[ReelDayOut] = []
-
-
 @router.get("/reels/{media_id}/timeline", response_model=ReelTimelineOut)
 async def get_reel_timeline(
     channel_id: str, media_id: str, db: AsyncIOMotorDatabase = Depends(get_db)
@@ -142,23 +137,6 @@ async def get_reel_timeline(
     return ReelTimelineOut(media_id=media_id, days=days)
 
 
-class ReelHourOut(BaseModel):
-    # Start of the IST clock hour.
-    start: str
-    # Gains in that hour; None where a long gap between readings can't place them.
-    views: float | None = None
-    likes: float | None = None
-    comments: float | None = None
-    shares: float | None = None
-    saves: float | None = None
-
-
-class ReelHourlyOut(BaseModel):
-    media_id: str
-    max_gap_hours: float
-    hours: list[ReelHourOut] = []
-
-
 @router.get("/reels/{media_id}/hourly", response_model=ReelHourlyOut)
 async def get_reel_hourly(channel_id: str, media_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> ReelHourlyOut:
     """A reel's views, likes, comments, shares and saves gained in each IST hour, from the sync's readings."""
@@ -178,88 +156,6 @@ async def get_reel_hourly(channel_id: str, media_id: str, db: AsyncIOMotorDataba
     ]
     hours = [ReelHourOut(start=h.start.isoformat(), **h.values) for h in hourly_gains(published, readings)]
     return ReelHourlyOut(media_id=media_id, max_gap_hours=MAX_GAP_HOURS, hours=hours)
-
-
-class ReelAnalysisOut(BaseModel):
-    media_id: str
-    video_id: str | None = None
-    title: str | None = None
-    thumbnail_url: str | None = None
-    category: str | None = None
-    published_at: str | None = None
-    views: float | None = None
-    skip_rate: float | None = None
-    avg_watch_seconds: float | None = None
-    duration_seconds: float | None = None
-    watch_through: float | None = None
-    shares_per_1k: float | None = None
-    saves_per_1k: float | None = None
-    likes_per_1k: float | None = None
-    comments_per_1k: float | None = None
-    # Lifetime counts, for charting one against another.
-    reach: float | None = None
-    likes: float | None = None
-    comments: float | None = None
-    shares: float | None = None
-    saves: float | None = None
-    watch_hours: float | None = None
-    # Plays per reached account; above 1 means people replayed it.
-    views_per_reach: float | None = None
-    # Interactions per reached account, as a percentage.
-    engagement_rate: float | None = None
-    estimated_follows: float | None = None
-    follow_quality: str | None = None
-    views_24h: float | None = None
-    views_48h: float | None = None
-    views_7d: float | None = None
-    hours_to_half_views: float | None = None
-    hours_to_90_views: float | None = None
-    picking_up: bool | None = None
-
-
-class PostingSlotOut(BaseModel):
-    slot: int
-    reels: int
-    measured: int
-    median_views_24h: float | None = None
-    mature: int
-    median_views: float | None = None
-
-
-class GroupStatOut(BaseModel):
-    dimension: str
-    value: str
-    reels: int
-    median_views: float | None = None
-    median_skip_rate: float | None = None
-    median_watch_through: float | None = None
-    median_shares_per_1k: float | None = None
-    median_saves_per_1k: float | None = None
-
-
-class ContentAnalysisOut(BaseModel):
-    channel_id: str
-    reels: list[ReelAnalysisOut] = []
-    # IST hour (0–23) and weekday (0 = Monday) each reel was posted.
-    posting_hours: list[PostingSlotOut] = []
-    posting_weekdays: list[PostingSlotOut] = []
-    groups: list[GroupStatOut] = []
-
-
-def _number(value: object) -> float | None:
-    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
-
-
-def _rounded(value: float | None) -> float | None:
-    return None if value is None else round(value, 2)
-
-
-def _slot_out(slot: PostingSlot) -> PostingSlotOut:
-    return PostingSlotOut(**asdict(slot))
-
-
-def _group_out(group: GroupStat) -> GroupStatOut:
-    return GroupStatOut(**asdict(group))
 
 
 @router.get("/content-analysis", response_model=ContentAnalysisOut)
@@ -285,8 +181,10 @@ async def get_content_analysis(channel_id: str, db: AsyncIOMotorDatabase = Depen
         meta = doc.get("metadata") or {}
         media_id = doc["instagram_media_id"]
         published = parse_published_at(doc.get("published_at"))
-        views = _number(meta.get("views"))
-        through = watch_through(_number(meta.get("avg_view_duration_seconds")), _number(meta.get("duration_seconds")))
+        views = number_or_none(meta.get("views"))
+        through = watch_through(
+            number_or_none(meta.get("avg_view_duration_seconds")), number_or_none(meta.get("duration_seconds"))
+        )
         reel = ReelAnalysisOut(
             media_id=media_id,
             video_id=doc.get("video_id"),
@@ -295,29 +193,29 @@ async def get_content_analysis(channel_id: str, db: AsyncIOMotorDatabase = Depen
             category=doc.get("category"),
             published_at=to_ist_iso(published),
             views=views,
-            skip_rate=_number(meta.get("skip_rate")),
-            avg_watch_seconds=_number(meta.get("avg_view_duration_seconds")),
-            duration_seconds=_number(meta.get("duration_seconds")),
+            skip_rate=number_or_none(meta.get("skip_rate")),
+            avg_watch_seconds=number_or_none(meta.get("avg_view_duration_seconds")),
+            duration_seconds=number_or_none(meta.get("duration_seconds")),
             watch_through=None if through is None else round(through, 3),
-            shares_per_1k=_rounded(per_1k(_number(meta.get("shares")), views)),
-            saves_per_1k=_rounded(per_1k(_number(meta.get("saves")), views)),
-            likes_per_1k=_rounded(per_1k(_number(meta.get("likes")), views)),
-            comments_per_1k=_rounded(per_1k(_number(meta.get("comments")), views)),
-            reach=_number(meta.get("reach")),
-            likes=_number(meta.get("likes")),
-            comments=_number(meta.get("comments")),
-            shares=_number(meta.get("shares")),
-            saves=_number(meta.get("saves")),
-            watch_hours=_number(meta.get("estimated_hours_watched")),
-            views_per_reach=_number(meta.get("views_per_reach")),
-            engagement_rate=_number(meta.get("engagement_rate")),
-            estimated_follows=_number(meta.get("estimated_follows")),
+            shares_per_1k=rounded(per_1k(number_or_none(meta.get("shares")), views)),
+            saves_per_1k=rounded(per_1k(number_or_none(meta.get("saves")), views)),
+            likes_per_1k=rounded(per_1k(number_or_none(meta.get("likes")), views)),
+            comments_per_1k=rounded(per_1k(number_or_none(meta.get("comments")), views)),
+            reach=number_or_none(meta.get("reach")),
+            likes=number_or_none(meta.get("likes")),
+            comments=number_or_none(meta.get("comments")),
+            shares=number_or_none(meta.get("shares")),
+            saves=number_or_none(meta.get("saves")),
+            watch_hours=number_or_none(meta.get("estimated_hours_watched")),
+            views_per_reach=number_or_none(meta.get("views_per_reach")),
+            engagement_rate=number_or_none(meta.get("engagement_rate")),
+            estimated_follows=number_or_none(meta.get("estimated_follows")),
             follow_quality=meta.get("follow_estimate_quality"),
-            views_24h=_number(meta.get("views_24h")),
-            views_48h=_number(meta.get("views_48h")),
-            views_7d=_number(meta.get("views_7d")),
-            hours_to_half_views=_number(meta.get("hours_to_half_views")),
-            hours_to_90_views=_number(meta.get("hours_to_90_views")),
+            views_24h=number_or_none(meta.get("views_24h")),
+            views_48h=number_or_none(meta.get("views_48h")),
+            views_7d=number_or_none(meta.get("views_7d")),
+            hours_to_half_views=number_or_none(meta.get("hours_to_half_views")),
+            hours_to_90_views=number_or_none(meta.get("hours_to_90_views")),
             picking_up=meta.get("picking_up") if isinstance(meta.get("picking_up"), bool) else None,
         )
         reels.append(reel)
@@ -341,7 +239,7 @@ async def get_content_analysis(channel_id: str, db: AsyncIOMotorDatabase = Depen
     return ContentAnalysisOut(
         channel_id=channel_id,
         reels=reels,
-        posting_hours=[_slot_out(s) for s in hours],
-        posting_weekdays=[_slot_out(s) for s in weekdays],
-        groups=[_group_out(g) for g in content_groups(summaries, params)],
+        posting_hours=[slot_out(s) for s in hours],
+        posting_weekdays=[slot_out(s) for s in weekdays],
+        groups=[group_out(g) for g in content_groups(summaries, params)],
     )
