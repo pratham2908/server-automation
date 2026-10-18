@@ -8,32 +8,52 @@ NOW = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
 
 
 def _video(**over):
-    base = {"video_id": "v", "story_slug": "s", "scheduled_at": (NOW - timedelta(minutes=5)).replace(tzinfo=None)}
+    base = {
+        "video_id": "v",
+        "story_slug": "s",
+        "status": "published",
+        "scheduled_at": (NOW - timedelta(minutes=5)).replace(tzinfo=None),
+    }
     return {**base, **over}
 
 
-def test_normal_reel_is_due_once_live_and_unticked():
-    assert kit.reminders_due([_video()], NOW)
+def _ago(**delta):
+    return (NOW - timedelta(**delta)).replace(tzinfo=None)
 
 
-def test_normal_reel_not_due_before_it_is_live():
-    assert not kit.reminders_due([_video(scheduled_at=(NOW + timedelta(hours=1)).replace(tzinfo=None))], NOW)
+def test_go_live_email_is_due_once_a_normal_reel_is_live():
+    assert kit.go_live_due([_video()], NOW)
+
+
+def test_go_live_email_waits_for_publishing_and_skips_trials_ticked_and_sent():
+    assert not kit.go_live_due([_video(status="scheduled")], NOW)
+    assert not kit.go_live_due([_video(trial_graduation="MANUAL")], NOW)
+    assert not kit.go_live_due([_video(story_scheduled_at=NOW)], NOW)
+    assert not kit.go_live_due([_video(story_live_emailed_at=NOW)], NOW)
+    assert not kit.go_live_due([_video(story_slug=None)], NOW)
+
+
+def test_a_reel_live_for_hours_gets_no_stale_prompt():
+    assert not kit.go_live_due([_video(scheduled_at=_ago(hours=7))], NOW)
+
+
+def test_normal_reel_reminder_comes_two_and_a_half_hours_after_the_live_email():
+    assert not kit.reminders_due([_video()], NOW)  # never emailed
+    assert not kit.reminders_due([_video(story_live_emailed_at=_ago(hours=2))], NOW)
+    assert kit.reminders_due([_video(story_live_emailed_at=_ago(hours=3))], NOW)
 
 
 def test_ticked_or_already_reminded_is_left_alone():
-    assert not kit.reminders_due([_video(story_scheduled_at=NOW)], NOW)
-    assert not kit.reminders_due([_video(story_reminded_at=NOW)], NOW)
-
-
-def test_reel_without_story_or_archived_is_left_alone():
-    assert not kit.reminders_due([_video(story_slug=None)], NOW)
-    assert not kit.reminders_due([_video(status="archived")], NOW)
+    sent = _ago(hours=3)
+    assert not kit.reminders_due([_video(story_live_emailed_at=sent, story_scheduled_at=NOW)], NOW)
+    assert not kit.reminders_due([_video(story_live_emailed_at=sent, story_reminded_at=NOW)], NOW)
+    assert not kit.reminders_due([_video(story_live_emailed_at=sent, status="archived")], NOW)
 
 
 def test_trial_waits_for_graduation_plus_three_hours():
     trial = {"trial_graduation": "MANUAL", "trial_check_state": "met"}
-    fresh = _video(**trial, trial_check_checked_at=(NOW - timedelta(hours=1)).replace(tzinfo=None))
-    old = _video(**trial, trial_check_checked_at=(NOW - timedelta(hours=4)).replace(tzinfo=None))
+    fresh = _video(**trial, trial_check_checked_at=_ago(hours=1))
+    old = _video(**trial, trial_check_checked_at=_ago(hours=4))
     assert not kit.reminders_due([fresh], NOW)
     assert kit.reminders_due([old], NOW)
 
@@ -44,16 +64,19 @@ def test_trial_that_has_not_graduated_never_gets_one():
 
 
 def test_nothing_after_the_page_has_dropped_the_reel():
-    stale = _video(scheduled_at=(NOW - timedelta(days=4)).replace(tzinfo=None))
+    stale = _video(story_live_emailed_at=_ago(days=4))
     assert not kit.reminders_due([stale], NOW)
 
 
-def test_reminder_email_says_so():
-    subject, text, _ = kit.kit_email([kit.KitItem("v", "s", "A reel", NOW)], "https://x/s/t", reminder=True)
-    assert subject.startswith("Story not scheduled yet") and "not ticked" in text
+def test_emails_say_what_they_are():
+    item = kit.KitItem("v", "s", "A reel", NOW)
+    subject, text, _ = kit.kit_email([item], "https://x/s/t")
+    assert subject == "Post this story now: 1 reel" and "just went live" in text
+    subject, text, _ = kit.kit_email([item], "https://x/s/t", reminder=True)
+    assert subject.startswith("Story not posted yet") and "not ticked as posted" in text
 
 
-def test_send_story_reminders_emails_once_then_marks(monkeypatch):
+def test_send_story_emails_prompts_then_reminds_each_exactly_once(monkeypatch):
     import asyncio
 
     from app.services import story_reminder
@@ -65,12 +88,16 @@ def test_send_story_reminders_emails_once_then_marks(monkeypatch):
     doc = {"_id": 1, "channel_id": "c", **_video()}
 
     class Cursor:
+        def __init__(self, stamp):
+            self.stamp = stamp
+
         async def to_list(self, length=None):
-            return [d for d in [doc] if "story_reminded_at" not in d]
+            return [] if self.stamp in doc else [doc]
 
     class Videos:
         def find(self, q):
-            return Cursor()
+            stamp = next(k for k in q if k in ("story_live_emailed_at", "story_reminded_at"))
+            return Cursor(stamp)
 
         async def update_one(self, key, update):
             doc.update(update["$set"])
@@ -82,6 +109,8 @@ def test_send_story_reminders_emails_once_then_marks(monkeypatch):
         return True
 
     db = type("Db", (), {"videos": Videos()})()
-    assert asyncio.run(story_reminder.send_story_reminders(db, send, NOW)) == 1
-    assert asyncio.run(story_reminder.send_story_reminders(db, send, NOW)) == 0
-    assert len(sent) == 1 and doc["story_reminded_at"] == NOW
+    run = lambda at: asyncio.run(story_reminder.send_story_emails(db, send, at))  # noqa: E731
+    assert run(NOW) == 1 and sent == ["Post this story now: 1 reel"]
+    assert run(NOW + timedelta(hours=1)) == 0
+    assert run(NOW + timedelta(hours=3)) == 1 and sent[-1] == "Story not posted yet: 1 reel"
+    assert run(NOW + timedelta(hours=6)) == 0 and len(sent) == 2

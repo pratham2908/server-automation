@@ -1,14 +1,13 @@
-"""The story kit: everything the owner needs to schedule an Instagram story for a reel by hand.
+"""The story kit: everything the owner needs to post an Instagram story for a reel by hand.
 
-Instagram's API cannot add a link sticker, and stories can only be scheduled in the Meta Business Suite
-phone app, so the owner does it on the phone. This module is the pure part: the link, the time, the
+Instagram's API cannot add a link sticker, and Business Suite errors when the owner schedules a story,
+so the owner posts it live from the phone once the reel is out. This module is the pure part: the link, the time, the
 token, and the page and email markup. The routes and the database live in ``app/routers/story_kit.py``.
 
 Each channel has ONE story page behind an unguessable token, built live from the reels on every load:
-every reel whose story is still to come or went up in the last three days, plus trial reels that have
-graduated. Every email links to that same page. Each reel on it is a card with ONE button that, in one
+every reel that went live in the last three days, plus trial reels that have graduated. Every email links to that same page. Each reel on it is a card with ONE button that, in one
 tap, copies the story link and opens the iPhone share sheet with the video file so it can be saved to
-Photos (Business Suite's gallery picker cannot see Files, and is not in the share sheet). "Scheduled" is
+Photos (Business Suite's gallery picker cannot see Files, and is not in the share sheet). "Posted" is
 ticked on the server, so it holds on any device, and ticked reels sink to the bottom.
 """
 
@@ -42,7 +41,7 @@ class KitItem(NamedTuple):
     reel_time: datetime  # when the reel goes live, tz-aware
     # In the email: a link to the cover image. On the page: the cover's storage key (the page serves it itself).
     thumbnail_url: str | None = None
-    # Ticked "Scheduled" on the page.
+    # Ticked "Posted" on the page.
     done: bool = False
     # A trial reel that cleared its bar: its story goes up as soon as it is graduated, not at a set time.
     graduated: bool = False
@@ -86,16 +85,19 @@ def is_expired(expires_at: datetime, now: datetime) -> bool:
 
 
 def kit_email(items: list[KitItem], page_url: str, reminder: bool = False) -> tuple[str, str, str]:
-    """Subject, text and html for one scheduling run. One row per reel, one button to the kit.
+    """Subject, text and html for reels that are live and need a story posted. One row per reel.
 
-    ``reminder`` is the second send, for a story still unticked once its reel is live.
+    The first send is the go-live prompt; ``reminder`` is the second, for a story still unticked hours on.
     """
     n = len(items)
-    subject = f"Story not scheduled yet: {n} reel{'s' if n != 1 else ''}" if reminder else f"Stories to schedule: {n} reel{'s' if n != 1 else ''}"
-    lead = "now live, and the story is not ticked as scheduled yet" if reminder else "just scheduled"
-    lines = [f"{n} reel{'s' if n != 1 else ''} {lead}. Schedule a story for each:", ""]
+    s = "s" if n != 1 else ""
+    if reminder:
+        subject, lead = f"Story not posted yet: {n} reel{s}", "live for a while, and the story is not ticked as posted yet"
+    else:
+        subject, lead = f"Post this story now: {n} reel{s}", "just went live"
+    lines = [f"{n} reel{s} {lead}. Post a story for each:", ""]
     for it in items:
-        lines.append(f"- {it.title}: story at {day_clock(it.story_time)}")
+        lines.append(f"- {it.title}: live since {clock(it.reel_time)}")
     lines += ["", f"Open on your phone: {page_url}", "", "The page works for 3 days."]
     rows = "".join(
         f'<tr><td style="padding:12px 0;border-top:1px solid {_LINE};font-family:{_FONT};color:{_INK}">'
@@ -105,14 +107,14 @@ def kit_email(items: list[KitItem], page_url: str, reminder: bool = False) -> tu
             else ""
         )
         + f'<div style="font-size:15px;font-weight:600">{escape(_short(it.title))}</div>'
-        f'<div style="font-size:14px;color:{_MUTED};margin-top:4px">Schedule the story for: '
-        f'<b style="color:{_INK}">{escape(day_clock(it.story_time))}</b></div></td></tr>'
+        f'<div style="font-size:14px;color:{_MUTED};margin-top:4px">Live since '
+        f'<b style="color:{_INK}">{escape(clock(it.reel_time))}</b></div></td></tr>'
         for it in items
     )
     html = (
         f'<div style="background:{_PAGE};padding:16px"><table role="presentation" width="100%" style="max-width:480px;'
         f'margin:0 auto;background:{_CARD};border-radius:12px;padding:20px;font-family:{_FONT}"><tr><td>'
-        f'<div style="font-size:18px;font-weight:700;color:{_INK}">{n} stor{"ies" if n != 1 else "y"} to schedule</div>'
+        f'<div style="font-size:18px;font-weight:700;color:{_INK}">{n} stor{"ies" if n != 1 else "y"} to post</div>'
         f'<table role="presentation" width="100%" style="margin-top:12px">{rows}</table>'
         f'<a href="{escape(page_url, quote=True)}" style="display:block;text-align:center;margin-top:18px;padding:14px;'
         f'background:{_ACCENT};color:#fff;border-radius:10px;text-decoration:none;font-weight:600">Get stories</a>'
@@ -127,14 +129,14 @@ def story_card_html(page_url: str, story_when: str) -> str:
     return (
         f'<div style="margin:16px 0;padding:14px;border:1px solid {_LINE};border-radius:10px;font-family:{_FONT}">'
         f'<div style="font-size:14px;color:{_INK}"><b>Story for this reel</b></div>'
-        f'<div style="font-size:13px;color:{_MUTED};margin:4px 0 10px">Schedule the story for: {escape(story_when)}</div>'
+        f'<div style="font-size:13px;color:{_MUTED};margin:4px 0 10px">Post the story: {escape(story_when)}</div>'
         f'<a href="{escape(page_url, quote=True)}" style="display:inline-block;padding:10px 18px;background:{_ACCENT};'
         'color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Get story</a></div>'
     )
 
 
 def story_card_text(page_url: str, story_when: str) -> str:
-    return f"Story for this reel. Schedule it for: {story_when}\n{page_url}\n"
+    return f"Story for this reel. Post it: {story_when}\n{page_url}\n"
 
 
 def _short(title: str, limit: int = 90) -> str:
@@ -205,14 +207,14 @@ document.querySelectorAll('.done input').forEach(box => {
 def kit_page(token: str, items: list[KitItem]) -> str:
     todo = [it for it in items if not it.done]
     done = [it for it in items if it.done]
-    body = "".join(_card(token, it) for it in todo) or '<p class="when">Nothing to schedule right now.</p>'
+    body = "".join(_card(token, it) for it in todo) or '<p class="when">Nothing to post right now.</p>'
     if done:
-        body += f'<h2 class="section">Scheduled ({len(done)})</h2>' + "".join(_card(token, it) for it in done)
+        body += f'<h2 class="section">Posted ({len(done)})</h2>' + "".join(_card(token, it) for it in done)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        '<meta name="robots" content="noindex,nofollow"><title>Stories to schedule</title>'
-        f'<style>{_PAGE_CSS}</style></head><body><div class="wrap"><h1>Stories to schedule</h1>{body}</div>'
+        '<meta name="robots" content="noindex,nofollow"><title>Stories to post</title>'
+        f'<style>{_PAGE_CSS}</style></head><body><div class="wrap"><h1>Stories to post</h1>{body}</div>'
         f"<script>{_PAGE_JS}</script></body></html>"
     )
 
@@ -222,9 +224,9 @@ def _card(token: str, it: KitItem) -> str:
     base = f"/s/{token}/{vid}"
     cover = f'<img class="cover" src="{base}/cover" alt="">' if it.thumbnail_url else ""
     when = (
-        "Graduated: schedule the story <b>as soon as you share it to followers</b>"
+        "Graduated: post the story <b>as soon as you share it to followers</b>"
         if it.graduated
-        else f"Schedule the story for <b>{escape(day_clock(it.story_time))}</b>"
+        else f"Live since <b>{escape(clock(it.reel_time))}</b>: post the story now"
     )
     checked = " checked" if it.done else ""
     return (
@@ -235,7 +237,7 @@ def _card(token: str, it: KitItem) -> str:
         f'<div class="sticker">Sticker text: {escape(STICKER_TEXT)}</div>'
         f'<button id="btn-{vid}" onclick="go(\'{vid}\')" disabled>Preparing video…</button>'
         f'<div class="msg" id="msg-{vid}"></div>'
-        f'<label class="done"><input type="checkbox" data-id="{vid}" data-url="{base}/done"{checked}> Scheduled</label></div>'
+        f'<label class="done"><input type="checkbox" data-id="{vid}" data-url="{base}/done"{checked}> Posted</label></div>'
     )
 
 
@@ -250,7 +252,7 @@ def page_items(videos: list[dict[str, Any]], now: datetime) -> list[KitItem]:
     items: list[KitItem] = []
     for v in videos:
         slug, scheduled = v.get("story_slug"), v.get("scheduled_at")
-        if not slug or not isinstance(scheduled, datetime) or v.get("status") == "archived":
+        if not slug or not isinstance(scheduled, datetime) or v.get("status") != "published":
             continue
         reel_time = reel_time_ist(scheduled)
         graduated = bool(v.get("trial_graduation")) and v.get("trial_check_state") == "met"
@@ -277,19 +279,40 @@ def page_items(videos: list[dict[str, Any]], now: datetime) -> list[KitItem]:
 
 # A graduated trial's story goes up as soon as it graduates; the reminder gives that a few hours first.
 GRADUATED_REMINDER_DELAY = timedelta(hours=3)
+# A normal reel's reminder comes this long after its go-live email.
+LIVE_REMINDER_DELAY = timedelta(hours=2, minutes=30)
+# A reel that went live longer ago than this gets no go-live email: it would be a stale prompt.
+LIVE_EMAIL_WINDOW = timedelta(hours=6)
+
+
+def _owes_story(v: dict[str, Any]) -> bool:
+    return bool(v.get("story_slug")) and isinstance(v.get("scheduled_at"), datetime) and v.get("status") == "published"
+
+
+def go_live_due(videos: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    """Normal reels that are live and have not had their "post this story now" email yet."""
+    now = assume_utc(now)
+    return [
+        v
+        for v in videos
+        if _owes_story(v)
+        and not v.get("trial_graduation")
+        and v.get("story_scheduled_at") is None
+        and v.get("story_live_emailed_at") is None
+        and now - reel_time_ist(v["scheduled_at"]) <= LIVE_EMAIL_WINDOW
+    ]
 
 
 def reminders_due(videos: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
-    """Videos whose story is still unticked when it should be done, and not yet reminded about.
+    """Videos whose story is still unticked hours after its prompt, and not yet reminded about.
 
-    A normal reel is due once it is live; a graduated trial three hours after it graduated. Each gets
-    one reminder (``story_reminded_at``), and none after the page has dropped it three days on.
+    A normal reel is due 2.5 hours after its go-live email; a graduated trial 3 hours after it graduated.
+    Each gets one reminder (``story_reminded_at``), and none after the page has dropped it three days on.
     """
     now = assume_utc(now)
     due = []
     for v in videos:
-        scheduled = v.get("scheduled_at")
-        if not v.get("story_slug") or not isinstance(scheduled, datetime) or v.get("status") == "archived":
+        if not _owes_story(v) or v.get("status") == "archived":
             continue
         if v.get("story_scheduled_at") is not None or v.get("story_reminded_at") is not None:
             continue
@@ -297,9 +320,12 @@ def reminders_due(videos: list[dict[str, Any]], now: datetime) -> list[dict[str,
             checked = v.get("trial_check_checked_at")
             if v.get("trial_check_state") != "met" or not isinstance(checked, datetime):
                 continue
-            ready, anchor = assume_utc(checked) + GRADUATED_REMINDER_DELAY, assume_utc(checked)
+            anchor, ready = assume_utc(checked), assume_utc(checked) + GRADUATED_REMINDER_DELAY
         else:
-            ready = anchor = reel_time_ist(scheduled)
+            emailed = v.get("story_live_emailed_at")
+            if not isinstance(emailed, datetime):
+                continue
+            anchor, ready = assume_utc(emailed), assume_utc(emailed) + LIVE_REMINDER_DELAY
         if ready <= now and anchor + KIT_LIFETIME > now:
             due.append(v)
     return due

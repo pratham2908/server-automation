@@ -1,7 +1,7 @@
-"""Emails the owner once more when a reel's story is still unticked after the reel is live.
+"""Story emails that follow the reel going live: the "post this story now" prompt, then one reminder.
 
-Runs on the trial graduation cron's tick. State is on the video (``story_reminded_at``), so a restart
-neither loses a reminder nor sends it twice.
+Runs on the trial graduation cron's tick. State is on the video (``story_live_emailed_at``,
+``story_reminded_at``), so a restart neither loses an email nor sends it twice.
 """
 
 from __future__ import annotations
@@ -18,21 +18,36 @@ logger = get_logger(__name__)
 SendEmail = Callable[[str, str, str], Awaitable[bool]]
 
 
-async def send_story_reminders(db: Any, send: SendEmail, now: datetime | None = None) -> int:
-    """Send one reminder per channel per tick for every due, unticked story. Returns reels reminded."""
+async def send_story_emails(db: Any, send: SendEmail, now: datetime | None = None) -> int:
+    """Send the go-live prompt, then any reminder that has come due. Returns emails' worth of reels."""
+    now = now or datetime.now(timezone.utc)
+    return await _send_due(db, send, now, kit.go_live_due, "story_live_emailed_at", reminder=False) + await _send_due(
+        db, send, now, kit.reminders_due, "story_reminded_at", reminder=True
+    )
+
+
+async def _send_due(
+    db: Any,
+    send: SendEmail,
+    now: datetime,
+    pick: Callable[[list[dict[str, Any]], datetime], list[dict[str, Any]]],
+    stamp: str,
+    reminder: bool,
+) -> int:
+    """One email per channel for every video ``pick`` finds due, then stamp them. Returns reels emailed."""
     from app.routers.story_kit import channel_page_url
 
-    now = now or datetime.now(timezone.utc)
     videos = await db.videos.find(
         {
             "story_slug": {"$exists": True, "$nin": [None, ""]},
             "story_scheduled_at": {"$exists": False},
-            "story_reminded_at": {"$exists": False},
+            stamp: {"$exists": False},
+            "status": "published",
             "scheduled_at": {"$gte": now - kit.KIT_LIFETIME - kit.GRADUATED_REMINDER_DELAY},
         }
     ).to_list(length=200)
     by_channel: dict[str, list[dict[str, Any]]] = {}
-    for v in kit.reminders_due(videos, now):
+    for v in pick(videos, now):
         by_channel.setdefault(v.get("channel_id", ""), []).append(v)
 
     reminded = 0
@@ -41,11 +56,11 @@ async def send_story_reminders(db: Any, send: SendEmail, now: datetime | None = 
             kit.KitItem(v["video_id"], v["story_slug"], v.get("title") or v["story_slug"], kit.reel_time_ist(v["scheduled_at"]))
             for v in due
         ]
-        subject, text, html = kit.kit_email(items, await channel_page_url(db, channel_id), reminder=True)
+        subject, text, html = kit.kit_email(items, await channel_page_url(db, channel_id), reminder=reminder)
         if not await send(subject, text, html):
-            logger.warning("Story reminder for %s not sent; will retry next tick", channel_id)
+            logger.warning("Story email for %s not sent; will retry next tick", channel_id)
             continue
         for v in due:
-            await db.videos.update_one({"_id": v["_id"]}, {"$set": {"story_reminded_at": now}})
+            await db.videos.update_one({"_id": v["_id"]}, {"$set": {stamp: now}})
         reminded += len(due)
     return reminded
