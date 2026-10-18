@@ -48,11 +48,11 @@ class TestIsAutoSyncDue:
         assert is_auto_sync_due(_channel({"enabled": True, "interval_hours": 6}), NOW) is True
 
     def test_not_due_inside_interval(self):
-        ch = _channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=5, minutes=59))
+        ch = _channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=23, minutes=59))
         assert is_auto_sync_due(ch, NOW) is False
 
     def test_due_once_interval_elapses(self):
-        ch = _channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=6))
+        ch = _channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=24))
         assert is_auto_sync_due(ch, NOW) is True
 
     def test_naive_mongo_timestamp_is_read_as_utc(self):
@@ -77,7 +77,7 @@ class TestChannelUpdateValidation:
 
 
 class TestInstagramCadence:
-    """Instagram syncs hourly while a reel is in its first week, daily otherwise; YouTube keeps its interval."""
+    """Instagram and YouTube sync hourly while a video is in its first week, daily otherwise."""
 
     def _ig(self, last: datetime) -> dict:
         return {**_channel({"enabled": True, "interval_hours": 6}, last=last), "platform": "instagram"}
@@ -96,9 +96,10 @@ class TestInstagramCadence:
         # Last synced 3h ago on the daily cadence: a reel going up makes it due now.
         assert is_auto_sync_due(self._ig(NOW - timedelta(hours=3)), NOW, has_fresh_reel=True) is True
 
-    def test_youtube_keeps_its_interval(self):
-        ch = _channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=2))
-        assert is_auto_sync_due(ch, NOW, has_fresh_reel=True) is False
+    def test_youtube_follows_the_same_cadence(self):
+        ch = {**_channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=2)), "platform": "youtube"}
+        assert is_auto_sync_due(ch, NOW, has_fresh_reel=True) is True
+        assert is_auto_sync_due(ch, NOW, has_fresh_reel=False) is False
 
 
 class TestNeedsReelInsights:

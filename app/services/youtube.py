@@ -274,6 +274,18 @@ class YouTubeService:
 
         return analytics
 
+    def analytics_report(self, **query: str | int) -> tuple[list[str], list[list[Any]]]:
+        """One YouTube Analytics ``reports.query`` for this channel: column names and rows.
+
+        Raises when the query fails, so the caller decides what a failure means;
+        an empty ``rows`` is a real answer (YouTube withholds small-audience data).
+        """
+        if not self._youtube_analytics:
+            raise RuntimeError("YouTube Analytics is not available for this channel (missing analytics scope)")
+        response = self._execute(self._youtube_analytics.reports().query(ids="channel==MINE", **query))
+        headers = [h["name"] for h in response.get("columnHeaders", [])]
+        return headers, response.get("rows", []) or []
+
     def get_video_reach_analytics(self, youtube_video_id: str) -> dict:
         """Fetch impressions and CTR for a single video (limited by YT API)"""
         if not self._youtube_analytics:

@@ -43,7 +43,10 @@ from app.services.schedule_operation import (
 from app.services.scheduler import compute_schedule_slots
 from app.services.todo_engine import recompute_category
 from app.services.trial_graduation import TrialCheck, edit_running_check, trial_fields
+from app.services.youtube import YouTubeService
+from app.services.youtube_analytics_sync import refresh_youtube_analytics
 from app.services.youtube_schedule import error_reason, publish_at_for
+from app.services.youtube_snapshots import record_youtube_snapshots
 from app.timezone import IST, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
@@ -1621,7 +1624,7 @@ class VideoService:
             raise ValueError("Channel not found")
         platform = get_channel_platform(channel)
         if platform == "youtube":
-            result = await self._sync_youtube_videos(channel_id, channel, instructions)
+            result = await self._sync_youtube_videos(channel_id, channel, instructions, incremental)
         elif platform == "instagram":
             result = await self._sync_instagram_videos(channel_id, channel, instructions, incremental)
         else:
@@ -1629,7 +1632,9 @@ class VideoService:
         await update_channel_task_status(self.db, channel_id, "video_sync")
         return result
 
-    async def _sync_youtube_videos(self, channel_id: str, channel: dict, instructions: str | None) -> dict[str, Any]:
+    async def _sync_youtube_videos(
+        self, channel_id: str, channel: dict, instructions: str | None, incremental: bool = False
+    ) -> dict[str, Any]:
         yt = await self._get_youtube_service(channel_id)
         if not yt:
             raise ChannelNotConnectedError("No YouTube token")
@@ -1661,6 +1666,7 @@ class VideoService:
                 "metadata.like_rate": v.get("like_rate"),
                 "metadata.comment_rate": v.get("comment_rate"),
                 "metadata.youtube_privacy_status": v.get("youtube_privacy_status"),
+                "metadata.duration_seconds": v.get("duration_seconds"),
                 "status": target_status,
                 "updated_at": now_ist(),
             }
@@ -1685,6 +1691,7 @@ class VideoService:
             )
 
         if not new_vids:
+            await self._refresh_youtube_insights(yt, channel_id, channel, yt_vids, incremental)
             return {"ok": True, "synced": 0, "missing": missing}
         schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
         cats = [
@@ -1734,6 +1741,7 @@ class VideoService:
                             "like_rate": v.get("like_rate"),
                             "comment_rate": v.get("comment_rate"),
                             "youtube_privacy_status": v.get("youtube_privacy_status"),
+                            "duration_seconds": v.get("duration_seconds"),
                         },
                         "content_params": ana.get("content_params"),
                         "verification_status": "unverified",
@@ -1741,7 +1749,31 @@ class VideoService:
                     }
                 )
                 inserted += 1
+        await self._refresh_youtube_insights(yt, channel_id, channel, yt_vids, incremental)
         return {"ok": True, "synced": inserted, "missing": missing}
+
+    async def _refresh_youtube_insights(
+        self,
+        yt: YouTubeService,
+        channel_id: str,
+        channel: dict[str, Any],
+        fetched: list[dict[str, Any]],
+        incremental: bool,
+    ) -> None:
+        """Live-count readings every sync and the Analytics numbers once a day, after the videos are saved.
+
+        Logged, not raised, for the same reason as the Instagram account insights:
+        the videos' own numbers are already stored.
+        """
+        now = now_ist()
+        try:
+            await record_youtube_snapshots(self.db, channel_id, fetched, incremental, now)
+        except Exception:
+            logger.exception("YouTube snapshots not recorded for '%s'", channel_id)
+        try:
+            await refresh_youtube_analytics(self.db, yt, channel_id, channel, now)
+        except Exception:
+            logger.exception("YouTube Analytics not refreshed for '%s'", channel_id)
 
     async def _sync_instagram_videos(
         self, channel_id: str, channel: dict, instructions: str | None, incremental: bool = False
@@ -1802,7 +1834,13 @@ class VideoService:
             else:
                 existing = await self.db.videos.find_one(
                     {"channel_id": channel_id, "instagram_media_id": mid},
-                    {"thumbnail_url": 1, "trial_graduation": 1, "shared_to_feed": 1, "graduated_at": 1, "graduation_time_unknown": 1},
+                    {
+                        "thumbnail_url": 1,
+                        "trial_graduation": 1,
+                        "shared_to_feed": 1,
+                        "graduated_at": 1,
+                        "graduation_time_unknown": 1,
+                    },
                 )
                 thumb = self._instagram_reel_thumbnail_url(r)
                 set_doc: dict[str, Any] = {

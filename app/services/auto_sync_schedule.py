@@ -3,11 +3,13 @@
 Kept apart from the cron so the schedule can be tested without a database or
 a clock: every function takes the channel document and ``now`` as arguments.
 
-Instagram channels ignore ``interval_hours``: they sync hourly while any reel
-is in its first week — when its numbers move fastest and the view curve is
-worth reading hour by hour — and daily otherwise. The cron works out whether a
-channel has such a reel on every tick, so publishing one switches the channel
-to hourly without anything being stored. YouTube keeps its configured interval.
+Instagram and YouTube channels ignore ``interval_hours``: they sync hourly
+while any video is in its first week — when its numbers move fastest and the
+view curve is worth reading hour by hour — and daily otherwise. The cron works
+out whether a channel has such a video on every tick, so publishing one
+switches the channel to hourly without anything being stored. A sync costs a
+YouTube channel about two Data API units per 50 videos, so even hourly stays
+far inside the 10,000-unit daily quota.
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ def auto_sync_config(channel: dict[str, Any]) -> AutoSyncConfig:
 
 def sync_interval_hours(channel: dict[str, Any], has_fresh_reel: bool) -> int:
     """Hours between this channel's auto-syncs."""
-    if get_channel_platform(channel) == "instagram":
+    if get_channel_platform(channel) in ("instagram", "youtube"):
         return FRESH_INTERVAL_HOURS if has_fresh_reel else IDLE_INTERVAL_HOURS
     return auto_sync_config(channel).interval_hours
 
