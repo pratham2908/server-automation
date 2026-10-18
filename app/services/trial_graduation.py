@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -250,3 +250,44 @@ def edit_running_check(video: Mapping[str, Any], new_check: TrialCheck, now: dat
         "trial_check_due_at": next_at,
         "trial_check_attempts": 0,
     }
+
+
+# A reel is handed to followers only once its push among non-followers has stopped accelerating:
+# graduating DFS vs BFS while it was still climbing (+3.5k views an hour) was followed by a 10x drop.
+FALL_SHARE = 0.3
+MIN_GAP_HOURS = 0.05
+
+
+class Push(NamedTuple):
+    """How a trial reel's hourly view gain has moved."""
+
+    peak_rate: float
+    peak_at_hours: float
+    rate_now: float
+    peaked: bool
+
+
+def push_summary(published_at: datetime, readings: list[Mapping[str, Any]]) -> Push | None:
+    """Views per hour between readings, the best hour, and whether the push is over.
+
+    Reading zero is the publish moment at zero views, so the first hour counts as a rate too. The push has
+    peaked when the rate fell on two readings in a row, or is at most 30% of the best hour so far. Two
+    readings are the least that can say anything, so fewer returns "not peaked"; no readings, ``None``.
+    """
+    start = assume_utc(published_at)
+    points = [(start, 0.0)]
+    for r in sorted(readings, key=lambda r: assume_utc(r["at"])):
+        if r.get("views") is not None:
+            points.append((assume_utc(r["at"]), float(r["views"])))
+    rates: list[tuple[float, float]] = []  # (hours since publish at the reading, views per hour)
+    for (t0, v0), (t1, v1) in zip(points, points[1:], strict=False):
+        gap = (t1 - t0).total_seconds() / 3600
+        if gap >= MIN_GAP_HOURS:
+            rates.append(((t1 - start).total_seconds() / 3600, max(v1 - v0, 0.0) / gap))
+    if not rates:
+        return None
+    peak_hours, peak_rate = max(rates, key=lambda r: r[1])
+    now_rate = rates[-1][1]
+    fell_twice = len(rates) >= 3 and rates[-1][1] < rates[-2][1] < rates[-3][1]
+    collapsed = len(rates) >= 2 and rates[-1][1] < peak_rate and now_rate <= FALL_SHARE * peak_rate
+    return Push(peak_rate, peak_hours, now_rate, fell_twice or collapsed)
