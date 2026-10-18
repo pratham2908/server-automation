@@ -194,6 +194,19 @@ class ReelAnalysisOut(BaseModel):
     watch_through: float | None = None
     shares_per_1k: float | None = None
     saves_per_1k: float | None = None
+    likes_per_1k: float | None = None
+    comments_per_1k: float | None = None
+    # Lifetime counts, for charting one against another.
+    reach: float | None = None
+    likes: float | None = None
+    comments: float | None = None
+    shares: float | None = None
+    saves: float | None = None
+    watch_hours: float | None = None
+    # Plays per reached account; above 1 means people replayed it.
+    views_per_reach: float | None = None
+    # Interactions per reached account, as a percentage.
+    engagement_rate: float | None = None
     estimated_follows: float | None = None
     follow_quality: str | None = None
     views_24h: float | None = None
@@ -288,6 +301,16 @@ async def get_content_analysis(channel_id: str, db: AsyncIOMotorDatabase = Depen
             watch_through=None if through is None else round(through, 3),
             shares_per_1k=_rounded(per_1k(_number(meta.get("shares")), views)),
             saves_per_1k=_rounded(per_1k(_number(meta.get("saves")), views)),
+            likes_per_1k=_rounded(per_1k(_number(meta.get("likes")), views)),
+            comments_per_1k=_rounded(per_1k(_number(meta.get("comments")), views)),
+            reach=_number(meta.get("reach")),
+            likes=_number(meta.get("likes")),
+            comments=_number(meta.get("comments")),
+            shares=_number(meta.get("shares")),
+            saves=_number(meta.get("saves")),
+            watch_hours=_number(meta.get("estimated_hours_watched")),
+            views_per_reach=_number(meta.get("views_per_reach")),
+            engagement_rate=_number(meta.get("engagement_rate")),
             estimated_follows=_number(meta.get("estimated_follows")),
             follow_quality=meta.get("follow_estimate_quality"),
             views_24h=_number(meta.get("views_24h")),
