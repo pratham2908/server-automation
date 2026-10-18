@@ -487,7 +487,9 @@ class InstagramService:
         Paginates through ``/{ig_user_id}/media`` and filters by
         ``media_type`` to keep only video/reel content.
         """
-        fields = "id,caption,media_type,media_url,thumbnail_url,timestamp,permalink,like_count,comments_count"
+        fields = (
+            "id,caption,media_type,media_url,thumbnail_url,timestamp,permalink,like_count,comments_count,is_shared_to_feed"
+        )
         reels: list[dict[str, Any]] = []
         # /media is newest-first and cursor-paged, so posting during pagination
         # shifts everything down a slot and an item can come back on two

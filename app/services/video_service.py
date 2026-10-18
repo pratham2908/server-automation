@@ -32,6 +32,7 @@ from app.services.instagram_audience_sync import refresh_audience, refresh_stori
 from app.services.instagram_follow_sync import refresh_follow_estimates
 from app.services.instagram_reel_hourly import HOURLY_METRICS
 from app.services.instagram_reel_metrics import reel_metadata
+from app.services.instagram_reel_snapshot import graduation_fields, snapshot_values
 from app.services.r2 import R2Service
 from app.services.reel_duration_sync import refresh_reel_durations
 from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
@@ -1774,15 +1775,18 @@ class VideoService:
         insights_map = ig.get_reel_insights(to_read)
 
         new_vids = []
-        counts_by_media: dict[str, dict[str, int]] = {}
+        counts_by_media: dict[str, dict[str, float | int | bool]] = {}
         for r in ig_reels:
             mid = r["id"]
             ins = insights_map.get(mid, {})
 
             # Likes and comments come on the media object; everything else from insights.
             metadata = reel_metadata(r.get("like_count"), r.get("comments_count"), ins)
+            # Whether the reel is on the profile grid comes free with the listing for every reel.
+            shared = r.get("is_shared_to_feed")
+            shared = shared if isinstance(shared, bool) else None
             if "views" in metadata:
-                counts_by_media[mid] = {k: int(metadata[k]) for k in HOURLY_METRICS if k in metadata}
+                counts_by_media[mid] = snapshot_values(metadata, shared)
 
             if mid not in db_ids:
                 new_vids.append(
@@ -1798,7 +1802,7 @@ class VideoService:
             else:
                 existing = await self.db.videos.find_one(
                     {"channel_id": channel_id, "instagram_media_id": mid},
-                    {"thumbnail_url": 1},
+                    {"thumbnail_url": 1, "trial_graduation": 1, "shared_to_feed": 1, "graduated_at": 1, "graduation_time_unknown": 1},
                 )
                 thumb = self._instagram_reel_thumbnail_url(r)
                 set_doc: dict[str, Any] = {
@@ -1808,6 +1812,7 @@ class VideoService:
                 }
                 if mid in insights_map:
                     set_doc["insights_synced_at"] = now
+                set_doc.update(await self._graduation_update(channel_id, mid, existing or {}, shared, now))
                 if thumb and not self._has_thumbnail_url(existing):
                     set_doc["thumbnail_url"] = thumb
                 await self.db.videos.update_one(
@@ -1867,8 +1872,25 @@ class VideoService:
         await self._refresh_instagram_account_insights(ig, channel_id, channel, counts_by_media)
         return {"ok": True, "synced": inserted, "missing": missing}
 
+    async def _graduation_update(
+        self, channel_id: str, media_id: str, video: dict[str, Any], shared: bool | None, now: datetime
+    ) -> dict[str, Any]:
+        """Grid state and, for a known trial reel, when it was first seen on the grid."""
+        previous_at = None
+        if shared and video.get("trial_graduation") and video.get("shared_to_feed") is False:
+            # Only the rare moment a trial joins the grid needs the reading before it.
+            last = await self.db.instagram_reel_snapshots.find_one(
+                {"channel_id": channel_id, "media_id": media_id}, sort=[("at", -1)]
+            )
+            previous_at = last["at"] if last else None
+        return graduation_fields(video, shared, now, previous_at)
+
     async def _refresh_instagram_account_insights(
-        self, ig: InstagramService, channel_id: str, channel: dict[str, Any], counts_by_media: dict[str, dict[str, int]]
+        self,
+        ig: InstagramService,
+        channel_id: str,
+        channel: dict[str, Any],
+        counts_by_media: dict[str, dict[str, float | int | bool]],
     ) -> None:
         """Account totals, per-reel follow estimates, demographics, stories and reel lengths, after the reels are saved.
 
