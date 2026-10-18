@@ -56,11 +56,11 @@ async def refresh_follow_estimates(
     ig: InstagramService,
     channel_id: str,
     ig_user_id: str,
-    counts_by_media: Mapping[str, Mapping[str, int]],
+    counts_by_media: Mapping[str, Mapping[str, float | int | bool]],
 ) -> None:
     now = now_ist()
     if counts_by_media:
-        # Views drive the follow estimate; the other counts feed the hourly chart.
+        # Views drive the follow estimate; the rest is the reel's history, one full reading per sync.
         await db.instagram_reel_snapshots.insert_many(
             [
                 {"channel_id": channel_id, "media_id": media_id, "at": now, **counts}
