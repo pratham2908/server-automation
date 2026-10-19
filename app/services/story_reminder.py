@@ -12,6 +12,7 @@ from typing import Any
 
 from app.logger import get_logger
 from app.services import story_kit as kit
+from app.services.instagram_reel_snapshot import MEASURED_ONLY
 from app.timezone import assume_utc
 
 logger = get_logger(__name__)
@@ -80,7 +81,12 @@ async def _flip_note(db: Any, v: dict[str, Any]) -> dict[str, Any]:
         return {}
     before = (
         await db.instagram_reel_snapshots.find(
-            {"channel_id": v.get("channel_id"), "media_id": media_id, "at": {"$lte": v["graduated_at"]}}
+            {
+                "channel_id": v.get("channel_id"),
+                "media_id": media_id,
+                "at": {"$lte": v["graduated_at"]},
+                **MEASURED_ONLY,
+            }
         )
         .sort("at", -1)
         .to_list(length=2)
