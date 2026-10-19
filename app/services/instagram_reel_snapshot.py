@@ -17,6 +17,11 @@ from datetime import datetime
 from typing import Any
 
 # Whole-number counts, as the hourly chart reads them.
+# Rows the owner added from memory (for a reel with no early readings) are not measurements: they may
+# carry only a skip rate, so every read that sums, rates or graduates from snapshots must leave them out.
+RECALLED_SOURCE = "owner-recalled"
+MEASURED_ONLY: dict[str, Any] = {"source": {"$ne": RECALLED_SOURCE}}
+
 COUNT_METRICS = ("views", "likes", "comments", "shares", "saves")
 # Measures that are not counts: reach is whole accounts, the others carry decimals.
 MEASURE_METRICS = ("reach", "skip_rate", "avg_view_duration_seconds", "total_watch_time_seconds")

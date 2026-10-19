@@ -32,7 +32,7 @@ from app.services.instagram_audience_sync import refresh_audience, refresh_stori
 from app.services.instagram_follow_sync import refresh_follow_estimates
 from app.services.instagram_reel_hourly import HOURLY_METRICS
 from app.services.instagram_reel_metrics import reel_metadata
-from app.services.instagram_reel_snapshot import graduation_fields, snapshot_values
+from app.services.instagram_reel_snapshot import MEASURED_ONLY, graduation_fields, snapshot_values
 from app.services.r2 import R2Service
 from app.services.reel_duration_sync import refresh_reel_durations
 from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
@@ -1918,7 +1918,7 @@ class VideoService:
         if shared and video.get("trial_graduation") and video.get("shared_to_feed") is False:
             # Only the rare moment a trial joins the grid needs the reading before it.
             last = await self.db.instagram_reel_snapshots.find_one(
-                {"channel_id": channel_id, "media_id": media_id}, sort=[("at", -1)]
+                {"channel_id": channel_id, "media_id": media_id, **MEASURED_ONLY}, sort=[("at", -1)]
             )
             previous_at = last["at"] if last else None
         return graduation_fields(video, shared, now, previous_at)

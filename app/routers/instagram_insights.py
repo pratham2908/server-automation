@@ -38,6 +38,7 @@ from app.services.instagram_content_analysis import (
     watch_through,
 )
 from app.services.instagram_reel_hourly import HOURLY_METRICS, MAX_GAP_HOURS, MAX_HOURS, MetricReading, hourly_gains
+from app.services.instagram_reel_snapshot import MEASURED_ONLY
 from app.timezone import assume_utc, now_ist, to_ist_iso
 
 router = APIRouter(
@@ -145,7 +146,7 @@ async def get_reel_hourly(channel_id: str, media_id: str, db: AsyncIOMotorDataba
     # One reading before the window is needed to place the window's first hour.
     since = now_ist() - timedelta(hours=MAX_HOURS) - timedelta(days=1)
     cursor = db.instagram_reel_snapshots.find(
-        {"channel_id": channel_id, "media_id": media_id, "at": {"$gte": since}}
+        {"channel_id": channel_id, "media_id": media_id, "at": {"$gte": since}, **MEASURED_ONLY}
     ).sort("at", 1)
     readings = [
         MetricReading(

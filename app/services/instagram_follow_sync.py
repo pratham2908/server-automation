@@ -32,6 +32,7 @@ from app.services.instagram_follow_attribution import (
     daily_attribution,
     estimates_from_timelines,
 )
+from app.services.instagram_reel_snapshot import MEASURED_ONLY
 from app.timezone import IST, assume_utc, now_ist
 
 logger = get_logger(__name__)
@@ -171,7 +172,7 @@ async def _write_estimates(db: AsyncIOMotorDatabase, channel_id: str) -> None:
         # first sync place its views on the days since it went up.
         readings[video["instagram_media_id"]] = [ViewReading(at=published, views=0.0)] if published else []
     async for snap in db.instagram_reel_snapshots.find(
-        {"channel_id": channel_id}, {"media_id": 1, "at": 1, "views": 1}
+        {"channel_id": channel_id, **MEASURED_ONLY}, {"media_id": 1, "at": 1, "views": 1}
     ):
         if snap["media_id"] in readings:
             readings[snap["media_id"]].append(ViewReading(at=assume_utc(snap["at"]), views=float(snap["views"])))
