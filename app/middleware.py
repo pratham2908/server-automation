@@ -11,6 +11,13 @@ from app.services.metrics import metrics_service
 logger = get_logger("http")
 
 
+def _route_template(request: Request) -> str | None:
+    """The matched route's template (``/channels/{channel_id}/…``), or None when no route matched."""
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    return path if isinstance(path, str) else None
+
+
 class StructuredLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Generate a unique request ID
@@ -50,7 +57,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             # Record high-level metrics for performance monitoring (unless it's a meta-endpoint)
             if not is_meta_endpoint:
                 logger.info(f"[REQUEST] {method} {path} | {status_code} | {duration:.2f}ms")
-                metrics_service.record_request(method, path, status_code, duration)
+                metrics_service.record_request(method, path, status_code, duration, route=_route_template(request))
             return response
 
         # Capture all headers as-is
@@ -102,7 +109,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             }
             if not is_meta_endpoint:
                 logger.error(f"REQUEST_BOX: {json.dumps(error_data)}")
-                metrics_service.record_request(method, path, 500, duration)
+                metrics_service.record_request(method, path, 500, duration, route=_route_template(request))
             raise e
 
         duration = (time.time() - start_time) * 1000
@@ -123,6 +130,6 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         if not is_meta_endpoint:
             logger.info(f"REQUEST_BOX: {json.dumps(log_data)}")
             # Record the standard metrics
-            metrics_service.record_request(method, path, status_code, duration)
+            metrics_service.record_request(method, path, status_code, duration, route=_route_template(request))
 
         return response

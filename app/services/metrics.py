@@ -2,6 +2,9 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
+# Endpoint-stats bucket for requests that matched no route (mostly scanners probing for files).
+UNMATCHED_ROUTE = "(no matching route)"
+
 
 class MetricsService:
     def __init__(self):
@@ -43,15 +46,20 @@ class MetricsService:
         self.external_last_calls: deque[dict[str, Any]] = deque(maxlen=20)  # Last 20 external calls
 
         # Endpoint stats
-        self.endpoint_stats: dict[str, dict] = {}  # key: "METHOD PATH" -> {count, avg_ms, errors}
+        self.endpoint_stats: dict[str, dict] = {}  # key: "METHOD ROUTE" -> {count, avg_ms, errors}
 
-    def record_request(self, method: str, path: str, status_code: int, duration_ms: float):
+    def record_request(self, method: str, path: str, status_code: int, duration_ms: float, route: str | None = None):
+        """Count one request. *route* is the matched route template; requests matching none share one bucket.
+
+        Keyed by template, not the raw path: raw paths carry ids, so every video
+        and every scanner probe became its own entry (509 of them), and the hourly
+        snapshot of this table grew without bound.
+        """
         self.total_requests += 1
         self.status_codes[status_code] = self.status_codes.get(status_code, 0) + 1
         self.request_durations.append(duration_ms)
 
-        # Track by endpoint
-        key = f"{method} {path}"
+        key = f"{method} {route or UNMATCHED_ROUTE}"
         if key not in self.endpoint_stats:
             self.endpoint_stats[key] = {"count": 0, "total_ms": 0.0, "errors": 0}
 

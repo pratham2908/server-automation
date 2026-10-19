@@ -18,6 +18,9 @@ _db: AsyncIOMotorDatabase | None = None
 LEGACY_COMPETITOR_INDEX = "channel_id_1_youtube_channel_id_1"
 
 
+METRICS_SNAPSHOT_TTL_SECONDS = 14 * 24 * 3600
+
+
 async def ensure_competitor_indexes(competitors) -> None:
     """One YouTube channel id, or one Instagram username, per channel — each enforced only where it is set."""
     if LEGACY_COMPETITOR_INDEX in await competitors.index_information():
@@ -66,6 +69,10 @@ async def connect_db(
     await _db.youtube_channel_daily.create_index([("channel_id", 1), ("date", 1)], unique=True)
     await _db.youtube_audience.create_index([("channel_id", 1)], unique=True)
     await _db.youtube_retention.create_index([("channel_id", 1), ("youtube_video_id", 1)], unique=True)
+    # The server's hourly activity snapshots (request counts, latency, call tallies)
+    # are only worth a couple of weeks; MongoDB drops older ones itself. Without
+    # this they filled the database (482 MB by Oct 2026).
+    await _db.metrics_snapshots.create_index("timestamp", expireAfterSeconds=METRICS_SNAPSHOT_TTL_SECONDS)
     await _db.videos.create_index("retention.status")
     await _db.videos.create_index("performance.analyzed_at")
     # Backs the "already imported?" dedup check when listing a channel app's videos.
