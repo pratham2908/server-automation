@@ -15,7 +15,7 @@ from typing import Any
 from app.logger import get_logger
 from app.services.ai_call_logger import schedule_ai_call_log
 from app.services.comment_reply_text import humanise_reply
-from app.services.one_ai_client import get_one_ai
+from app.services.one_ai_client import AI_CALL_TIMEOUT_S, get_one_ai
 
 logger = get_logger(__name__)
 
@@ -176,13 +176,13 @@ class GeminiService:
             recorded = False
             try:
                 # The One AI SDK is synchronous, so it goes on a worker thread;
-                # the 90s bound is kept on this side as before.
+                # the bound is kept on this side too.
                 result = await asyncio.wait_for(
                     asyncio.to_thread(
                         self._client.generate_content,
                         {"model": model, "contents": prompt, "config": _GENERATION_CONFIG},
                     ),
-                    timeout=90.0,
+                    timeout=AI_CALL_TIMEOUT_S,
                 )
                 duration = (time.time() - start_time) * 1000
                 input_tokens, output_tokens = _token_counts(result.data)
@@ -826,7 +826,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
                                 "config": _GENERATION_CONFIG,
                             },
                         ),
-                        timeout=180.0,
+                        timeout=AI_CALL_TIMEOUT_S,
                     )
                     duration = (time.time() - start_time) * 1000
                     input_tokens, output_tokens = _token_counts(result.data)
@@ -1489,7 +1489,7 @@ Return a JSON object with exactly these keys:
                             "config": _GENERATION_CONFIG,
                         },
                     ),
-                    timeout=90.0,
+                    timeout=AI_CALL_TIMEOUT_S,
                 )
                 duration = (time.time() - start_time) * 1000
                 input_tokens, output_tokens = _token_counts(result.data)

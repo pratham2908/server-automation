@@ -20,11 +20,15 @@ from app.logger import get_logger
 
 logger = get_logger(__name__)
 
-# The longest any single call site allows (video retention analysis waits 180s).
-# Call sites still bound themselves with ``asyncio.wait_for``; this is the
-# backstop that stops a worker thread outliving the request that spawned it,
-# since cancelling the ``wait_for`` cannot itself kill the thread.
-_TIMEOUT_S = 180.0
+# How long any AI call is given to answer. Generous on purpose: a call we gave
+# up on keeps running in its worker thread and is billed anyway, so cutting it
+# short only throws the answer away. Grok's channel summaries take 40–90s, and
+# a 90s limit was discarding most of them. Call sites bound themselves with
+# ``asyncio.wait_for`` at this same value; the SDK timeout is the backstop that
+# stops a worker thread outliving its request, since cancelling the
+# ``wait_for`` cannot itself kill the thread.
+AI_CALL_TIMEOUT_S = 300.0
+_TIMEOUT_S = AI_CALL_TIMEOUT_S
 
 _client: OneAI | None = None
 

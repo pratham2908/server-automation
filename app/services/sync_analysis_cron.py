@@ -27,7 +27,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.database import get_channel_platform, not_paused_query, update_channel_task_status
 from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
-from app.services.analysis_engine import run_analysis
+from app.services.analysis_engine import ANALYSIS_MIN_AGE_DAYS, run_analysis
 from app.services.auto_sync_schedule import AUTO_SYNC_TASK, FRESH_REEL_DAYS, is_auto_sync_due
 from app.services.channel_stats import refresh_channel_stats
 from app.services.error_reporting import report_error
@@ -55,12 +55,19 @@ async def _count_unanalyzed_videos(
     db: AsyncIOMotorDatabase,
     channel_id: str,
 ) -> int:
-    """Count published videos that have no performance analysis in the videos collection."""
+    """Count published videos the analysis would actually pick up.
+
+    Matches the engine's 3-day filter (on ``created_at``): counting videos it
+    skips kept a channel at the threshold after every run, so each hourly sync
+    re-ran the analysis and its paid AI calls with nothing new to analyse.
+    """
+    cutoff = now_ist() - timedelta(days=ANALYSIS_MIN_AGE_DAYS)
     count = await db.videos.count_documents(
         {
             "channel_id": channel_id,
             "status": "published",
             "performance": None,
+            "$or": [{"created_at": {"$lte": cutoff}}, {"created_at": None}],
         }
     )
     return count
