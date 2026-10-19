@@ -23,6 +23,10 @@ from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
+# Videos younger than this aren't analysed yet: their numbers are still moving.
+# The cron's trigger count uses the same cutoff, so skipped videos can't re-fire it.
+ANALYSIS_MIN_AGE_DAYS = 3
+
 
 def build_actual_retention_updates(
     stats: dict[str, Any],
@@ -139,7 +143,7 @@ async def run_analysis(
     # Exclude videos less than 3 days old.
     from app.timezone import UTC
 
-    three_days_ago = now_ist() - timedelta(days=3)
+    three_days_ago = now_ist() - timedelta(days=ANALYSIS_MIN_AGE_DAYS)
 
     filtered_videos = []
     for v in new_videos:
@@ -344,6 +348,14 @@ async def run_analysis(
     # Fetch existing analysis for incremental refinement
     existing_analysis = await db.analysis.find_one({"channel_id": channel_id})
 
+    # Fold in only what the stored summary hasn't seen. Re-reading every analysed
+    # video each run cost one AI call per five videos (22 for a 109-video channel)
+    # to refine a summary that already contained them.
+    already_summarised = set(existing_analysis.get("analysis_done_video_ids") or []) if existing_analysis else set()
+    pending = [s for s, vid in zip(video_summaries, all_analysed_ids, strict=True) if vid not in already_summarised]
+    if not pending:
+        logger.info("🧠 Channel summary already covers every analysed video — no AI call needed.")
+
     BATCH_SIZE = 5
     running_analysis = (
         {
@@ -356,13 +368,13 @@ async def run_analysis(
         else None
     )
 
-    for i in range(0, len(video_summaries), BATCH_SIZE):
-        batch = video_summaries[i : i + BATCH_SIZE]
+    for i in range(0, len(pending), BATCH_SIZE):
+        batch = pending[i : i + BATCH_SIZE]
 
         logger.info(
             "🧠 Channel Summary Batch (%d/%d)...",
             (i // BATCH_SIZE) + 1,
-            (len(video_summaries) + BATCH_SIZE - 1) // BATCH_SIZE,
+            (len(pending) + BATCH_SIZE - 1) // BATCH_SIZE,
             extra={"color": "MAGENTA"},
         )
 
