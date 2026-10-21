@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+import requests
 from dateutil.parser import isoparse
 from googleapiclient.errors import HttpError
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -21,6 +22,7 @@ from app.database import (
 from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
 from app.services.auto_sync_schedule import needs_reel_insights
+from app.services.channel_view_snapshots import record_channel_totals
 from app.services.downloader import (
     download_instagram_media_to_r2,
     download_youtube_video_to_r2,
@@ -43,6 +45,7 @@ from app.services.schedule_operation import (
 from app.services.scheduler import compute_schedule_slots
 from app.services.todo_engine import recompute_category
 from app.services.trial_graduation import TrialCheck, edit_running_check, trial_fields
+from app.services.view_series import channel_totals
 from app.services.youtube import YouTubeService
 from app.services.youtube_analytics_sync import refresh_youtube_analytics
 from app.services.youtube_schedule import error_reason, publish_at_for
@@ -1766,7 +1769,16 @@ class VideoService:
         the videos' own numbers are already stored.
         """
         now = now_ist()
+        # The Data API listed every upload with its live counts, so the channel's
+        # sum is complete by construction (a failed fetch raises before this).
+        totals = {
+            "views": sum(int(v.get("views") or 0) for v in fetched),
+            "likes": sum(int(v.get("likes") or 0) for v in fetched),
+            "comments": sum(int(v.get("comments") or 0) for v in fetched),
+            "posts": len(fetched),
+        }
         try:
+            await record_channel_totals(self.db, channel_id, "youtube", totals, now)
             await record_youtube_snapshots(self.db, channel_id, fetched, incremental, now)
         except Exception:
             logger.exception("YouTube snapshots not recorded for '%s'", channel_id)
@@ -1781,7 +1793,6 @@ class VideoService:
         ig = await self._get_instagram_service(channel_id)
         if not ig:
             raise ChannelNotConnectedError("No Instagram token")
-        ig_reels = ig.get_reels(channel["instagram_user_id"])
         last_read = {
             doc["instagram_media_id"]: doc.get("insights_synced_at")
             async for doc in self.db.videos.find(
@@ -1790,21 +1801,36 @@ class VideoService:
             )
         }
         db_ids = set(last_read)
+        now = now_ist()
+
+        def due(reel: dict[str, Any]) -> bool:
+            # Whether this sync keeps a reading for the reel: every sync for one under a
+            # week old, about daily after — so stored history grows with new reels, not
+            # with the size of the back catalogue.
+            published = isoparse(reel["timestamp"]) if reel.get("timestamp") else None
+            return not incremental or needs_reel_insights(published, last_read.get(reel["id"]), now)
+
+        channel_totals_now: dict[str, int] | None = None
+        try:
+            # One call per 100 posts returns every post with its insights, so every
+            # reel's numbers are refreshed each sync for the price of one request.
+            sweep = await asyncio.to_thread(ig.get_media_sweep, channel["instagram_user_id"])
+            ig_reels = sweep.reels
+            insights_map = dict(sweep.insights)
+            unread = [r["id"] for r in ig_reels if r["id"] not in insights_map]
+            if unread:
+                insights_map.update(ig.get_reel_insights(unread))
+            channel_totals_now = channel_totals(sweep.posts, sweep.insights)
+        except requests.HTTPError as exc:
+            # The per-reel path still works if Instagram ever refuses the combined
+            # request (an unexpected media type, say); it reads only the due reels.
+            logger.warning("Combined media sweep refused for '%s' (%s) — reading reels one by one", channel_id, exc)
+            ig_reels = ig.get_reels(channel["instagram_user_id"])
+            insights_map = ig.get_reel_insights([r["id"] for r in ig_reels if due(r)])
         media_ids = [r["id"] for r in ig_reels]
         missing = await self._archive_missing_instagram_videos(channel_id, set(media_ids))
-        # One insights call per reel, so an incremental sync skips the reels whose
-        # numbers were read recently enough; likes and comments still come free
-        # with the listing for every reel.
-        now = now_ist()
-        to_read = [
-            r["id"]
-            for r in ig_reels
-            if not incremental
-            or needs_reel_insights(
-                isoparse(r["timestamp"]) if r.get("timestamp") else None, last_read.get(r["id"]), now
-            )
-        ]
-        insights_map = ig.get_reel_insights(to_read)
+        await record_channel_totals(self.db, channel_id, "instagram", channel_totals_now, now)
+        stored = {r["id"] for r in ig_reels if r["id"] in insights_map and due(r)}
 
         new_vids = []
         counts_by_media: dict[str, dict[str, float | int | bool]] = {}
@@ -1817,7 +1843,7 @@ class VideoService:
             # Whether the reel is on the profile grid comes free with the listing for every reel.
             shared = r.get("is_shared_to_feed")
             shared = shared if isinstance(shared, bool) else None
-            if "views" in metadata:
+            if "views" in metadata and mid in stored:
                 counts_by_media[mid] = snapshot_values(metadata, shared)
 
             if mid not in db_ids:
@@ -1848,7 +1874,8 @@ class VideoService:
                     "status": "published",
                     "updated_at": now_ist(),
                 }
-                if mid in insights_map:
+                if mid in stored:
+                    # When the reel's last reading was kept; drives how often it's kept (see due()).
                     set_doc["insights_synced_at"] = now
                 set_doc.update(await self._graduation_update(channel_id, mid, existing or {}, shared, now))
                 if thumb and not self._has_thumbnail_url(existing):
@@ -1900,7 +1927,7 @@ class VideoService:
                         "published_at": v["published_at"],
                         "thumbnail_url": v.get("thumbnail_url"),
                         "metadata": v.get("metadata", {}),
-                        "insights_synced_at": now if v["instagram_media_id"] in insights_map else None,
+                        "insights_synced_at": now if v["instagram_media_id"] in stored else None,
                         "content_params": ana.get("content_params"),
                         "verification_status": "unverified",
                         "created_at": now_ist(),
