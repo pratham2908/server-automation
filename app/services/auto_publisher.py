@@ -17,6 +17,7 @@ from app.logger import get_logger
 from app.services.errors import get_error_service
 from app.services.first_comment import post_and_record
 from app.services.publish_failure import build_failure_marker
+from app.services.publish_failure_notify import notify_publish_failure
 from app.services.schedule_operation import _build_instagram_caption
 from app.services.trial_graduation import arm_fields
 from app.timezone import now_ist
@@ -175,6 +176,7 @@ async def _publish_one_reel(
                 _MAX_PUBLISH_ATTEMPTS,
             )
             await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
+            marker = build_failure_marker(stage="publish", platform="instagram", attempts=attempts, exc=e)
             await db.videos.update_one(
                 {"channel_id": channel_id, "video_id": video_id},
                 {
@@ -182,15 +184,11 @@ async def _publish_one_reel(
                         "status": "ready",
                         "updated_at": now_ist(),
                         # Marks this as a bounced-back "ready" (see publish_failure).
-                        "last_failure": build_failure_marker(
-                            stage="publish",
-                            platform="instagram",
-                            attempts=attempts,
-                            exc=e,
-                        ),
+                        "last_failure": marker,
                     }
                 },
             )
+            await notify_publish_failure(db, video_doc, marker, queue_entry.get("scheduled_at"))
         else:
             await db.schedule_queue.update_one(
                 {"_id": queue_entry["_id"]},
