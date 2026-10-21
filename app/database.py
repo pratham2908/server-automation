@@ -64,6 +64,7 @@ async def connect_db(
     await _db.instagram_account_daily.create_index([("channel_id", 1), ("date", 1)], unique=True)
     await _db.instagram_reel_snapshots.create_index([("channel_id", 1), ("media_id", 1), ("at", 1)])
     await _db.instagram_reel_daily.create_index([("channel_id", 1), ("media_id", 1), ("date", 1)], unique=True)
+    await _db.channel_view_snapshots.create_index([("channel_id", 1), ("at", 1)])
     await _db.youtube_video_snapshots.create_index([("channel_id", 1), ("youtube_video_id", 1), ("at", 1)])
     await _db.youtube_video_daily.create_index([("channel_id", 1), ("youtube_video_id", 1), ("date", 1)], unique=True)
     await _db.youtube_channel_daily.create_index([("channel_id", 1), ("date", 1)], unique=True)

@@ -100,8 +100,9 @@ def hourly_gains(published_at: datetime | None, readings: Sequence[MetricReading
             known_from = _floor_hour(first) if _floor_hour(first) == first else _floor_hour(first) + _HOUR
         series[metric] = _metric_hours(points, known_from)
 
-    views = series.get("views", {})
-    hours = sorted(h for h in views if start_hour <= h < end_hour)
+    # Every hour any metric places, so a series asked for likes alone still has its hours.
+    placed = set().union(*series.values()) if series else set()
+    hours = sorted(h for h in placed if start_hour <= h < end_hour)
     if not hours:
         return []
     out: list[HourGains] = []

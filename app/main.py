@@ -359,6 +359,7 @@ from app.routers import (
     ui,
     video_sources,
     videos,
+    views_series,
     youtube_insights,
 )
 
@@ -397,6 +398,7 @@ app.include_router(observability.router)
 app.include_router(growth.router)
 app.include_router(instagram_insights.router)
 app.include_router(youtube_insights.router)
+app.include_router(views_series.router)
 
 
 @app.get("/health", tags=["health"])

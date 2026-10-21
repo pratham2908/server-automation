@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -79,6 +80,21 @@ _GRAPH_BASE = _FB_GRAPH_BASE
 
 def _base_for(provider: str) -> str:
     return _IG_GRAPH_BASE if provider == PROVIDER_INSTAGRAM else _FB_GRAPH_BASE
+
+
+# What the sync reads about each post from /media, with or without its insights.
+_MEDIA_LISTING_FIELDS = (
+    "id,caption,media_type,media_url,thumbnail_url,timestamp,permalink,like_count,comments_count,is_shared_to_feed"
+)
+
+
+@dataclass(frozen=True)
+class MediaSweep:
+    """One pass over a profile's posts: every post, the reels among them, and each post's insights by id."""
+
+    posts: list[dict[str, Any]]
+    reels: list[dict[str, Any]]
+    insights: dict[str, dict[str, float]]
 
 
 class TokenCheck(BaseModel):
@@ -487,9 +503,7 @@ class InstagramService:
         Paginates through ``/{ig_user_id}/media`` and filters by
         ``media_type`` to keep only video/reel content.
         """
-        fields = (
-            "id,caption,media_type,media_url,thumbnail_url,timestamp,permalink,like_count,comments_count,is_shared_to_feed"
-        )
+        fields = _MEDIA_LISTING_FIELDS
         reels: list[dict[str, Any]] = []
         # /media is newest-first and cursor-paged, so posting during pagination
         # shifts everything down a slot and an item can come back on two
@@ -670,6 +684,42 @@ class InstagramService:
         from typing import cast
 
         return cast(str, self._post(f"{comment_id}/replies", {"message": message}).get("id", ""))
+
+    def get_media_sweep(self, ig_user_id: str) -> MediaSweep:
+        """Every post on the profile with its insights, one call per 100 posts.
+
+        Field expansion (``insights.metric(...)`` inside ``/media``) returns each
+        post's lifetime numbers alongside the listing, so a channel costs one call
+        per page instead of one per reel — verified on every channel (Oct 2026)
+        to match the per-reel endpoint exactly. Raises when Instagram refuses the
+        request, so the caller can fall back to the per-reel path.
+        """
+        from app.services.instagram_reel_metrics import FACEBOOK_LOGIN_REEL_METRICS, REEL_INSIGHT_METRICS
+
+        metrics = REEL_INSIGHT_METRICS
+        if self._provider != PROVIDER_INSTAGRAM:
+            metrics = REEL_INSIGHT_METRICS + FACEBOOK_LOGIN_REEL_METRICS
+        url: str | None = f"{self._user_node(ig_user_id)}/media"
+        params: dict = {"fields": f"{_MEDIA_LISTING_FIELDS},insights.metric({','.join(metrics)})", "limit": "100"}
+        posts: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        while url:
+            body = self._get(url, params=params)
+            for item in body.get("data", []):
+                # Newest-first cursor paging can repeat an item across pages; first sighting wins.
+                if item.get("id") not in seen:
+                    seen.add(item["id"])
+                    posts.append(item)
+            next_url = (body.get("paging") or {}).get("next")
+            params = {}
+            url = next_url.replace(f"{self._base}/", "") if next_url else None
+
+        insights = {
+            p["id"]: self._parse_float_insights(p["insights"]) for p in posts if (p.get("insights") or {}).get("data")
+        }
+        reels = [p for p in posts if p.get("media_type") in ("VIDEO", "REEL")]
+        logger.info("Swept %d posts (%d reels) for IG user %s", len(posts), len(reels), ig_user_id)
+        return MediaSweep(posts=posts, reels=reels, insights=insights)
 
     def get_reel_insights(self, media_ids: list[str]) -> dict[str, dict[str, float]]:
         """Fetch per-reel insights: views, reach, watch time, skip rate and the rest.
