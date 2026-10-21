@@ -6,6 +6,7 @@ depending on the channel's platform. YouTube uploads immediately with
 ``publishAt``; Instagram is queued for the background auto-publisher.
 """
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -13,6 +14,29 @@ from app.logger import get_logger
 from app.timezone import now_ist, to_ist_iso
 
 logger = get_logger(__name__)
+
+
+# Instagram refuses a caption with more hashtags than this (error 2207117, "Too many hashtags
+# used"), and a refused reel fails the whole publish rather than going out with fewer.
+MAX_HASHTAGS = 30
+
+_HASHTAG = re.compile(r"#\w+")
+
+
+def cap_hashtags(text: str, limit: int = MAX_HASHTAGS) -> str:
+    """Drop every hashtag past the first ``limit``, keeping the rest of the text as written."""
+    seen = 0
+
+    def keep(match: re.Match[str]) -> str:
+        nonlocal seen
+        seen += 1
+        return match.group(0) if seen <= limit else ""
+
+    capped = _HASHTAG.sub(keep, text)
+    if seen <= limit:
+        return text
+    # Removing a tag leaves its separating space behind; tidy only the lines that lost one.
+    return "\n".join(re.sub(r"[ \t]{2,}", " ", line).rstrip() for line in capped.split("\n"))
 
 
 def _build_instagram_caption(video_doc: dict[str, Any]) -> str:
@@ -44,7 +68,7 @@ def _build_instagram_caption(video_doc: dict[str, Any]) -> str:
         if hashtag_list:
             parts.append(" ".join(hashtag_list))
 
-    return "\n\n".join(parts)
+    return cap_hashtags("\n\n".join(parts))
 
 
 async def _move_to_schedule_queue(
