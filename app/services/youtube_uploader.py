@@ -19,6 +19,7 @@ from app.logger import get_logger
 from app.services.errors import get_error_service
 from app.services.first_comment import PENDING, is_due, post_and_record
 from app.services.publish_failure import build_failure_marker
+from app.services.publish_failure_notify import notify_publish_failure
 from app.timezone import UTC, now_ist
 
 logger = get_logger(__name__)
@@ -165,6 +166,7 @@ async def _upload_one_video(
 
             now = now_ist()
             await db.schedule_queue.delete_one({"_id": queue_entry["_id"]})
+            marker = build_failure_marker(stage="upload", platform="youtube", attempts=attempts, exc=e)
             await db.videos.update_one(
                 {"channel_id": channel_id, "video_id": video_id},
                 {
@@ -174,15 +176,11 @@ async def _upload_one_video(
                         "updated_at": now,
                         # Distinguishes this bounced-back "ready" from a freshly
                         # produced one so the UI can flag it for attention.
-                        "last_failure": build_failure_marker(
-                            stage="upload",
-                            platform="youtube",
-                            attempts=attempts,
-                            exc=e,
-                        ),
+                        "last_failure": marker,
                     }
                 },
             )
+            await notify_publish_failure(db, video_doc, marker, queue_entry.get("scheduled_at"))
             # Restore posting_queue entry so it can be re-scheduled
             last = await db.posting_queue.find_one({"channel_id": channel_id}, sort=[("position", -1)])
             next_pos = (last["position"] + 1) if last else 1

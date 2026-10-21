@@ -35,7 +35,29 @@ _REASON_RULES: list[tuple[tuple[str, ...], str]] = [
     ),
 ]
 
-_GENERIC_REASON = "Upload or publish failed"
+GENERIC_REASON = "Upload or publish failed"
+
+
+def platform_message(exc: BaseException) -> str | None:
+    """What the platform itself said was wrong, when it said anything usable.
+
+    Instagram answers a refused request with a title and a plain-language message
+    ("Too many hashtags used: the maximum permitted is 30"), but ``requests`` only
+    keeps "400 Bad Request" in the exception text, so the useful part is read off
+    the response it carries.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    try:
+        error = response.json().get("error")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(error, dict):
+        return None
+    title, message = error.get("error_user_title"), error.get("error_user_msg") or error.get("message")
+    parts = [str(x) for x in (title, message) if x]
+    return ": ".join(parts) if parts else None
 
 
 def classify_failure_reason(exc: BaseException) -> str:
@@ -51,7 +73,7 @@ def classify_failure_reason(exc: BaseException) -> str:
     for needles, reason in _REASON_RULES:
         if any(needle in text for needle in needles):
             return reason
-    return _GENERIC_REASON
+    return GENERIC_REASON
 
 
 def build_failure_marker(*, stage: str, platform: str, attempts: int, exc: BaseException) -> dict[str, Any]:
@@ -64,7 +86,7 @@ def build_failure_marker(*, stage: str, platform: str, attempts: int, exc: BaseE
         "stage": stage,
         "platform": platform,
         "reason": classify_failure_reason(exc),
-        "detail": str(exc)[:_MAX_DETAIL_CHARS],
+        "detail": (platform_message(exc) or str(exc))[:_MAX_DETAIL_CHARS],
         "attempts": attempts,
         "failed_at": now_ist(),
     }
