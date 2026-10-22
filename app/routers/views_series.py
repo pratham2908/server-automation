@@ -21,6 +21,7 @@ from app.services.instagram_content_analysis import parse_published_at
 from app.services.instagram_reel_hourly import MAX_HOURS, MetricReading
 from app.services.instagram_reel_snapshot import MEASURED_ONLY
 from app.services.view_series import RANGES, SeriesPoint, daily_points, hourly_points, series_total
+from app.services.views_top_videos import ViewsTopVideosOut, get_channel_top_videos
 from app.timezone import IST, assume_utc, now_ist
 
 router = APIRouter(
@@ -167,6 +168,18 @@ async def _views_series(
         last_updated=last,
         note=note,
     )
+
+
+@router.get("/views/top-videos", response_model=ViewsTopVideosOut)
+async def get_views_top_videos(
+    channel_id: str,
+    range: str = Query("48h", description="48h | 7d (hourly) or 28d | 90d (daily)"),
+    bucket: str | None = Query(None, description="ISO hour start or date for a single candle"),
+    limit: int = Query(6, ge=1, le=20),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> ViewsTopVideosOut:
+    """Top videos that gained the most views in the selected duration or specific candle."""
+    return await get_channel_top_videos(db, channel_id, range, bucket, limit)
 
 
 @router.get("/views", response_model=ViewsSeriesOut)
