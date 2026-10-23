@@ -8,7 +8,13 @@ every 15 minutes while any video is in its first week — when its numbers move
 fastest and the view curve is worth reading quarter-hour by quarter-hour — and
 daily otherwise. The cron works out whether a channel has such a video on every
 tick, so publishing one switches the channel to the fast cadence without
-anything being stored. A sync costs a YouTube channel about two Data API units
+anything being stored.
+
+Syncs land on fixed IST clock slots — :05, :20, :35 and :50 while fresh, 00:05
+once a day otherwise — instead of counting on from the last run, which used to
+drift a minute later every hour. A channel is due when its last sync is older
+than the most recent slot, so a server that comes back at :08 runs the missed
+:05 sync at once and is back on :20 for the next. A sync costs a YouTube channel about two Data API units
 per 50 videos, so even 96 a day stay far inside the 10,000-unit daily quota.
 """
 
@@ -21,7 +27,7 @@ from pydantic import ValidationError
 
 from app.database import get_channel_platform
 from app.models.channel import AutoSyncConfig
-from app.timezone import assume_utc
+from app.timezone import IST, assume_utc
 
 # The task name stamped into ``last_tasks`` when an auto-sync starts.
 AUTO_SYNC_TASK = "auto_sync"
@@ -31,6 +37,9 @@ FRESH_REEL_DAYS = 7
 # quarter-hour readings show real shape, not repeats of the same number.
 FRESH_INTERVAL = timedelta(minutes=15)
 IDLE_INTERVAL_HOURS = 24
+# Where the slots sit past each interval boundary (from IST midnight): five minutes after the
+# hour gives the platform's counts a moment to settle on the hour that just closed.
+SLOT_OFFSET = timedelta(minutes=5)
 
 
 def auto_sync_config(channel: dict[str, Any]) -> AutoSyncConfig:
@@ -56,24 +65,46 @@ def sync_interval(channel: dict[str, Any], has_fresh_reel: bool) -> timedelta:
     return timedelta(hours=auto_sync_config(channel).interval_hours)
 
 
-def next_auto_sync_at(channel: dict[str, Any], interval: timedelta) -> datetime | None:
-    """When this channel's next auto-sync falls due; ``None`` if it has never run."""
+def latest_slot(now: datetime, interval: timedelta) -> datetime:
+    """The newest sync slot at or before *now*: IST midnight plus ``SLOT_OFFSET`` plus whole intervals.
+
+    Slots restart at each midnight, so an interval that doesn't divide a day
+    still lands on the same clock times every day.
+    """
+    local = now.astimezone(IST)
+    first = local.replace(hour=0, minute=0, second=0, microsecond=0) + SLOT_OFFSET
+    if local < first:
+        # Before today's first slot (00:00–00:05): the newest one is yesterday's last.
+        first -= timedelta(days=1)
+    return first + interval * ((local - first) // interval)
+
+
+def last_auto_sync_at(channel: dict[str, Any]) -> datetime | None:
+    """When this channel's last auto-sync started; ``None`` if it has never run."""
     last = (channel.get("last_tasks") or {}).get(AUTO_SYNC_TASK)
-    if not isinstance(last, datetime):
-        return None
-    return assume_utc(last) + interval
+    return assume_utc(last) if isinstance(last, datetime) else None
 
 
 def is_auto_sync_due(channel: dict[str, Any], now: datetime, has_fresh_reel: bool = False) -> bool:
     """Whether the cron should sync this channel on the tick at ``now``.
 
     Due-ness is computed from the persisted ``last_tasks.auto_sync`` stamp, not an
-    in-process timer, so a server restart neither skips a sync nor fires an extra one.
+    in-process timer, so a server restart neither skips a sync nor fires an extra one:
+    a missed slot is caught up once, and the next sync is back on the clock.
     """
     if not auto_sync_config(channel).enabled:
         return False
-    due_at = next_auto_sync_at(channel, sync_interval(channel, has_fresh_reel))
-    return due_at is None or due_at <= now
+    last = last_auto_sync_at(channel)
+    return last is None or last < latest_slot(now, sync_interval(channel, has_fresh_reel))
+
+
+def seconds_to_next_minute(now: datetime) -> float:
+    """How long the cron sleeps so it wakes just after the minute, where every slot sits.
+
+    Half a second past, because the event loop's clock and the wall clock can disagree
+    by a hair; waking a moment early would see :04:59.99 and leave the :05 slot a minute.
+    """
+    return 60.5 - now.second - now.microsecond / 1_000_000
 
 
 # An older reel's numbers are re-read about once a day. An hour short of a full
