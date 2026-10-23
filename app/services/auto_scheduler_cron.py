@@ -53,8 +53,7 @@ from app.services.auto_scheduler_summary import format_summary_email
 from app.services.email_service import resolve_owner_email, send_email
 from app.services.error_reporting import report_error
 from app.services.schedule_operation import (
-    enqueue_video_for_youtube,
-    schedule_single_video_instagram,
+    schedule_on_platform,
 )
 from app.services.today_callbacks import CallbackSlot
 from app.services.video_source_service import MAX_PAGE_LIMIT, VideoSourceService
@@ -206,12 +205,13 @@ async def _enqueue_for_channel(
     Deliberately group-unaware: ``_schedule_video`` layers the linked-channel
     expansion on top, and the expansion calls this so it cannot recurse.
     """
-    channel_id = channel["channel_id"]
-    if get_channel_platform(channel) == "instagram":
-        return await schedule_single_video_instagram(
-            db=db, channel_id=channel_id, video_doc=video_doc, scheduled_at=schedule_at
-        )
-    return await enqueue_video_for_youtube(db=db, channel_id=channel_id, video_doc=video_doc, scheduled_at=schedule_at)
+    return await schedule_on_platform(
+        db=db,
+        platform=get_channel_platform(channel),
+        channel_id=channel["channel_id"],
+        video_doc=video_doc,
+        scheduled_at=schedule_at,
+    )
 
 
 async def _schedule_linked_siblings(

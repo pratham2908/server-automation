@@ -54,6 +54,19 @@ def build_profile_update(
     Instagram exposes both a display ``name`` and a ``username``; accounts that
     set no display name return an empty string, so username is the fallback.
     """
+    if platform == "threads":
+        username = info.get("username") or ""
+        update = {
+            "name": info.get("name") or username or current_name,
+            "description": info.get("threads_biography", ""),
+            "subscriber_count": info.get("followers_count", 0),
+            "updated_at": now_ist(),
+        }
+        if username:
+            update["handle"] = normalise_handle(username)
+            update["threads_username"] = username
+        _set_if_present(update, "thumbnail_url", info.get("threads_profile_picture_url"))
+        return update
     if platform == "instagram":
         username = info.get("username") or ""
         update = {

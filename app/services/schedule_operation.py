@@ -1,9 +1,9 @@
 """Core schedule operation: upload a video to a platform and update all DB state.
 
-The ``schedule`` endpoint (videos router) delegates to
-:func:`enqueue_video_for_youtube` or :func:`schedule_single_video_instagram`
-depending on the channel's platform. YouTube uploads immediately with
-``publishAt``; Instagram is queued for the background auto-publisher.
+Every scheduling path goes through :func:`schedule_on_platform`, which picks
+the platform's route. YouTube uploads immediately with ``publishAt``; Instagram
+and Threads have no native schedule, so the video is queued for that platform's
+background publisher.
 """
 
 import re
@@ -169,15 +169,60 @@ async def schedule_single_video_instagram(
     video_doc: dict[str, Any],
     scheduled_at: datetime,
 ) -> dict[str, Any]:
-    """Queue an Instagram Reel for publishing at ``scheduled_at``.
+    """Queue an Instagram Reel for the auto-publisher at ``scheduled_at``."""
+    return await _queue_for_publisher(db, channel_id, video_doc, scheduled_at, "instagram")
 
-    Unlike YouTube (which accepts ``publishAt``), Instagram publishes
-    immediately via the auto-publisher.  This function only updates DB state —
-    the actual upload + publish happens when ``scheduled_at`` arrives.
 
-    On success:
-    1. Sets status -> ``queued`` and ``scheduled_at`` on the video doc.
-    2. Removes from the ready queue, inserts into the schedule queue (platform=instagram).
+async def schedule_single_video_threads(
+    *,
+    db,
+    channel_id: str,
+    video_doc: dict[str, Any],
+    scheduled_at: datetime,
+) -> dict[str, Any]:
+    """Queue a Threads video post for the Threads publisher at ``scheduled_at``."""
+    return await _queue_for_publisher(db, channel_id, video_doc, scheduled_at, "threads")
+
+
+# Platforms with no native schedule: a background publisher posts them when their time comes.
+QUEUED_PLATFORMS = ("instagram", "threads")
+
+
+async def schedule_on_platform(
+    *,
+    db,
+    platform: str,
+    channel_id: str,
+    video_doc: dict[str, Any],
+    scheduled_at: datetime,
+) -> dict[str, Any]:
+    """Schedule one video on one channel by its platform's route.
+
+    The one place that branches on platform, so a new platform can't be sent
+    down another's path by an ``else`` somewhere.
+    """
+    if platform == "youtube":
+        return await enqueue_video_for_youtube(
+            db=db, channel_id=channel_id, video_doc=video_doc, scheduled_at=scheduled_at
+        )
+    if platform in QUEUED_PLATFORMS:
+        return await _queue_for_publisher(db, channel_id, video_doc, scheduled_at, platform)
+    raise ValueError(f"Can't schedule on platform '{platform}'")
+
+
+async def _queue_for_publisher(
+    db,
+    channel_id: str,
+    video_doc: dict[str, Any],
+    scheduled_at: datetime,
+    platform: str,
+) -> dict[str, Any]:
+    """Queue a video for its platform's background publisher at ``scheduled_at``.
+
+    This only updates DB state — the upload and publish happen when
+    ``scheduled_at`` arrives. On success the video is ``queued`` with its time,
+    and moves from the ready queue to the schedule queue tagged with *platform*,
+    which is how each publisher finds only its own entries.
     """
     video_id = video_doc["video_id"]
 
@@ -205,11 +250,12 @@ async def schedule_single_video_instagram(
             },
         )
 
-        await _move_to_schedule_queue(db, channel_id, video_id, scheduled_at, platform="instagram")
+        await _move_to_schedule_queue(db, channel_id, video_id, scheduled_at, platform=platform)
 
         logger.success(
-            "Queued '%s' for Instagram publish at %s",
+            "Queued '%s' for %s publish at %s",
             video_doc.get("title", video_id),
+            platform.capitalize(),
             to_ist_iso(scheduled_at),
         )
 
@@ -220,5 +266,5 @@ async def schedule_single_video_instagram(
         }
 
     except Exception:
-        logger.exception("Failed to queue video %s for Instagram", video_id)
+        logger.exception("Failed to queue video %s for %s", video_id, platform)
         return {"video_id": video_id, "status": "failed"}

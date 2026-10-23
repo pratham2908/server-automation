@@ -21,7 +21,7 @@ from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
 from app.services.pacing_templates import PacingTemplateService
 from app.services.r2 import R2Service
-from app.services.schedule_operation import schedule_single_video_instagram
+from app.services.schedule_operation import QUEUED_PLATFORMS, schedule_on_platform
 from app.timezone import IST, now_ist
 
 logger = get_logger(__name__)
@@ -170,11 +170,12 @@ async def promote_processing_to_ready(
     is_scheduled = isinstance(scheduled_at, datetime) and scheduled_at > now
     if is_scheduled:
         channel = await db.channels.find_one({"channel_id": channel_id})
-        # Only Instagram honours an upload-time schedule (as the create paths did);
-        # a YouTube schedule falls through to "ready" and is set via the scheduler.
-        if get_channel_platform(channel or {}) == "instagram":
-            await schedule_single_video_instagram(
-                db=db, channel_id=channel_id, video_doc=video, scheduled_at=scheduled_at
+        # Only the queued platforms (Instagram, Threads) honour an upload-time schedule, as the
+        # create paths did; a YouTube schedule falls through to "ready" and is set via the scheduler.
+        platform = get_channel_platform(channel or {})
+        if platform in QUEUED_PLATFORMS:
+            await schedule_on_platform(
+                db=db, platform=platform, channel_id=channel_id, video_doc=video, scheduled_at=scheduled_at
             )
             return
 

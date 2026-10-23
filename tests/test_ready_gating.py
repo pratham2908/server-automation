@@ -102,19 +102,20 @@ async def test_live_video_is_never_rewound():
 
 
 @pytest.mark.asyncio
-async def test_instagram_upload_time_schedule_is_routed_to_the_scheduler(monkeypatch):
+@pytest.mark.parametrize("platform", ["instagram", "threads"])
+async def test_queued_platform_upload_time_schedule_is_routed_to_the_scheduler(monkeypatch, platform):
     calls = []
 
-    async def fake_schedule(*, db, channel_id, video_doc, scheduled_at):
-        calls.append((channel_id, video_doc["video_id"], scheduled_at))
+    async def fake_schedule(*, db, platform, channel_id, video_doc, scheduled_at):
+        calls.append((platform, channel_id, video_doc["video_id"], scheduled_at))
 
-    monkeypatch.setattr(ra, "schedule_single_video_instagram", fake_schedule)
+    monkeypatch.setattr(ra, "schedule_on_platform", fake_schedule)
 
     future = datetime(2099, 1, 1, 19, 0, tzinfo=IST)
-    db = FakeDB(_video(scheduled_at=future), {"channel_id": "c1", "platform": "instagram"})
+    db = FakeDB(_video(scheduled_at=future), {"channel_id": "c1", "platform": platform})
     await promote_processing_to_ready(db, "c1", "v1")
 
-    assert calls == [("c1", "v1", future)]
+    assert calls == [(platform, "c1", "v1", future)]
     # Routed to the scheduler, not the ready/posting-queue path.
     assert db.videos.docs[0]["status"] == "processing"  # scheduler stub didn't flip it
     assert db.posting_queue.docs == []

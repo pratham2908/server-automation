@@ -37,14 +37,18 @@ FAILED = "failed"
 
 # Platform-enforced caption limits; exceeding them is a hard API error, so it is
 # worth refusing at the edge where the user can still fix the text.
-MAX_LENGTH: dict[str, int] = {"instagram": 2200, "youtube": 10000}
+MAX_LENGTH: dict[str, int] = {"instagram": 2200, "youtube": 10000, "threads": 500}
 
 # Matches the publish/upload workers: enough to ride out a transient API error,
 # few enough that a permanently rejected comment stops burning quota.
 MAX_ATTEMPTS = 5
 
 # The video id field to comment against, per platform.
-_PLATFORM_ID_FIELD = {"instagram": "instagram_media_id", "youtube": "youtube_video_id"}
+_PLATFORM_ID_FIELD = {
+    "instagram": "instagram_media_id",
+    "youtube": "youtube_video_id",
+    "threads": "threads_media_id",
+}
 
 
 def validate_comment(text: str | None, platform: str) -> str | None:

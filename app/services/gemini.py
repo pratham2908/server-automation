@@ -124,9 +124,13 @@ REPLY_VOICE_RULES = """Write it the way a real person types on their phone:
 PACKAGING_ATTEMPTS = 2
 
 
+# Platforms whose post is one block of text (a caption) rather than a title plus description.
+CAPTION_PLATFORMS = ("instagram", "threads")
+
+
 def packaging_is_usable(packaging: dict[str, Any], platform: str) -> bool:
-    """Whether a packaging reply carries what the post needs: a caption on Instagram, titles elsewhere."""
-    if platform == "instagram":
+    """Whether a packaging reply carries what the post needs: a caption on Instagram/Threads, titles elsewhere."""
+    if platform in CAPTION_PLATFORMS:
         caption = packaging.get("suggested_description")
         return isinstance(caption, str) and bool(caption.strip())
     titles = packaging.get("suggested_titles")
@@ -1044,12 +1048,18 @@ Be thorough, objective, and data-driven. Predict the curve at 5% intervals exact
         Returns a ``packaging`` dict with the same shape as the primary
         ``packaging`` block produced by ``analyze_video_retention``.
         """
-        platform_note = (
-            "Instagram Reel — write a punchy single-block caption with relevant hashtags, "
-            "no separate title/description split needed."
-            if platform == "instagram"
-            else "YouTube Short/video — write a click-worthy title (max 100 chars) and a "
-            "2-3 sentence description with keywords; provide 5-10 tags."
+        platform_note = {
+            "instagram": "Instagram Reel — write a punchy single-block caption with relevant hashtags, "
+            "no separate title/description split needed.",
+            # Threads caps a post at 500 characters and honours one topic tag; hashtags in the
+            # text beyond the first are plain text there, so they are asked for separately.
+            "threads": "Threads video post — write a conversational post of at most 450 characters "
+            "that makes people want to watch and reply, with no hashtags in the text; give exactly "
+            "one short topic in `suggested_tags` (1-3 words, no '#', '.' or '&').",
+        }.get(
+            platform,
+            "YouTube Short/video — write a click-worthy title (max 100 chars) and a "
+            "2-3 sentence description with keywords; provide 5-10 tags.",
         )
 
         defaults_section = ""
@@ -1079,7 +1089,8 @@ Return ONLY valid JSON matching this schema (no markdown, no explanation):
   "thumbnail_reasoning": "..."
 }}
 
-For Instagram, put the full caption in `suggested_description` and leave `suggested_titles` as an empty list."""
+For Instagram and Threads, put the full post text in `suggested_description` and leave `suggested_titles` as an
+empty list."""
 
         # The packaging becomes the post's caption and titles, and a "completed"
         # packaging releases the video to post. A reply in the wrong shape (seen

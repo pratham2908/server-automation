@@ -86,6 +86,22 @@ def hourly_points(
     return [SeriesPoint(start=s.isoformat(), value=gains.get(s)) for s in starts]
 
 
+def daily_from_readings(
+    published_at: datetime | None, readings: Sequence[MetricReading], metric: str
+) -> dict[str, float]:
+    """Gains per IST date from our own readings — for a platform that reports no per-day number of its own.
+
+    The hours a gap can't place are left out, so a day's value is a floor, never a guess.
+    """
+    out: dict[str, float] = {}
+    for hour in hourly_gains(published_at, readings):
+        value = hour.values.get(metric)
+        if value is not None:
+            day = hour.start.astimezone(IST).date().isoformat()
+            out[day] = out.get(day, 0.0) + value
+    return out
+
+
 def daily_points(
     values_by_date: Mapping[str, float | None], rough_dates: set[str], today: date, days: int
 ) -> list[SeriesPoint]:

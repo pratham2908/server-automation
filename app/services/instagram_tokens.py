@@ -30,7 +30,7 @@ PREFER_FOR_REPLYING = PROVIDER_INSTAGRAM
 
 # Fields a channel document must never return to a client. Kept in one place so a
 # new token slot cannot be added without the exclusion list noticing.
-SECRET_CHANNEL_FIELDS = ("youtube_tokens", PRIMARY_FIELD, ALT_FIELD)
+SECRET_CHANNEL_FIELDS = ("youtube_tokens", PRIMARY_FIELD, ALT_FIELD, "threads_tokens")
 
 
 def secret_projection() -> dict[str, int]:

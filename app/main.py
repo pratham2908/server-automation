@@ -36,6 +36,8 @@ _retention_analysis_task = None
 _source_import_task = None
 _auto_scheduler_task = None
 _post_publisher_task = None
+_threads_publisher_task = None
+_threads_token_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +265,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background Instagram post publisher started")
 
+    # ---- Threads: video post publisher and token refresher ----
+    from app.services.threads_publisher import run_threads_publisher
+    from app.services.threads_token_refresher import run_threads_token_refresher
+
+    global _threads_publisher_task, _threads_token_task
+    _threads_publisher_task = create_monitored_task(
+        run_threads_publisher(db, r2_service),
+        feature="Background: Threads publisher",
+    )
+    _threads_token_task = create_monitored_task(
+        run_threads_token_refresher(db),
+        feature="Background: Threads token refresher",
+    )
+    logger.info("Background Threads publisher and token refresher started")
+
     yield
 
     # ---- Shutdown ----
@@ -290,6 +307,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _source_import_task,
         _auto_scheduler_task,
         _post_publisher_task,
+        _threads_publisher_task,
+        _threads_token_task,
     ):
         if task and not task.done():
             task.cancel()
@@ -355,6 +374,7 @@ from app.routers import (
     story_kit,
     sync_analysis,
     system,
+    threads,
     thumbnail_analysis,
     ui,
     video_sources,
@@ -398,6 +418,7 @@ app.include_router(observability.router)
 app.include_router(growth.router)
 app.include_router(instagram_insights.router)
 app.include_router(youtube_insights.router)
+app.include_router(threads.router)
 app.include_router(views_series.router)
 
 

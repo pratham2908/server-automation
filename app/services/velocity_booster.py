@@ -20,8 +20,7 @@ from app.database import update_channel_task_status
 from app.logger import get_logger
 from app.services.error_reporting import report_error
 from app.services.schedule_operation import (
-    enqueue_video_for_youtube,
-    schedule_single_video_instagram,
+    schedule_on_platform,
 )
 from app.services.video_service import VideoService
 from app.timezone import now_ist, to_ist_iso
@@ -166,20 +165,13 @@ async def process_velocity_booster_for_channel(
     scheduled_at = now + timedelta(minutes=delay_min)
 
     try:
-        if platform == "youtube":
-            await enqueue_video_for_youtube(
-                db=db,
-                channel_id=channel_id,
-                video_doc=video_doc,
-                scheduled_at=scheduled_at,
-            )
-        else:
-            await schedule_single_video_instagram(
-                db=db,
-                channel_id=channel_id,
-                video_doc=video_doc,
-                scheduled_at=scheduled_at,
-            )
+        await schedule_on_platform(
+            db=db,
+            platform=platform,
+            channel_id=channel_id,
+            video_doc=video_doc,
+            scheduled_at=scheduled_at,
+        )
 
         logger.success(
             "Velocity Booster: successfully scheduled boost video '%s' for %s",

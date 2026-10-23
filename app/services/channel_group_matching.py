@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 
 # Platform-specific decoration that says nothing about which brand this is.
-_NOISE = ("official", "real", "the", "yt", "ig", "insta", "tv", "hq")
+_NOISE = ("official", "real", "the", "yt", "ig", "insta", "threads", "tv", "hq")
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
