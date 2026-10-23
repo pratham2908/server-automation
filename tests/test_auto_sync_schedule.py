@@ -59,7 +59,7 @@ class TestIsAutoSyncDue:
         # Mongo returns naive UTC. Read as IST it would look 5h30 older and fire early.
         naive = (NOW - timedelta(hours=1)).replace(tzinfo=None)
         ch = _channel({"enabled": True, "interval_hours": 6}, last=naive)
-        assert next_auto_sync_at(ch, 6) == NOW + timedelta(hours=5)
+        assert next_auto_sync_at(ch, timedelta(hours=6)) == NOW + timedelta(hours=5)
         assert is_auto_sync_due(ch, NOW) is False
 
 
@@ -77,13 +77,13 @@ class TestChannelUpdateValidation:
 
 
 class TestInstagramCadence:
-    """Instagram and YouTube sync hourly while a video is in its first week, daily otherwise."""
+    """Instagram and YouTube sync every 15 minutes while a video is in its first week, daily otherwise."""
 
     def _ig(self, last: datetime) -> dict:
         return {**_channel({"enabled": True, "interval_hours": 6}, last=last), "platform": "instagram"}
 
-    def test_hourly_with_a_fresh_reel(self):
-        ch = self._ig(NOW - timedelta(hours=1))
+    def test_every_15_minutes_with_a_fresh_reel(self):
+        ch = self._ig(NOW - timedelta(minutes=15))
         assert is_auto_sync_due(ch, NOW, has_fresh_reel=True) is True
         assert is_auto_sync_due(ch, NOW - timedelta(minutes=1), has_fresh_reel=True) is False
 
@@ -92,12 +92,15 @@ class TestInstagramCadence:
         assert is_auto_sync_due(ch, NOW, has_fresh_reel=False) is False
         assert is_auto_sync_due(self._ig(NOW - timedelta(hours=24)), NOW, has_fresh_reel=False) is True
 
-    def test_a_new_reel_switches_an_idle_channel_to_hourly_at_once(self):
+    def test_a_new_reel_switches_an_idle_channel_to_15_minutes_at_once(self):
         # Last synced 3h ago on the daily cadence: a reel going up makes it due now.
         assert is_auto_sync_due(self._ig(NOW - timedelta(hours=3)), NOW, has_fresh_reel=True) is True
 
     def test_youtube_follows_the_same_cadence(self):
-        ch = {**_channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=2)), "platform": "youtube"}
+        ch = {
+            **_channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(minutes=20)),
+            "platform": "youtube",
+        }
         assert is_auto_sync_due(ch, NOW, has_fresh_reel=True) is True
         assert is_auto_sync_due(ch, NOW, has_fresh_reel=False) is False
 

@@ -3,9 +3,9 @@
 Pure: no I/O.
 
 * **Hourly** ranges come from our own readings: each sync records cumulative
-  counts, and the gain between two readings is spread over the clock hours it
-  spans (``instagram_reel_hourly.hourly_gains``). Neither platform reports
-  views per hour, so this is the only way to see them.
+  counts, and the gain between two readings is spread over the clock hours (or
+  quarter-hours) it spans (``instagram_reel_hourly.bucket_gains``). Neither
+  platform reports views per hour, so this is the only way to see them.
 * **Daily** ranges use the platform's own per-day numbers where it has them —
   Instagram's account totals, YouTube Analytics — since a day the platform
   counted beats one we reconstructed.
@@ -24,11 +24,12 @@ from typing import Any, Literal
 
 from app.services.instagram_content_analysis import views_at
 from app.services.instagram_follow_attribution import ViewReading
-from app.services.instagram_reel_hourly import MetricReading, hourly_gains
+from app.services.instagram_reel_hourly import HOUR, QUARTER, MetricReading, bucket_gains, floor_to, hourly_gains
 from app.timezone import IST
 
 Granularity = Literal["hour", "day"]
 RangeKey = Literal["48h", "7d", "28d", "90d"]
+Step = Literal["1h", "15m"]
 
 # Each range: how its bars are bucketed and how many there are.
 RANGES: dict[str, tuple[Granularity, int]] = {
@@ -38,7 +39,8 @@ RANGES: dict[str, tuple[Granularity, int]] = {
     "90d": ("day", 90),
 }
 
-_HOUR = timedelta(hours=1)
+# The bucket an hourly range's bars are cut into.
+STEPS: dict[str, timedelta] = {"1h": HOUR, "15m": QUARTER}
 
 
 @dataclass(frozen=True)
@@ -72,17 +74,22 @@ def channel_totals(
     return totals
 
 
-def _floor_hour(at: datetime) -> datetime:
-    return at.astimezone(IST).replace(minute=0, second=0, microsecond=0)
-
-
 def hourly_points(
-    published_at: datetime | None, readings: Sequence[MetricReading], metric: str, now: datetime, hours: int
+    published_at: datetime | None,
+    readings: Sequence[MetricReading],
+    metric: str,
+    now: datetime,
+    hours: int,
+    step: timedelta = HOUR,
 ) -> list[SeriesPoint]:
-    """The last *hours* complete IST hours before *now*, oldest first; the running hour is left out."""
-    gains = {h.start: h.values.get(metric) for h in hourly_gains(published_at, readings)}
-    end = _floor_hour(now)
-    starts = [end - _HOUR * (hours - i) for i in range(hours)]
+    """The complete IST buckets of *step* across the last *hours* before *now*, oldest first.
+
+    The running bucket is left out.
+    """
+    gains = {h.start: h.values.get(metric) for h in bucket_gains(published_at, readings, step)}
+    end = floor_to(now, step)
+    count = int(hours * HOUR / step)
+    starts = [end - step * (count - i) for i in range(count)]
     return [SeriesPoint(start=s.isoformat(), value=gains.get(s)) for s in starts]
 
 

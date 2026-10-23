@@ -1,9 +1,8 @@
 """Background cron loop for per-channel auto-sync + analysis.
 
 Only channels that opt in via ``automation_config.auto_sync.enabled`` are
-synced: Instagram channels hourly while they have a reel in its first week and
-daily otherwise, YouTube channels on their own ``interval_hours`` (see
-``auto_sync_schedule``). A tick every few minutes picks the channels whose
+synced: every 15 minutes while they have a video in its first week and daily
+otherwise (see ``auto_sync_schedule``). A tick every few minutes picks the channels whose
 ``last_tasks.auto_sync`` is older than their interval, and for each one:
 
 1. Refreshes the channel's numbers (subscribers, views, profile).
@@ -40,9 +39,10 @@ from app.timezone import now_ist
 logger = get_logger(__name__)
 
 _DEFAULT_ANALYSIS_THRESHOLD = 3
-# How often the cron looks for due channels. Per-channel intervals are whole
-# hours, so a five-minute tick makes each sync at most five minutes late.
-_TICK_SECONDS = 300
+# How often the cron looks for due channels. Fresh channels sync every 15
+# minutes, so a one-minute tick keeps each sync at most a minute late; the tick
+# itself is a single indexed query.
+_TICK_SECONDS = 60
 
 
 async def _get_config(db: AsyncIOMotorDatabase) -> dict:
@@ -74,7 +74,7 @@ async def _count_unanalyzed_videos(
 
 
 async def _channels_with_fresh_reels(db: AsyncIOMotorDatabase, now: datetime) -> set[str]:
-    """Channels with a video published in the last week — those sync hourly."""
+    """Channels with a video published in the last week — those sync every 15 minutes."""
     since = now - timedelta(days=FRESH_REEL_DAYS)
     return set(await db.videos.distinct("channel_id", {"status": "published", "published_at": {"$gte": since}}))
 
@@ -134,7 +134,7 @@ async def run_sync_analysis_for_channel(
 
     # --- Sync ---
     try:
-        # Incremental: an hourly sync re-reads only fresh reels every time and older
+        # Incremental: a 15-minute sync re-reads only fresh reels every time and older
         # ones once a day, so its cost doesn't grow with the back catalogue.
         await service.sync_videos(channel_id=channel_id, instructions=None, incremental=True)
         result["sync"] = "ok"
@@ -271,7 +271,7 @@ async def run_sync_analysis_cron(
                 channel_id = channel["channel_id"]
                 # Stamp before running, not after: a sync that fails (an IG rate
                 # limit, an expired token) then waits a full interval instead of
-                # being retried — and re-failing — on every five-minute tick.
+                # being retried — and re-failing — on every tick.
                 await update_channel_task_status(db, channel_id, AUTO_SYNC_TASK)
                 try:
                     r = await run_sync_analysis_for_channel(
