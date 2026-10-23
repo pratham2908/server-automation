@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from app.database import get_channel_platform
 from app.services.instagram_reel_hourly import MetricReading, hourly_gains
 from app.services.instagram_reel_snapshot import MEASURED_ONLY
-from app.services.view_series import RANGES
+from app.services.view_series import RANGES, daily_from_readings
 from app.timezone import IST, assume_utc, now_ist
 
 
@@ -58,6 +58,8 @@ def _parse_hour_bucket(b: str) -> datetime | None:
 def _format_video_url(platform: str, platform_id: str) -> str:
     if platform == "youtube":
         return f"https://www.youtube.com/watch?v={platform_id}"
+    if platform == "threads":
+        return "https://www.threads.net/"
     return f"https://www.instagram.com/reel/{platform_id}/"
 
 
@@ -96,7 +98,14 @@ async def _get_hourly_top_videos(
     now: datetime,
 ) -> ViewsTopVideosOut:
     since = now - timedelta(hours=size + 24)
-    if platform == "instagram":
+    if platform == "threads":
+        cursor = db.threads_post_snapshots.find(
+            {"channel_id": channel_id, "at": {"$gte": since}},
+            {"media_id": 1, "at": 1, "views": 1},
+        ).sort("at", 1)
+        media_field = "threads_media_id"
+        id_key = "media_id"
+    elif platform == "instagram":
         cursor = db.instagram_reel_snapshots.find(
             {"channel_id": channel_id, "at": {"$gte": since}, **MEASURED_ONLY},
             {"media_id": 1, "at": 1, "views": 1},
@@ -180,6 +189,9 @@ async def _get_daily_top_videos(
     else:
         target_dates = list(valid_dates)
 
+    if platform == "threads":
+        return await _get_threads_daily_top_videos(db, channel_id, range_key, size, target_dates, bucket, limit, now)
+
     if platform == "instagram":
         coll = db.instagram_reel_daily
         group_key = "$media_id"
@@ -217,6 +229,42 @@ async def _get_daily_top_videos(
     )
 
 
+async def _get_threads_daily_top_videos(
+    db: AsyncIOMotorDatabase,
+    channel_id: str,
+    range_key: str,
+    size: int,
+    target_dates: list[str],
+    bucket: str | None,
+    limit: int,
+    now: datetime,
+) -> ViewsTopVideosOut:
+    """Threads reports a post's lifetime total only, so its days come from our own readings."""
+    since = now - timedelta(days=size + 1)
+    by_media: dict[str, list[MetricReading]] = {}
+    async for doc in db.threads_post_snapshots.find(
+        {"channel_id": channel_id, "at": {"$gte": since}}, {"media_id": 1, "at": 1, "views": 1}
+    ).sort("at", 1):
+        if doc.get("media_id") and isinstance(doc.get("views"), int | float):
+            by_media.setdefault(str(doc["media_id"]), []).append(
+                MetricReading(at=assume_utc(doc["at"]), values={"views": float(doc["views"])})
+            )
+    wanted = set(target_dates)
+    gains: dict[str, float] = {}
+    for mid, readings in by_media.items():
+        total = sum(v for day, v in daily_from_readings(None, readings, "views").items() if day in wanted and v > 0)
+        if total > 0:
+            gains[mid] = round(total, 1)
+    total_views = round(sum(gains.values()), 1)
+    sorted_media = sorted(gains.items(), key=lambda x: x[1], reverse=True)[:limit]
+    items = await _build_top_video_items(
+        db, channel_id, "threads", "threads_media_id", sorted_media, [m[0] for m in sorted_media], total_views
+    )
+    return ViewsTopVideosOut(
+        channel_id=channel_id, range=range_key, granularity="day", bucket=bucket, total_views=total_views, videos=items
+    )
+
+
 async def _build_top_video_items(
     db: AsyncIOMotorDatabase,
     channel_id: str,
@@ -238,6 +286,7 @@ async def _build_top_video_items(
             media_field: 1,
             "published_at": 1,
             "metadata.views": 1,
+            "threads_permalink": 1,
         },
     ).to_list(len(top_ids) + 5)
 
@@ -270,7 +319,8 @@ async def _build_top_video_items(
                 percentage=pct,
                 lifetime_views=int(lifetime) if isinstance(lifetime, int | float) else None,
                 published_at=pub_str,
-                url=_format_video_url(platform, pid),
+                # A Threads link carries the post's shortcode, not its id, so it is read off the record.
+                url=(v.get("threads_permalink") if v else None) or _format_video_url(platform, pid),
             )
         )
     return items

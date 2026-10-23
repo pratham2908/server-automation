@@ -20,7 +20,14 @@ from app.dependencies import verify_api_key
 from app.services.instagram_content_analysis import parse_published_at
 from app.services.instagram_reel_hourly import MAX_HOURS, MetricReading
 from app.services.instagram_reel_snapshot import MEASURED_ONLY
-from app.services.view_series import RANGES, SeriesPoint, daily_points, hourly_points, series_total
+from app.services.view_series import (
+    RANGES,
+    SeriesPoint,
+    daily_from_readings,
+    daily_points,
+    hourly_points,
+    series_total,
+)
 from app.services.views_top_videos import ViewsTopVideosOut, get_channel_top_videos
 from app.timezone import IST, assume_utc, now_ist
 
@@ -77,6 +84,12 @@ async def _hourly_readings(
     if video_id is None:
         cursor = db.channel_view_snapshots.find({"channel_id": channel_id, "at": {"$gte": since}}).sort("at", 1)
         published = None
+    elif platform == "threads":
+        cursor = db.threads_post_snapshots.find(
+            {"channel_id": channel_id, "media_id": video_id, "at": {"$gte": since}}
+        ).sort("at", 1)
+        video = await db.videos.find_one({"channel_id": channel_id, "threads_media_id": video_id}, {"published_at": 1})
+        published = parse_published_at(video.get("published_at")) if video else None
     elif platform == "instagram":
         cursor = db.instagram_reel_snapshots.find(
             {"channel_id": channel_id, "media_id": video_id, "at": {"$gte": since}, **MEASURED_ONLY}
@@ -105,6 +118,21 @@ async def _daily_views(
     """Views per date from the platform's own daily numbers, the dates spread across a long gap, and a note."""
     values: dict[str, float | None] = {}
     rough: set[str] = set()
+    if platform == "threads" and video_id is None:
+        async for d in db.threads_account_daily.find({"channel_id": channel_id}, {"date": 1, "views": 1}):
+            values[d["date"]] = d.get("views")
+        return values, rough, "Threads' own daily totals for the account. Today fills in as the day goes."
+    if platform == "threads":
+        video = await db.videos.find_one({"channel_id": channel_id, "threads_media_id": video_id}, {"published_at": 1})
+        cursor = db.threads_post_snapshots.find({"channel_id": channel_id, "media_id": video_id}).sort("at", 1)
+        readings = [
+            MetricReading(at=assume_utc(doc["at"]), values={"views": float(doc["views"])})
+            async for doc in cursor
+            if isinstance(doc.get("views"), int | float)
+        ]
+        published = parse_published_at(video.get("published_at")) if video else None
+        values.update(daily_from_readings(published, readings, "views"))
+        return values, rough, "Threads reports a post's lifetime total only, so its days are built from our readings."
     if platform == "instagram" and video_id is None:
         async for d in db.instagram_account_daily.find({"channel_id": channel_id}, {"date": 1, "total_views": 1}):
             values[d["date"]] = d.get("total_views")
@@ -152,7 +180,7 @@ async def _views_series(
         points = daily_points(values, rough, today, size)
         reported = [d for d, v in values.items() if v is not None]
         last = max(reported) if reported else None
-        source = "platform" if not (platform == "instagram" and video_id) else "readings"
+        source = "readings" if platform in ("instagram", "threads") and video_id else "platform"
 
     total, known = series_total(points)
     return ViewsSeriesOut(

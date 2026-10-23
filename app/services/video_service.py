@@ -39,10 +39,11 @@ from app.services.r2 import R2Service
 from app.services.reel_duration_sync import refresh_reel_durations
 from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
 from app.services.schedule_operation import (
-    enqueue_video_for_youtube,
-    schedule_single_video_instagram,
+    schedule_on_platform,
 )
 from app.services.scheduler import compute_schedule_slots
+from app.services.threads import ThreadsServiceManager
+from app.services.threads_sync import sync_threads_channel
 from app.services.todo_engine import recompute_category
 from app.services.trial_graduation import TrialCheck, edit_running_check, trial_fields
 from app.services.view_series import channel_totals
@@ -416,6 +417,21 @@ class VideoService:
                         # (e.g. after re-auth granting instagram_manage_contents).
                         logger.exception("Platform delete failed for Instagram media %s", instagram_media_id)
                         raise RuntimeError(f"Failed to delete media on Instagram: {exc}") from exc
+            elif platform == "threads":
+                threads_media_id = video.get("threads_media_id")
+                if not threads_media_id:
+                    platform_error = "Video is not published on Threads — nothing to delete there"
+                else:
+                    th = await ThreadsServiceManager(self.db).get_service(channel_id)
+                    if not th:
+                        raise RuntimeError("Cannot delete on Threads: channel has no Threads token")
+                    try:
+                        await asyncio.to_thread(th.delete_post, threads_media_id)
+                        platform_deleted = True
+                    except Exception as exc:
+                        # Keep our record (and its Threads id) so the delete can be retried.
+                        logger.exception("Platform delete failed for Threads post %s", threads_media_id)
+                        raise RuntimeError(f"Failed to delete post on Threads: {exc}") from exc
             elif not youtube_video_id:
                 platform_error = "Video is not published on YouTube — nothing to delete there"
             else:
@@ -1364,7 +1380,7 @@ class VideoService:
         channel = await self.db.channels.find_one({"channel_id": channel_id})
         if not channel:
             raise ValueError("Channel not found")
-        platform = channel.get("platform", "youtube")
+        platform = get_channel_platform(channel)
         comment = validate_comment(first_comment, platform)
         if comment and video_id.lower() == "all":
             # One comment across a whole queue is far more likely to be a
@@ -1412,14 +1428,9 @@ class VideoService:
             if trial:
                 await self.db.videos.update_one({"_id": v_doc["_id"]}, {"$set": trial})
                 v_doc.update(trial)
-            if platform == "youtube":
-                r = await enqueue_video_for_youtube(
-                    db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot
-                )
-            else:
-                r = await schedule_single_video_instagram(
-                    db=self.db, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot
-                )
+            r = await schedule_on_platform(
+                db=self.db, platform=platform, channel_id=channel_id, video_doc=v_doc, scheduled_at=slot
+            )
             res.append(r)
         return {"ok": True, "videos": res}
 
@@ -1630,6 +1641,11 @@ class VideoService:
             result = await self._sync_youtube_videos(channel_id, channel, instructions, incremental)
         elif platform == "instagram":
             result = await self._sync_instagram_videos(channel_id, channel, instructions, incremental)
+        elif platform == "threads":
+            threads = await ThreadsServiceManager(self.db).get_service(channel_id)
+            if not threads:
+                raise ChannelNotConnectedError(f"Channel '{channel_id}' is not connected to Threads")
+            result = await sync_threads_channel(self.db, threads, channel_id, now_ist(), incremental)
         else:
             return {"ok": True, "message": "Platform not supported"}
         await update_channel_task_status(self.db, channel_id, "video_sync")

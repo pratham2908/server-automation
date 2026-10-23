@@ -11,10 +11,12 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.database import update_channel_task_status
+from app.database import get_channel_platform, update_channel_task_status
 from app.logger import get_logger
 from app.services.channel_profile import build_profile_update, name_changed, persist_profile_update
 from app.services.growth_tracking import GrowthTrackingService
+from app.services.threads import ThreadsServiceManager
+from app.services.threads_insights_parse import account_totals
 
 logger = get_logger(__name__)
 
@@ -32,7 +34,7 @@ async def refresh_channel_stats(
     case nothing is written. Platform errors propagate to the caller.
     """
     channel_id = channel["channel_id"]
-    platform = channel.get("platform", "youtube")
+    platform = get_channel_platform(channel)
     subs, views = 0, 0
     metadata: dict[str, Any] = {}
     info: dict[str, Any] | None = None
@@ -55,6 +57,16 @@ async def refresh_channel_stats(
             # Instagram has no single account-level view total.
             views = 0
             metadata = {"media_count": info.get("media_count", 0)}
+
+    elif platform == "threads":
+        th_service = await ThreadsServiceManager(db).get_service(channel_id)
+        if th_service:
+            info = await asyncio.to_thread(th_service.get_profile)
+            totals = account_totals(await asyncio.to_thread(th_service.account_insights, "followers_count"))
+            subs = int(totals.get("followers_count", 0))
+            info["followers_count"] = subs
+            # Threads reports views per day, not a lifetime total.
+            views = 0
 
     if info is None:
         # No usable platform credential. Recording a zero snapshot here would put

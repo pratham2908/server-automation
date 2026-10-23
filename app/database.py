@@ -65,6 +65,9 @@ async def connect_db(
     await _db.instagram_reel_snapshots.create_index([("channel_id", 1), ("media_id", 1), ("at", 1)])
     await _db.instagram_reel_daily.create_index([("channel_id", 1), ("media_id", 1), ("date", 1)], unique=True)
     await _db.channel_view_snapshots.create_index([("channel_id", 1), ("at", 1)])
+    await _db.threads_post_snapshots.create_index([("channel_id", 1), ("media_id", 1), ("at", 1)])
+    await _db.threads_account_daily.create_index([("channel_id", 1), ("date", 1)], unique=True)
+    await _db.threads_audience.create_index("channel_id", unique=True)
     await _db.youtube_video_snapshots.create_index([("channel_id", 1), ("youtube_video_id", 1), ("at", 1)])
     await _db.youtube_video_daily.create_index([("channel_id", 1), ("youtube_video_id", 1), ("date", 1)], unique=True)
     await _db.youtube_channel_daily.create_index([("channel_id", 1), ("date", 1)], unique=True)
@@ -212,6 +215,11 @@ async def get_youtube_oauth_config(db: AsyncIOMotorDatabase) -> dict | None:
 async def get_instagram_oauth_config(db: AsyncIOMotorDatabase) -> dict | None:
     """Return the Instagram/Facebook OAuth app credentials from the ``config`` collection."""
     return await db.config.find_one({"key": "instagram_oauth"})
+
+
+async def get_threads_oauth_config(db: AsyncIOMotorDatabase) -> dict | None:
+    """Return the Threads app credentials (its own id and secret, not the Facebook app's)."""
+    return await db.config.find_one({"key": "threads_oauth"})
 
 
 async def get_content_schema_for_prompt(

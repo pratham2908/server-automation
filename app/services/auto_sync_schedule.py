@@ -49,7 +49,7 @@ def auto_sync_config(channel: dict[str, Any]) -> AutoSyncConfig:
 
 def sync_interval_hours(channel: dict[str, Any], has_fresh_reel: bool) -> int:
     """Hours between this channel's auto-syncs."""
-    if get_channel_platform(channel) in ("instagram", "youtube"):
+    if get_channel_platform(channel) in ("instagram", "youtube", "threads"):
         return FRESH_INTERVAL_HOURS if has_fresh_reel else IDLE_INTERVAL_HOURS
     return auto_sync_config(channel).interval_hours
 

@@ -35,8 +35,12 @@ def _short(title: str) -> str:
 
 
 def _noun(platform: str, stage: str) -> tuple[str, str]:
-    """("Reel", "publish") for Instagram, ("Video", "upload") for YouTube."""
-    return ("Reel", "publish") if platform == "instagram" else ("Video", stage)
+    """("Reel", "publish") for Instagram, ("Post", "publish") for Threads, ("Video", "upload") for YouTube."""
+    if platform == "instagram":
+        return ("Reel", "publish")
+    if platform == "threads":
+        return ("Post", "publish")
+    return ("Video", stage)
 
 
 def format_failure_email(

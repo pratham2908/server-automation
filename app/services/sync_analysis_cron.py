@@ -172,6 +172,12 @@ async def run_sync_analysis_for_channel(
         )
         return result
 
+    if platform == "threads":
+        # Threads posts are packaged from their linked channel's analysis; there is no
+        # Threads-side video analysis to run.
+        await update_channel_task_status(db, channel_id, "sync_analysis")
+        return result
+
     # --- Check unanalyzed count ---
     unanalyzed = await _count_unanalyzed_videos(db, channel_id)
     result["unanalyzed_count"] = unanalyzed

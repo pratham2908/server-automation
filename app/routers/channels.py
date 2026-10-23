@@ -6,6 +6,7 @@ On registration, channel metadata is automatically fetched from YouTube.
 import asyncio
 import secrets
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -79,7 +80,7 @@ class ChannelCreate(BaseModel):
     For Instagram: ``instagram_user_id`` and ``access_token`` are required.
     """
 
-    platform: str = Field("youtube", description="'youtube' or 'instagram'")
+    platform: str = Field("youtube", description="'youtube', 'instagram' or 'threads'")
     youtube_channel_id: str | None = Field(None, description="YouTube UC... channel ID (required for youtube)")
     instagram_user_id: str | None = Field(None, description="Instagram user ID (required for instagram)")
     access_token: str | None = Field(None, description="Long-lived Instagram access token (required for instagram)")
@@ -93,6 +94,7 @@ class ChannelCreate(BaseModel):
         ),
     )
     channel_id: str | None = Field(None, description="Custom internal slug. Auto-generated if omitted.")
+    name: str | None = Field(None, description="Display name for a Threads channel until its login fills it in")
     register_password: str | None = Field(
         None, description="App-level password required to register a channel. Not persisted."
     )
@@ -203,14 +205,16 @@ async def create_channel(
     _verify_register_password(body.register_password)
 
     platform = body.platform.lower()
-    if platform not in ("youtube", "instagram"):
+    if platform not in ("youtube", "instagram", "threads"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported platform '{platform}'. Use 'youtube' or 'instagram'.",
+            detail=f"Unsupported platform '{platform}'. Use 'youtube', 'instagram' or 'threads'.",
         )
 
     if platform == "instagram":
         return await _create_instagram_channel(body, db, current_profile.id)
+    if platform == "threads":
+        return await _create_threads_channel(body, db, current_profile.id)
 
     # --- YouTube flow (existing) ---
     if not body.youtube_channel_id:
@@ -382,6 +386,38 @@ async def _create_instagram_channel(
         doc["instagram_user_id"],
         provider,
     )
+    return doc
+
+
+async def _create_threads_channel(body: ChannelCreate, db: AsyncIOMotorDatabase, profile_id: str) -> dict[str, Any]:
+    """Register a Threads channel with no token yet.
+
+    Threads logs in through its own OAuth, which needs a channel to attach the
+    account to — so the channel comes first, and connecting it (``threads-connect``)
+    fills in the Threads user id, token and profile.
+    """
+    channel_id = (body.channel_id or "").strip()
+    if not channel_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="channel_id is required for Threads")
+    if await db.channels.find_one({"channel_id": channel_id}, {"_id": 1}):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Channel '{channel_id}' already exists")
+    now = now_ist()
+    doc: dict[str, Any] = {
+        "channel_id": channel_id,
+        "platform": "threads",
+        "name": (body.name or "").strip() or channel_id,
+        "description": "",
+        "thumbnail_url": "",
+        "subscriber_count": 0,
+        "video_count": 0,
+        "view_count": 0,
+        "profile_id": profile_id,
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.channels.insert_one(doc)
+    doc["_id"] = str(doc["_id"])
+    logger.success("Registered Threads channel '%s' (connect it to log in)", channel_id)
     return doc
 
 
