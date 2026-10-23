@@ -23,13 +23,18 @@ RECALLED_SOURCE = "owner-recalled"
 MEASURED_ONLY: dict[str, Any] = {"source": {"$ne": RECALLED_SOURCE}}
 
 COUNT_METRICS = ("views", "likes", "comments", "shares", "saves")
+# Counts kept for later analysis, not charted. Reposts and ad-inclusive total views come
+# with a Facebook-Login token only, so a reading from an Instagram-Login channel lacks them.
+EXTRA_COUNT_METRICS = ("reposts", "total_views", "total_interactions")
 # Measures that are not counts: reach is whole accounts, the others carry decimals.
 MEASURE_METRICS = ("reach", "skip_rate", "avg_view_duration_seconds", "total_watch_time_seconds")
 
 
 def snapshot_values(metadata: Mapping[str, Any], shared_to_feed: bool | None) -> dict[str, float | int | bool]:
     """The fields of one reading. A number Instagram did not report this time is left out, never zeroed."""
-    values: dict[str, float | int | bool] = {k: int(metadata[k]) for k in COUNT_METRICS if k in metadata}
+    values: dict[str, float | int | bool] = {
+        k: int(metadata[k]) for k in COUNT_METRICS + EXTRA_COUNT_METRICS if k in metadata
+    }
     values.update({k: float(metadata[k]) for k in MEASURE_METRICS if k in metadata})
     if shared_to_feed is not None:
         values["shared_to_feed"] = shared_to_feed
