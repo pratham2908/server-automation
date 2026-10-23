@@ -8,11 +8,14 @@ import pytest
 
 from app.routers.channels import ChannelUpdate
 from app.services.auto_sync_schedule import (
+    FRESH_INTERVAL,
     auto_sync_config,
     is_auto_sync_due,
+    latest_slot,
     needs_reel_insights,
-    next_auto_sync_at,
+    seconds_to_next_minute,
 )
+from app.timezone import IST
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
 
@@ -40,27 +43,55 @@ class TestAutoSyncConfig:
         assert auto_sync_config(_channel({"enabled": True, "interval_hours": 6})).interval_hours == 6
 
 
+def ist(hour: int, minute: int, second: float = 0, day: int = 12) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=IST) + timedelta(seconds=second)
+
+
+class TestLatestSlot:
+    @pytest.mark.parametrize(
+        ("now", "slot"),
+        [
+            (ist(14, 12), ist(14, 5)),
+            (ist(14, 5), ist(14, 5)),
+            (ist(14, 4, 59), ist(13, 50)),
+            (ist(14, 50, 30), ist(14, 50)),
+            # Just after midnight, before 00:05: yesterday's last slot.
+            (ist(0, 2), ist(23, 50, day=11)),
+        ],
+    )
+    def test_quarter_hour_slots_sit_at_5_20_35_50(self, now, slot):
+        assert latest_slot(now, FRESH_INTERVAL) == slot
+
+    def test_daily_slot_is_00_05(self):
+        assert latest_slot(ist(17, 30), timedelta(hours=24)) == ist(0, 5)
+        assert latest_slot(ist(0, 3), timedelta(hours=24)) == ist(0, 5, day=11)
+
+    def test_reads_utc_input_in_ist(self):
+        assert latest_slot(datetime(2026, 10, 12, 8, 40, tzinfo=timezone.utc), FRESH_INTERVAL) == ist(14, 5)
+
+
 class TestIsAutoSyncDue:
+    """A channel without a platform reads as YouTube: daily at 00:05 unless it has a fresh video."""
+
     def test_disabled_is_never_due(self):
         assert is_auto_sync_due(_channel({"enabled": False}), NOW) is False
 
     def test_never_run_is_due_immediately(self):
         assert is_auto_sync_due(_channel({"enabled": True, "interval_hours": 6}), NOW) is True
 
-    def test_not_due_inside_interval(self):
-        ch = _channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=23, minutes=59))
-        assert is_auto_sync_due(ch, NOW) is False
+    def test_not_due_once_todays_slot_has_run(self):
+        ch = _channel({"enabled": True, "interval_hours": 6}, last=ist(0, 5, 2))
+        assert is_auto_sync_due(ch, ist(23, 59)) is False
 
-    def test_due_once_interval_elapses(self):
-        ch = _channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(hours=24))
-        assert is_auto_sync_due(ch, NOW) is True
+    def test_due_when_the_last_sync_predates_the_slot(self):
+        ch = _channel({"enabled": True, "interval_hours": 6}, last=ist(0, 4))
+        assert is_auto_sync_due(ch, ist(0, 5)) is True
 
     def test_naive_mongo_timestamp_is_read_as_utc(self):
-        # Mongo returns naive UTC. Read as IST it would look 5h30 older and fire early.
-        naive = (NOW - timedelta(hours=1)).replace(tzinfo=None)
-        ch = _channel({"enabled": True, "interval_hours": 6}, last=naive)
-        assert next_auto_sync_at(ch, timedelta(hours=6)) == NOW + timedelta(hours=5)
-        assert is_auto_sync_due(ch, NOW) is False
+        # Mongo returns naive UTC: 18:40 UTC on the 11th is 00:10 IST on the 12th, after the
+        # 00:05 slot. Read as IST it would look like the 11th and fire again.
+        ch = _channel({"enabled": True, "interval_hours": 6}, last=datetime(2026, 10, 11, 18, 40))
+        assert is_auto_sync_due(ch, ist(17, 30)) is False
 
 
 class TestChannelUpdateValidation:
@@ -77,32 +108,42 @@ class TestChannelUpdateValidation:
 
 
 class TestInstagramCadence:
-    """Instagram and YouTube sync every 15 minutes while a video is in its first week, daily otherwise."""
+    """Instagram and YouTube sync on the :05/:20/:35/:50 slots while a video is in its first week, daily otherwise."""
 
     def _ig(self, last: datetime) -> dict:
         return {**_channel({"enabled": True, "interval_hours": 6}, last=last), "platform": "instagram"}
 
-    def test_every_15_minutes_with_a_fresh_reel(self):
-        ch = self._ig(NOW - timedelta(minutes=15))
-        assert is_auto_sync_due(ch, NOW, has_fresh_reel=True) is True
-        assert is_auto_sync_due(ch, NOW - timedelta(minutes=1), has_fresh_reel=True) is False
+    def test_runs_on_each_quarter_slot(self):
+        ch = self._ig(ist(14, 5, 1))
+        assert is_auto_sync_due(ch, ist(14, 19, 59), has_fresh_reel=True) is False
+        assert is_auto_sync_due(ch, ist(14, 20), has_fresh_reel=True) is True
+
+    def test_a_missed_slot_is_caught_up_then_back_on_the_clock(self):
+        # Down over 14:05 and back at 14:08: the missed sync runs now...
+        assert is_auto_sync_due(self._ig(ist(13, 50, 1)), ist(14, 8), has_fresh_reel=True) is True
+        # ...and the one after is still 14:20, not 14:23.
+        caught_up = self._ig(ist(14, 8))
+        assert is_auto_sync_due(caught_up, ist(14, 19), has_fresh_reel=True) is False
+        assert is_auto_sync_due(caught_up, ist(14, 20), has_fresh_reel=True) is True
 
     def test_daily_without_one_whatever_the_stored_interval(self):
-        ch = self._ig(NOW - timedelta(hours=7))
-        assert is_auto_sync_due(ch, NOW, has_fresh_reel=False) is False
-        assert is_auto_sync_due(self._ig(NOW - timedelta(hours=24)), NOW, has_fresh_reel=False) is True
+        ch = self._ig(ist(0, 5, 1))
+        assert is_auto_sync_due(ch, ist(23, 59), has_fresh_reel=False) is False
+        assert is_auto_sync_due(ch, ist(0, 5, day=13), has_fresh_reel=False) is True
 
     def test_a_new_reel_switches_an_idle_channel_to_15_minutes_at_once(self):
-        # Last synced 3h ago on the daily cadence: a reel going up makes it due now.
-        assert is_auto_sync_due(self._ig(NOW - timedelta(hours=3)), NOW, has_fresh_reel=True) is True
+        # Last synced at today's 00:05 on the daily cadence: a reel going up makes it due now.
+        assert is_auto_sync_due(self._ig(ist(0, 5, 1)), ist(14, 12), has_fresh_reel=True) is True
 
     def test_youtube_follows_the_same_cadence(self):
-        ch = {
-            **_channel({"enabled": True, "interval_hours": 6}, last=NOW - timedelta(minutes=20)),
-            "platform": "youtube",
-        }
-        assert is_auto_sync_due(ch, NOW, has_fresh_reel=True) is True
-        assert is_auto_sync_due(ch, NOW, has_fresh_reel=False) is False
+        ch = {**_channel({"enabled": True, "interval_hours": 6}, last=ist(13, 50, 1)), "platform": "youtube"}
+        assert is_auto_sync_due(ch, ist(14, 5), has_fresh_reel=True) is True
+        assert is_auto_sync_due(ch, ist(14, 5), has_fresh_reel=False) is False
+
+
+def test_cron_wakes_just_after_the_minute():
+    assert seconds_to_next_minute(ist(14, 4, 59.8)) == pytest.approx(0.7)
+    assert seconds_to_next_minute(ist(14, 5, 0.5)) == pytest.approx(60.0)
 
 
 class TestNeedsReelInsights:

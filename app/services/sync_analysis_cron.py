@@ -2,8 +2,9 @@
 
 Only channels that opt in via ``automation_config.auto_sync.enabled`` are
 synced: every 15 minutes while they have a video in its first week and daily
-otherwise (see ``auto_sync_schedule``). A tick every few minutes picks the channels whose
-``last_tasks.auto_sync`` is older than their interval, and for each one:
+otherwise, on fixed clock slots (see ``auto_sync_schedule``). A tick every minute
+picks the channels whose ``last_tasks.auto_sync`` is older than their newest slot,
+and for each one:
 
 1. Refreshes the channel's numbers (subscribers, views, profile).
 2. Calls the existing video sync logic (YouTube or Instagram).
@@ -27,7 +28,7 @@ from app.database import get_channel_platform, not_paused_query, update_channel_
 from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
 from app.services.analysis_engine import ANALYSIS_MIN_AGE_DAYS, run_analysis
-from app.services.auto_sync_schedule import AUTO_SYNC_TASK, FRESH_REEL_DAYS, is_auto_sync_due
+from app.services.auto_sync_schedule import AUTO_SYNC_TASK, FRESH_REEL_DAYS, is_auto_sync_due, seconds_to_next_minute
 from app.services.channel_stats import refresh_channel_stats
 from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
@@ -39,9 +40,9 @@ from app.timezone import now_ist
 logger = get_logger(__name__)
 
 _DEFAULT_ANALYSIS_THRESHOLD = 3
-# How often the cron looks for due channels. Fresh channels sync every 15
-# minutes, so a one-minute tick keeps each sync at most a minute late; the tick
-# itself is a single indexed query.
+# How often the cron looks for due channels. It wakes on the minute, so a sync
+# slot (:05, :20, …) starts within a second of its time; the tick itself is a
+# single indexed query.
 _TICK_SECONDS = 60
 
 
@@ -242,7 +243,7 @@ async def run_sync_analysis_cron(
     logger.info("Auto-sync cron started (tick: %ds, per-channel intervals)", _TICK_SECONDS)
 
     while True:
-        await asyncio.sleep(_TICK_SECONDS)
+        await asyncio.sleep(seconds_to_next_minute(now_ist()))
 
         try:
             config = await _get_config(db)
