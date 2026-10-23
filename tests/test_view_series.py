@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from app.services.instagram_follow_attribution import ViewReading
-from app.services.instagram_reel_hourly import MetricReading
+from app.services.instagram_reel_hourly import QUARTER, MetricReading
 from app.services.view_series import (
     channel_totals,
     daily_points,
@@ -52,6 +52,12 @@ class TestHourlyPoints:
         readings = [MetricReading(at=at(h), values={"likes": 2.0 * h}) for h in range(0, 3)]
         points = hourly_points(None, readings, "likes", now=at(2), hours=2)
         assert [p.value for p in points] == [2, 2]
+
+    def test_quarter_hour_bars(self) -> None:
+        readings = [MetricReading(at=at(q / 4), values={"views": 5.0 * q}) for q in range(0, 9)]
+        points = hourly_points(None, readings, "views", now=at(2.1), hours=1, step=QUARTER)
+        assert [p.start for p in points] == [at(1 + q / 4).isoformat() for q in range(4)]
+        assert [p.value for p in points] == [5, 5, 5, 5]
 
 
 def test_daily_points_and_total() -> None:

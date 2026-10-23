@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from app.services.instagram_reel_hourly import MAX_HOURS, MetricReading, hourly_gains
+from app.services.instagram_reel_hourly import MAX_HOURS, QUARTER, MetricReading, bucket_gains, floor_to, hourly_gains
 from app.timezone import IST
 
 T0 = datetime(2026, 10, 10, 9, 0, tzinfo=IST)
@@ -76,3 +76,24 @@ class TestHourlyGains:
     def test_hours_are_ist(self) -> None:
         result = hourly_gains(at(0), [reading(1, views=1)])
         assert result[0].start.utcoffset() == timedelta(hours=5, minutes=30)
+
+
+class TestQuarterGains:
+    def test_floor_to_quarter_is_ist(self) -> None:
+        assert floor_to(at(0.4), QUARTER) == at(0.25)
+        assert floor_to(at(0.25), QUARTER) == at(0.25)
+
+    def test_quarter_readings_place_each_quarter(self) -> None:
+        readings = [reading(q / 4, views=q * 10) for q in range(1, 6)]
+        result = bucket_gains(at(0), readings, QUARTER)
+        assert [r.start for r in result] == [at(q / 4) for q in range(5)]
+        assert views(result) == [10, 10, 10, 10, 10]
+
+    def test_a_missed_sync_still_places(self) -> None:
+        result = bucket_gains(at(0), [reading(0.25, views=10), reading(0.75, views=30), reading(1, views=40)], QUARTER)
+        assert views(result) == [10, 10, 10, 10]
+
+    def test_hourly_era_readings_are_gaps_not_a_smear(self) -> None:
+        readings = [reading(1, views=100), reading(2, views=160), reading(2.25, views=170)]
+        result = bucket_gains(None, readings, QUARTER)
+        assert views(result) == [None, None, None, None, 10]

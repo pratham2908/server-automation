@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
+from app.services.instagram_reel_hourly import QUARTER
 from app.services.views_top_videos import (
     _format_video_url,
     _parse_hour_bucket,
@@ -30,6 +31,7 @@ def test_parse_hour_bucket() -> None:
     assert dt2 == datetime(2026, 10, 22, 9, 0, tzinfo=IST)
 
     assert _parse_hour_bucket("invalid-date") is None
+    assert _parse_hour_bucket("2026-10-22T04:40:00+05:30", QUARTER) == datetime(2026, 10, 22, 4, 30, tzinfo=IST)
 
 
 @pytest.mark.asyncio

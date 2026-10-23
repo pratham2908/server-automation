@@ -1,7 +1,7 @@
 """Views over time for a channel or one of its videos — the data behind the Studio-style views card.
 
-Hourly ranges (48h, 7d) are built from our sync readings and can chart any
-counted metric; daily ranges (28d, 90d) chart views from the platform's own
+Hourly ranges (48h, 7d) are built from our sync readings, in hour or
+quarter-hour bars, and can chart any counted metric; daily ranges (28d, 90d) chart views from the platform's own
 per-day numbers. See ``app/services/view_series.py``.
 """
 
@@ -22,7 +22,9 @@ from app.services.instagram_reel_hourly import MAX_HOURS, MetricReading
 from app.services.instagram_reel_snapshot import MEASURED_ONLY
 from app.services.view_series import (
     RANGES,
+    STEPS,
     SeriesPoint,
+    Step,
     daily_from_readings,
     daily_points,
     hourly_points,
@@ -53,6 +55,8 @@ class ViewsSeriesOut(BaseModel):
     video_id: str | None = None
     range: str
     granularity: Literal["hour", "day"]
+    # The bar width of an hourly range; daily ranges ignore it.
+    step: Step = "1h"
     metric: str
     # "readings": our hourly sync readings. "platform": the platform's own per-day numbers.
     source: Literal["readings", "platform"]
@@ -157,7 +161,7 @@ async def _daily_views(
 
 
 async def _views_series(
-    db: AsyncIOMotorDatabase, channel_id: str, video_id: str | None, range_key: str, metric: str
+    db: AsyncIOMotorDatabase, channel_id: str, video_id: str | None, range_key: str, metric: str, step: Step = "1h"
 ) -> ViewsSeriesOut:
     if range_key not in RANGES:
         raise HTTPException(status_code=422, detail=f"range must be one of {', '.join(RANGES)}")
@@ -168,7 +172,7 @@ async def _views_series(
 
     if granularity == "hour":
         readings, published = await _hourly_readings(db, channel_id, platform, video_id, metric)
-        points = hourly_points(published, readings, metric, now, size)
+        points = hourly_points(published, readings, metric, now, size, STEPS[step])
         last = readings[-1].at.astimezone(IST).isoformat() if readings else None
         source: Literal["readings", "platform"] = "readings"
         note = None
@@ -188,6 +192,7 @@ async def _views_series(
         video_id=video_id,
         range=range_key,
         granularity=granularity,
+        step=step,
         metric=metric,
         source=source,
         points=[_out(p) for p in points],
@@ -202,12 +207,13 @@ async def _views_series(
 async def get_views_top_videos(
     channel_id: str,
     range: str = Query("48h", description="48h | 7d (hourly) or 28d | 90d (daily)"),
-    bucket: str | None = Query(None, description="ISO hour start or date for a single candle"),
+    bucket: str | None = Query(None, description="ISO hour/quarter-hour start or date for a single candle"),
     limit: int = Query(6, ge=1, le=20),
+    step: Step = Query("1h", description="Bar width of an hourly range: 1h | 15m"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> ViewsTopVideosOut:
     """Top videos that gained the most views in the selected duration or specific candle."""
-    return await get_channel_top_videos(db, channel_id, range, bucket, limit)
+    return await get_channel_top_videos(db, channel_id, range, bucket, limit, step)
 
 
 @router.get("/views", response_model=ViewsSeriesOut)
@@ -216,7 +222,8 @@ async def get_channel_views(
     range: str = Query("48h", description="48h | 7d (hourly) or 28d | 90d (daily)"),
     metric: Metric = Query("views"),
     video_id: str | None = Query(None, description="A video's platform id; omit for the whole channel"),
+    step: Step = Query("1h", description="Bar width of an hourly range: 1h | 15m"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> ViewsSeriesOut:
-    """Views (or likes, comments, shares, saves on hourly ranges) per hour or per day."""
-    return await _views_series(db, channel_id, video_id, range, metric)
+    """Views (or likes, comments, shares, saves on hourly ranges) per hour, quarter-hour or day."""
+    return await _views_series(db, channel_id, video_id, range, metric, step)

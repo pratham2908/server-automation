@@ -1,8 +1,8 @@
 """Top performing videos by views gained over a duration (hourly or daily range, or single candle).
 
 Computes each video's view gain across the selected window:
-- Hourly ranges (48h, 7d) or single hour bucket: derived from snapshot readings
-  via ``app.services.instagram_reel_hourly.hourly_gains``.
+- Hourly ranges (48h, 7d) or a single hour / quarter-hour bucket: derived from
+  snapshot readings via ``app.services.instagram_reel_hourly.bucket_gains``.
 - Daily ranges (28d, 90d) or single day bucket: aggregated from daily timelines
   (``instagram_reel_daily`` / ``youtube_video_daily``).
 """
@@ -17,9 +17,9 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
 from app.database import get_channel_platform
-from app.services.instagram_reel_hourly import MetricReading, hourly_gains
+from app.services.instagram_reel_hourly import HOUR, MetricReading, bucket_gains, floor_to
 from app.services.instagram_reel_snapshot import MEASURED_ONLY
-from app.services.view_series import RANGES, daily_from_readings
+from app.services.view_series import RANGES, STEPS, Step, daily_from_readings
 from app.timezone import IST, assume_utc, now_ist
 
 
@@ -44,13 +44,13 @@ class ViewsTopVideosOut(BaseModel):
     videos: list[TopVideoItem]
 
 
-def _parse_hour_bucket(b: str) -> datetime | None:
+def _parse_hour_bucket(b: str, step: timedelta = HOUR) -> datetime | None:
     try:
         clean = b.replace("Z", "+00:00")
         dt = datetime.fromisoformat(clean)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=IST)
-        return dt.astimezone(IST).replace(minute=0, second=0, microsecond=0)
+        return floor_to(dt, step)
     except Exception:
         return None
 
@@ -69,6 +69,7 @@ async def get_channel_top_videos(
     range_key: str,
     bucket: str | None = None,
     limit: int = 6,
+    step: Step = "1h",
 ) -> ViewsTopVideosOut:
     """Return top videos ranked by views gained over the given range or specific candle bucket."""
     if range_key not in RANGES:
@@ -83,7 +84,7 @@ async def get_channel_top_videos(
     now = now_ist()
 
     if granularity == "hour":
-        return await _get_hourly_top_videos(db, channel_id, platform, range_key, size, bucket, limit, now)
+        return await _get_hourly_top_videos(db, channel_id, platform, range_key, size, bucket, limit, now, STEPS[step])
     return await _get_daily_top_videos(db, channel_id, platform, range_key, size, bucket, limit, now)
 
 
@@ -96,6 +97,7 @@ async def _get_hourly_top_videos(
     bucket: str | None,
     limit: int,
     now: datetime,
+    step: timedelta = HOUR,
 ) -> ViewsTopVideosOut:
     since = now - timedelta(hours=size + 24)
     if platform == "threads":
@@ -129,11 +131,12 @@ async def _get_hourly_top_videos(
             MetricReading(at=assume_utc(doc["at"]), values={"views": float(doc["views"])})
         )
 
-    end_hour = now.astimezone(IST).replace(minute=0, second=0, microsecond=0)
-    valid_hours = {end_hour - timedelta(hours=size - i) for i in range(size)}
+    end_bucket = floor_to(now, step)
+    count = int(size * HOUR / step)
+    valid_hours = {end_bucket - step * (count - i) for i in range(count)}
 
     if bucket:
-        parsed_dt = _parse_hour_bucket(bucket)
+        parsed_dt = _parse_hour_bucket(bucket, step)
         target_hours = {parsed_dt} if parsed_dt else set()
     else:
         target_hours = valid_hours
@@ -142,7 +145,7 @@ async def _get_hourly_top_videos(
     total_views_all_videos = 0.0
 
     for mid, readings in by_media.items():
-        hg = hourly_gains(None, readings)
+        hg = bucket_gains(None, readings, step)
         tot = 0.0
         for g in hg:
             if g.start in target_hours:
