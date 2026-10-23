@@ -97,3 +97,8 @@ def test_a_reel_removed_from_the_grid_later_does_not_clear_the_time():
 
 def test_nothing_is_written_when_instagram_did_not_say():
     assert graduation_fields(_trial(), None, NOW, EARLIER) == {}
+
+
+def test_facebook_login_extras_are_kept():
+    values = snapshot_values({"views": 10, "reposts": 2, "total_views": 12, "total_interactions": 5}, None)
+    assert (values["reposts"], values["total_views"], values["total_interactions"]) == (2, 12, 5)
