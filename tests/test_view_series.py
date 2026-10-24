@@ -5,13 +5,18 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from app.services.instagram_follow_attribution import ViewReading
-from app.services.instagram_reel_hourly import QUARTER, MetricReading
+from app.services.instagram_reel_hourly import HOUR, QUARTER, MetricReading
 from app.services.view_series import (
+    DAY,
+    Curve,
     channel_totals,
+    curve_points,
     daily_points,
     hourly_points,
+    last_known,
     reconstruct_channel_totals,
     series_total,
+    window_starts,
 )
 from app.timezone import IST
 
@@ -98,3 +103,53 @@ class TestReconstruct:
         out = reconstruct_channel_totals(readings, {"a": None, "b": at(1.5)}, [at(1), at(2)])
         # At 1h "b" isn't posted; at 2h it has 9 (its publish moment is a free reading of 0).
         assert out == [(at(1), 60.0), (at(2), 79.0)]
+
+
+class TestCurve:
+    """Since-posted and running-total series, read off the cumulative curve at bucket edges."""
+
+    def _curve(self, published=None):
+        readings = [MetricReading(at=at(h), values={"views": 100.0 * h}) for h in (1, 2, 3, 4)]
+        return Curve(published, readings, "views")
+
+    def test_interpolates_between_readings_and_stops_outside_them(self) -> None:
+        curve = self._curve()
+        assert curve.at(at(2), 3) == 200
+        assert curve.at(at(2.5), 3) == 250
+        assert curve.at(at(0.5), 3) is None and curve.at(at(5), 3) is None
+
+    def test_a_long_gap_is_not_interpolated(self) -> None:
+        curve = Curve(None, [MetricReading(at(0), {"views": 0.0}), MetricReading(at(10), {"views": 1000.0})], "views")
+        assert curve.at(at(5), 3) is None
+        assert curve.at(at(5), 30) == 500
+
+    def test_publish_is_a_free_zero(self) -> None:
+        assert self._curve(published=at(0)).at(at(0.5), 3) == 50
+
+    def test_since_posted_gains_line_up_by_age(self) -> None:
+        published = at(0.5)
+        curve = Curve(
+            published,
+            [MetricReading(at=at(0.5 + h), values={"views": 10.0 * h * h}) for h in (1, 2, 3)],
+            "views",
+        )
+        starts = window_starts("posted", HOUR, 4, now=at(10), published_at=published)
+        points = curve_points(curve, starts, HOUR, "gain", now=at(10), origin=published)
+        assert [p.offset_hours for p in points] == [0, 1, 2, 3]
+        assert [p.value for p in points] == [10, 30, 50, None]
+
+    def test_running_total_is_the_count_at_each_bucket_end(self) -> None:
+        curve = self._curve(published=at(0))
+        starts = window_starts("clock", HOUR, 3, now=at(3.5), published_at=None)
+        points = curve_points(curve, starts, HOUR, "total", now=at(3.5))
+        assert [p.value for p in points] == [100, 200, 300]
+        assert last_known(points) == 300
+
+    def test_buckets_still_running_are_left_out(self) -> None:
+        starts = window_starts("posted", HOUR, 48, now=at(5.2), published_at=at(0))
+        points = curve_points(self._curve(published=at(0)), starts, HOUR, "total", now=at(5.2), origin=at(0))
+        assert len(points) == 5
+
+    def test_daily_clock_window_ends_at_todays_midnight(self) -> None:
+        starts = window_starts("clock", DAY, 2, now=datetime(2026, 10, 24, 15, 0, tzinfo=IST), published_at=None)
+        assert starts == [datetime(2026, 10, 22, tzinfo=IST), datetime(2026, 10, 23, tzinfo=IST)]
