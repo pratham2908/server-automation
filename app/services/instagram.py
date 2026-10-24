@@ -685,6 +685,41 @@ class InstagramService:
 
         return cast(str, self._post(f"{comment_id}/replies", {"message": message}).get("id", ""))
 
+    def send_private_reply(self, ig_user_id: str, comment_id: str, text: str) -> str:
+        """DM the person who wrote *comment_id* — Instagram's "private reply". Returns the message id.
+
+        Meta allows one per comment, within 7 days of it. Instagram Login needs
+        ``instagram_business_manage_comments``; Facebook Login also needs ``instagram_manage_messages``.
+        The recipient is an object, so this goes as a JSON body rather than form fields.
+        """
+        body = {"recipient": {"comment_id": comment_id}, "message": {"text": text}}
+        return str(self._post(f"{self._user_node(ig_user_id)}/messages", json_body=body).get("message_id", ""))
+
+    def get_recent_comments(self, media_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """The newest top-level comments on a media item, with the commenter's id where Meta gives it.
+
+        One page only: the comment-to-DM poll runs every few minutes, so anything older has already
+        been seen. Instagram Login tokens get an empty list here for this app — read with Facebook Login.
+        """
+        body = self._get(f"{media_id}/comments", {"fields": "id,text,timestamp,username,from", "limit": str(limit)})
+        return list(body.get("data", []))
+
+    def account_user_id(self) -> str:
+        """The professional-account id Meta addresses webhooks to (Instagram Login's ``user_id``)."""
+        return str(self._get("me", {"fields": "user_id"}).get("user_id", ""))
+
+    def subscribed_webhook_fields(self) -> list[str]:
+        """Which webhook fields this account is subscribed to for our app (Instagram Login only)."""
+        apps = self._get("me/subscribed_apps").get("data", [])
+        return [str(f) for app in apps for f in app.get("subscribed_fields", [])]
+
+    def subscribe_webhooks(self, fields: list[str]) -> bool:
+        """Ask Meta to send this account's events for *fields* to our app's webhook (Instagram Login only).
+
+        The call replaces the account's field list, so pass every field wanted, not just the new one.
+        """
+        return bool(self._post("me/subscribed_apps", {"subscribed_fields": ",".join(fields)}).get("success"))
+
     def get_media_sweep(self, ig_user_id: str) -> MediaSweep:
         """Every post on the profile with its insights, one call per 100 posts.
 
@@ -856,7 +891,7 @@ class InstagramService:
     # Publishing (Reels)
     # ------------------------------------------------------------------
 
-    def _post(self, endpoint: str, params: dict | None = None) -> dict:
+    def _post(self, endpoint: str, params: dict | None = None, json_body: dict[str, Any] | None = None) -> dict:
         import time
 
         from app.services.metrics import metrics_service
@@ -867,7 +902,8 @@ class InstagramService:
         try:
             resp = requests.post(
                 f"{self._base}/{endpoint}",
-                data=payload,
+                data=payload if json_body is None else None,
+                json=json_body,
                 headers=headers,
                 timeout=60,
             )

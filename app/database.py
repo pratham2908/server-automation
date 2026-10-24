@@ -158,6 +158,13 @@ async def connect_db(
     await _db.comment_replies.create_index(
         [("channel_id", 1), ("replied_at", -1)],
     )
+    # Comment-to-DM: the unique comment id is what stops a comment being messaged twice.
+    await _db.comment_dm_events.create_index("comment_id", unique=True)
+    await _db.comment_dm_events.create_index([("status", 1), ("send_after", 1)])
+    await _db.comment_dm_events.create_index([("channel_id", 1), ("created_at", -1)])
+    await _db.comment_dm_events.create_index([("channel_id", 1), ("media_id", 1), ("person", 1)])
+    await _db.comment_dm_events.create_index([("channel_id", 1), ("status", 1), ("sent_at", 1)])
+    await _db.comment_dm_rules.create_index([("channel_id", 1), ("media_id", 1)], unique=True)
     # AI cost observability — recent-first feed plus per-model/per-task rollups.
     await _db.ai_call_logs.create_index([("timestamp", -1)])
     await _db.ai_call_logs.create_index([("task", 1), ("timestamp", -1)])
