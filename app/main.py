@@ -38,6 +38,7 @@ _auto_scheduler_task = None
 _post_publisher_task = None
 _threads_publisher_task = None
 _threads_token_task = None
+_comment_dm_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background Threads publisher and token refresher started")
 
+    # ---- Comment-to-DM: sends queued DMs, polls for comments the webhook missed ----
+    from app.services.comment_dm_worker import run_comment_dm_worker
+
+    global _comment_dm_task
+    _comment_dm_task = create_monitored_task(
+        run_comment_dm_worker(db, instagram_service_manager),
+        feature="Background: Comment DM worker",
+    )
+    logger.info("Background comment-to-DM worker started")
+
     yield
 
     # ---- Shutdown ----
@@ -309,6 +320,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _post_publisher_task,
         _threads_publisher_task,
         _threads_token_task,
+        _comment_dm_task,
     ):
         if task and not task.done():
             task.cancel()
@@ -357,6 +369,7 @@ from app.routers import (
     channel_groups,
     channels,
     comment_analysis,
+    comment_dm,
     comment_inbox,
     comment_replies,
     competitor_feed,
@@ -365,6 +378,7 @@ from app.routers import (
     errors,
     growth,
     instagram_insights,
+    meta_webhooks,
     observability,
     posts,
     preview_analysis,
@@ -422,6 +436,9 @@ app.include_router(youtube_insights.router)
 app.include_router(threads.router)
 app.include_router(views_series.router)
 app.include_router(video_properties.router)
+app.include_router(comment_dm.router)
+app.include_router(comment_dm.config_router)
+app.include_router(meta_webhooks.router)
 
 
 @app.get("/health", tags=["health"])

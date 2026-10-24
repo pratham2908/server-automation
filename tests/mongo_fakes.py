@@ -1,7 +1,7 @@
 """A small in-memory stand-in for the Motor collections the Threads code touches.
 
 Covers the query operators it uses ($in, $ne, $lte, $gte, $exists) and the
-update operators ($set with dotted keys, $unset, $pull with $in, upsert). Not a Mongo engine.
+update operators ($set with dotted keys, $unset, $pull with $in, upsert), plus find_one_and_update. Not a Mongo engine.
 """
 
 from __future__ import annotations
@@ -143,6 +143,24 @@ class Collection:
                 if isinstance(current, list):
                     _set(target, k, [v for v in current if v not in cond["$in"]])
         return Result(len(targets))
+
+    async def find_one_and_update(
+        self,
+        query: dict[str, Any],
+        update: dict[str, Any],
+        sort: list[tuple[str, int]] | None = None,
+        return_document: Any = None,
+    ) -> dict[str, Any] | None:
+        """Always returns the document after the update, which is the only way the code under test asks."""
+        found = [d for d in self.docs if matches(d, query)]
+        for key, direction in reversed(sort or []):
+            found.sort(key=lambda d: d.get(key), reverse=direction < 0)
+        if not found:
+            return None
+        target = found[0]
+        for k, v in (update.get("$set") or {}).items():
+            _set(target, k, copy.deepcopy(v))
+        return copy.deepcopy(target)
 
     async def delete_one(self, query: dict[str, Any]) -> Result:
         for i, d in enumerate(self.docs):
