@@ -17,6 +17,7 @@ post would read as a drop.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -24,12 +25,25 @@ from typing import Any, Literal
 
 from app.services.instagram_content_analysis import views_at
 from app.services.instagram_follow_attribution import ViewReading
-from app.services.instagram_reel_hourly import HOUR, QUARTER, MetricReading, bucket_gains, floor_to, hourly_gains
+from app.services.instagram_reel_hourly import (
+    HOUR,
+    MAX_GAP_HOURS,
+    QUARTER,
+    QUARTER_MAX_GAP_HOURS,
+    MetricReading,
+    bucket_gains,
+    floor_to,
+    hourly_gains,
+)
 from app.timezone import IST
 
 Granularity = Literal["hour", "day"]
 RangeKey = Literal["24h", "48h", "7d", "28d", "90d"]
 Step = Literal["1h", "15m"]
+# Clock: buckets on IST clock hours and dates. Posted: buckets counted from the video's publish time.
+Align = Literal["clock", "posted"]
+# Gain: what each bucket added. Total: the cumulative count at the bucket's end.
+Measure = Literal["gain", "total"]
 
 # Each range: how its bars are bucketed and how many there are.
 RANGES: dict[str, tuple[Granularity, int]] = {
@@ -42,6 +56,10 @@ RANGES: dict[str, tuple[Granularity, int]] = {
 
 # The bucket an hourly range's bars are cut into.
 STEPS: dict[str, timedelta] = {"1h": HOUR, "15m": QUARTER}
+DAY = timedelta(days=1)
+# A video past its first week is read about once a day, so day edges sit between readings
+# up to a day apart; wider than this and the count at the edge would be a guess.
+DAY_MAX_GAP_HOURS = 30.0
 
 
 @dataclass(frozen=True)
@@ -52,6 +70,8 @@ class SeriesPoint:
     value: float | None
     # The value was spread across a long gap between readings rather than measured in this bucket.
     rough: bool = False
+    # Hours from the video's publish time to the bucket's start, on a since-posted series.
+    offset_hours: float | None = None
 
 
 def channel_totals(
@@ -166,3 +186,91 @@ def reconstruct_channel_totals(
         if complete:
             out.append((t, total))
     return out
+
+
+def max_gap_hours_for(step: timedelta) -> float:
+    """How far apart two readings may be for a count between them to be interpolated, per bucket size."""
+    if step >= DAY:
+        return DAY_MAX_GAP_HOURS
+    return MAX_GAP_HOURS if step >= HOUR else QUARTER_MAX_GAP_HOURS
+
+
+class Curve:
+    """A cumulative count through time, from readings, read off at any moment by linear interpolation.
+
+    Linear interpolation is the same assumption the per-bucket gains make when they spread a
+    gain over the hours it spans, so a running total and its gains agree.
+    """
+
+    def __init__(self, published_at: datetime | None, readings: Sequence[MetricReading], metric: str) -> None:
+        points = sorted((r.at, float(r.values[metric])) for r in readings if metric in r.values)
+        if published_at is not None and (not points or published_at < points[0][0]):
+            # Nothing before publishing: the publish moment is a free reading of zero.
+            points.insert(0, (published_at, 0.0))
+        self.times = [t for t, _ in points]
+        self.values = [v for _, v in points]
+
+    def at(self, moment: datetime, max_gap_hours: float) -> float | None:
+        """The count at *moment*; None outside the readings or inside a gap wider than *max_gap_hours*."""
+        i = bisect_left(self.times, moment)
+        if i < len(self.times) and self.times[i] == moment:
+            return self.values[i]
+        if i == 0 or i == len(self.times):
+            return None
+        before, after = self.times[i - 1], self.times[i]
+        span = (after - before).total_seconds()
+        if span / 3600 > max_gap_hours:
+            return None
+        fraction = (moment - before).total_seconds() / span
+        return self.values[i - 1] + (self.values[i] - self.values[i - 1]) * fraction
+
+
+def curve_points(
+    curve: Curve,
+    starts: Sequence[datetime],
+    step: timedelta,
+    measure: Measure,
+    now: datetime,
+    origin: datetime | None = None,
+) -> list[SeriesPoint]:
+    """Each complete bucket's gain or end-of-bucket total, read off the curve at the bucket edges.
+
+    Buckets still running at *now* are left out. With *origin* (a publish time) each point
+    also carries its distance from it, for lining several videos up by age.
+    """
+    gap = max_gap_hours_for(step)
+    out: list[SeriesPoint] = []
+    for start in starts:
+        end = start + step
+        if end > now:
+            break
+        after = curve.at(end, gap)
+        if measure == "total":
+            value = after
+        else:
+            before = curve.at(start, gap)
+            # A platform revising a count down is no negative bucket.
+            value = None if after is None or before is None else max(0.0, after - before)
+        offset = None if origin is None else round((start - origin).total_seconds() / 3600, 4)
+        out.append(SeriesPoint(start=start.astimezone(IST).isoformat(), value=value, offset_hours=offset))
+    return out
+
+
+def window_starts(
+    align: Align, step: timedelta, count: int, now: datetime, published_at: datetime | None
+) -> list[datetime]:
+    """The bucket starts for a window: the last *count* complete clock buckets, or the first *count* after posting."""
+    if align == "posted":
+        if published_at is None:
+            return []
+        return [published_at + step * i for i in range(count)]
+    if step >= DAY:
+        end = now.astimezone(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        end = floor_to(now, step)
+    return [end - step * (count - i) for i in range(count)]
+
+
+def last_known(points: Sequence[SeriesPoint]) -> float | None:
+    """The newest value — a running total's headline."""
+    return next((p.value for p in reversed(points) if p.value is not None), None)
