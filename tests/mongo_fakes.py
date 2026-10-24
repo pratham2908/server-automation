@@ -1,7 +1,7 @@
 """A small in-memory stand-in for the Motor collections the Threads code touches.
 
 Covers the query operators it uses ($in, $ne, $lte, $gte, $exists) and the
-update operators ($set with dotted keys, $unset, upsert). Not a Mongo engine.
+update operators ($set with dotted keys, $unset, $pull with $in, upsert). Not a Mongo engine.
 """
 
 from __future__ import annotations
@@ -33,8 +33,11 @@ def _match_value(value: Any, cond: Any) -> bool:
     if isinstance(cond, dict) and any(k.startswith("$") for k in cond):
         for op, arg in cond.items():
             present = value is not _MISSING
-            if op == "$in" and not (present and value in arg):
-                return False
+            if op == "$in":
+                # Like Mongo, $in on an array field matches when any element is in the list.
+                hits = present and (any(v in arg for v in value) if isinstance(value, list) else value in arg)
+                if not hits:
+                    return False
             if op == "$ne" and present and value == arg:
                 return False
             if op == "$lte" and not (present and value is not None and value <= arg):
@@ -127,6 +130,19 @@ class Collection:
         for k in update.get("$unset") or {}:
             _unset(target, k)
         return Result(1)
+
+    async def update_many(self, query: dict[str, Any], update: dict[str, Any]) -> Result:
+        targets = [d for d in self.docs if matches(d, query)]
+        for target in targets:
+            for k, v in (update.get("$set") or {}).items():
+                _set(target, k, copy.deepcopy(v))
+            for k in update.get("$unset") or {}:
+                _unset(target, k)
+            for k, cond in (update.get("$pull") or {}).items():
+                current = _get(target, k)
+                if isinstance(current, list):
+                    _set(target, k, [v for v in current if v not in cond["$in"]])
+        return Result(len(targets))
 
     async def delete_one(self, query: dict[str, Any]) -> Result:
         for i, d in enumerate(self.docs):
