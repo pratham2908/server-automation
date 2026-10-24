@@ -428,20 +428,27 @@ async def extract_content_params(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+class VerifyParamsRequest(BaseModel):
+    """The values the owner confirmed or corrected; absent fields are left as they are."""
+
+    content_params: dict[str, str | int | float | bool | None] | None = None
+    category: str | None = None
+
+
 @router.post("/{video_id}/verify-params")
 async def verify_video(
     channel_id: str,
     video_id: str,
-    body: Any | None = None,  # Simplified for brevity, service handles the actual verification status update
+    body: VerifyParamsRequest | None = None,
     service: VideoService = Depends(get_video_service),
 ):
-    """Mark a video as verified."""
-    # This endpoint was mostly just setting verification_status to 'verified'
-    await service.db.videos.update_one(
-        {"channel_id": channel_id, "video_id": video_id},
-        {"$set": {"verification_status": "verified", "updated_at": now_ist()}},
-    )
-    return {"ok": True}
+    """Mark a video verified, saving the content params and category the owner corrected."""
+    body = body or VerifyParamsRequest()
+    try:
+        await service.verify_params(channel_id, video_id, body.content_params, body.category)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e))
+    return {"ok": True, "video_id": video_id}
 
 
 @router.post("/{video_id}/upload", status_code=status.HTTP_201_CREATED)

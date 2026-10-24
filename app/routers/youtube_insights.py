@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
@@ -37,6 +37,7 @@ from app.services.instagram_content_analysis import (
     posting_slots,
 )
 from app.services.instagram_reel_hourly import HOURLY_METRICS, MAX_GAP_HOURS, MAX_HOURS, MetricReading, hourly_gains
+from app.services.video_properties import parse_property_filter, property_filter_query
 from app.timezone import assume_utc, now_ist, to_ist_iso
 
 router = APIRouter(
@@ -55,13 +56,23 @@ def _watch_through(meta: dict[str, object]) -> float | None:
 
 
 @router.get("/content-analysis", response_model=ContentAnalysisOut)
-async def get_content_analysis(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> ContentAnalysisOut:
+async def get_content_analysis(
+    channel_id: str,
+    properties: str | None = Query(None, description="Only videos with these tags: p1:v1,v2;p2:v3"),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> ContentAnalysisOut:
     """Per-video speed, hook and hold, plus posting-time and topic/format breakdowns."""
     videos: list[ReelAnalysisOut] = []
     summaries: list[ReelSummary] = []
     params: dict[str, dict[str, list[str]]] = {}
     cursor = db.videos.find(
-        {"channel_id": channel_id, "youtube_video_id": {"$ne": None}, "status": "published"},
+        {
+            "channel_id": channel_id,
+            "youtube_video_id": {"$ne": None},
+            "status": "published",
+            # Every card below is then built from just the tagged videos, posting times and groups included.
+            **property_filter_query(parse_property_filter(properties)),
+        },
         {
             "youtube_video_id": 1,
             "video_id": 1,
@@ -69,6 +80,7 @@ async def get_content_analysis(channel_id: str, db: AsyncIOMotorDatabase = Depen
             "thumbnail_url": 1,
             "category": 1,
             "content_params": 1,
+            "properties": 1,
             "published_at": 1,
             "metadata": 1,
         },
@@ -109,6 +121,7 @@ async def get_content_analysis(channel_id: str, db: AsyncIOMotorDatabase = Depen
             hours_to_half_views=number_or_none(meta.get("hours_to_half_views")),
             hours_to_90_views=number_or_none(meta.get("hours_to_90_views")),
             picking_up=meta.get("picking_up") if isinstance(meta.get("picking_up"), bool) else None,
+            properties=doc.get("properties") or {},
         )
         videos.append(video)
         summaries.append(

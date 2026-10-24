@@ -377,6 +377,7 @@ from app.routers import (
     threads,
     thumbnail_analysis,
     ui,
+    video_properties,
     video_sources,
     videos,
     views_series,
@@ -420,6 +421,7 @@ app.include_router(instagram_insights.router)
 app.include_router(youtube_insights.router)
 app.include_router(threads.router)
 app.include_router(views_series.router)
+app.include_router(video_properties.router)
 
 
 @app.get("/health", tags=["health"])

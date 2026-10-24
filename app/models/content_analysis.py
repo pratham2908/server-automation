@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.instagram_content_analysis import GroupStat, PostingSlot
 
@@ -91,6 +91,8 @@ class ReelAnalysisOut(BaseModel):
     hours_to_half_views: float | None = None
     hours_to_90_views: float | None = None
     picking_up: bool | None = None
+    # The owner's property tags: {property_id: [value_id, ...]}.
+    properties: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class PostingSlotOut(BaseModel):

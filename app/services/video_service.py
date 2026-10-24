@@ -340,6 +340,38 @@ class VideoService:
         )
         return {"ok": True, "video_id": video_id}
 
+    async def verify_params(
+        self,
+        channel_id: str,
+        video_id: str,
+        content_params: dict[str, str | int | float | bool | None] | None,
+        category: str | None,
+    ) -> None:
+        """Save the owner's corrected params and category, and mark the video verified.
+
+        This used to set only the status: the corrections the Verify window sent were
+        dropped, so a fixed value quietly reverted to the AI's guess.
+        """
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id}, {"category": 1})
+        if not video:
+            raise ValueError("Video not found")
+        fields: dict[str, Any] = {"verification_status": "verified", "updated_at": now_ist()}
+        if content_params is not None:
+            fields["content_params"] = content_params
+        old_category = video.get("category")
+        new_category = category if category and category != old_category else None
+        if new_category:
+            fields["category"] = new_category
+        await self.db.videos.update_one({"channel_id": channel_id, "video_id": video_id}, {"$set": fields})
+        if new_category:
+            await self.db.analysis_history.update_many(
+                {"channel_id": channel_id, "video_id": video_id}, {"$set": {"category": new_category}}
+            )
+            # Both categories' aggregates count this video; each must be recounted.
+            if old_category:
+                await recompute_category(channel_id, old_category, self.db)
+            await recompute_category(channel_id, new_category, self.db)
+
     async def change_video_category(
         self, channel_id: str, video_id: str, old_cat_id: str, new_cat_id: str
     ) -> dict[str, Any]:
