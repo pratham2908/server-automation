@@ -1,6 +1,6 @@
 """Views over time for a channel or one of its videos — the data behind the Studio-style views card.
 
-Hourly ranges (48h, 7d) are built from our sync readings, in hour or
+Hourly ranges (24h, 48h, 7d) are built from our sync readings, in hour or
 quarter-hour bars, and can chart any counted metric; daily ranges (28d, 90d) chart views from the platform's own
 per-day numbers. See ``app/services/view_series.py``.
 """
@@ -31,6 +31,7 @@ from app.services.view_series import (
     series_total,
 )
 from app.services.views_top_videos import ViewsTopVideosOut, get_channel_top_videos
+from app.services.views_trending import TrendingVideosOut, get_trending_videos
 from app.timezone import IST, assume_utc, now_ist
 
 router = APIRouter(
@@ -206,7 +207,7 @@ async def _views_series(
 @router.get("/views/top-videos", response_model=ViewsTopVideosOut)
 async def get_views_top_videos(
     channel_id: str,
-    range: str = Query("48h", description="48h | 7d (hourly) or 28d | 90d (daily)"),
+    range: str = Query("48h", description="24h | 48h | 7d (hourly) or 28d | 90d (daily)"),
     bucket: str | None = Query(None, description="ISO hour/quarter-hour start or date for a single candle"),
     limit: int = Query(6, ge=1, le=20),
     step: Step = Query("1h", description="Bar width of an hourly range: 1h | 15m"),
@@ -216,10 +217,21 @@ async def get_views_top_videos(
     return await get_channel_top_videos(db, channel_id, range, bucket, limit, step)
 
 
+@router.get("/views/trending", response_model=TrendingVideosOut)
+async def get_views_trending(
+    channel_id: str,
+    hours: int = Query(24, ge=1, le=168, description="How far back the gain is counted"),
+    limit: int = Query(5, ge=1, le=20),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> TrendingVideosOut:
+    """Videos that gained the most views in the last *hours*, old ones included."""
+    return await get_trending_videos(db, await _channel(db, channel_id), hours, limit)
+
+
 @router.get("/views", response_model=ViewsSeriesOut)
 async def get_channel_views(
     channel_id: str,
-    range: str = Query("48h", description="48h | 7d (hourly) or 28d | 90d (daily)"),
+    range: str = Query("48h", description="24h | 48h | 7d (hourly) or 28d | 90d (daily)"),
     metric: Metric = Query("views"),
     video_id: str | None = Query(None, description="A video's platform id; omit for the whole channel"),
     step: Step = Query("1h", description="Bar width of an hourly range: 1h | 15m"),

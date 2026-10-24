@@ -1,7 +1,7 @@
 """Top performing videos by views gained over a duration (hourly or daily range, or single candle).
 
 Computes each video's view gain across the selected window:
-- Hourly ranges (48h, 7d) or a single hour / quarter-hour bucket: derived from
+- Hourly ranges (24h, 48h, 7d) or a single hour / quarter-hour bucket: derived from
   snapshot readings via ``app.services.instagram_reel_hourly.bucket_gains``.
 - Daily ranges (28d, 90d) or single day bucket: aggregated from daily timelines
   (``instagram_reel_daily`` / ``youtube_video_daily``).
@@ -42,6 +42,38 @@ class ViewsTopVideosOut(BaseModel):
     bucket: str | None = None
     total_views: float
     videos: list[TopVideoItem]
+
+
+# Which field on a video document holds its id on each platform.
+MEDIA_FIELDS = {"threads": "threads_media_id", "instagram": "instagram_media_id", "youtube": "youtube_video_id"}
+
+
+async def view_readings_by_media(
+    db: AsyncIOMotorDatabase, channel_id: str, platform: str, since: datetime
+) -> dict[str, list[tuple[datetime, float]]]:
+    """Every video's (time, cumulative views) readings since *since*, oldest first, by platform id."""
+    if platform == "threads":
+        cursor = db.threads_post_snapshots.find(
+            {"channel_id": channel_id, "at": {"$gte": since}}, {"media_id": 1, "at": 1, "views": 1}
+        )
+        id_key = "media_id"
+    elif platform == "instagram":
+        cursor = db.instagram_reel_snapshots.find(
+            {"channel_id": channel_id, "at": {"$gte": since}, **MEASURED_ONLY}, {"media_id": 1, "at": 1, "views": 1}
+        )
+        id_key = "media_id"
+    else:
+        cursor = db.youtube_video_snapshots.find(
+            {"channel_id": channel_id, "at": {"$gte": since}}, {"youtube_video_id": 1, "at": 1, "views": 1}
+        )
+        id_key = "youtube_video_id"
+
+    by_media: dict[str, list[tuple[datetime, float]]] = {}
+    async for doc in cursor.sort("at", 1):
+        mid = doc.get(id_key)
+        if mid and isinstance(doc.get("views"), int | float):
+            by_media.setdefault(str(mid), []).append((assume_utc(doc["at"]), float(doc["views"])))
+    return by_media
 
 
 def _parse_hour_bucket(b: str, step: timedelta = HOUR) -> datetime | None:
@@ -100,36 +132,11 @@ async def _get_hourly_top_videos(
     step: timedelta = HOUR,
 ) -> ViewsTopVideosOut:
     since = now - timedelta(hours=size + 24)
-    if platform == "threads":
-        cursor = db.threads_post_snapshots.find(
-            {"channel_id": channel_id, "at": {"$gte": since}},
-            {"media_id": 1, "at": 1, "views": 1},
-        ).sort("at", 1)
-        media_field = "threads_media_id"
-        id_key = "media_id"
-    elif platform == "instagram":
-        cursor = db.instagram_reel_snapshots.find(
-            {"channel_id": channel_id, "at": {"$gte": since}, **MEASURED_ONLY},
-            {"media_id": 1, "at": 1, "views": 1},
-        ).sort("at", 1)
-        media_field = "instagram_media_id"
-        id_key = "media_id"
-    else:
-        cursor = db.youtube_video_snapshots.find(
-            {"channel_id": channel_id, "at": {"$gte": since}},
-            {"youtube_video_id": 1, "at": 1, "views": 1},
-        ).sort("at", 1)
-        media_field = "youtube_video_id"
-        id_key = "youtube_video_id"
-
-    by_media: dict[str, list[MetricReading]] = {}
-    async for doc in cursor:
-        mid = doc.get(id_key)
-        if not mid or not isinstance(doc.get("views"), int | float):
-            continue
-        by_media.setdefault(str(mid), []).append(
-            MetricReading(at=assume_utc(doc["at"]), values={"views": float(doc["views"])})
-        )
+    media_field = MEDIA_FIELDS.get(platform, "youtube_video_id")
+    by_media = {
+        mid: [MetricReading(at=at, values={"views": views}) for at, views in points]
+        for mid, points in (await view_readings_by_media(db, channel_id, platform, since)).items()
+    }
 
     end_bucket = floor_to(now, step)
     count = int(size * HOUR / step)

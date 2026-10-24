@@ -104,7 +104,11 @@ async def test_daily_top_videos_youtube() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hourly_top_videos_instagram() -> None:
+async def test_hourly_top_videos_instagram(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The readings below are fixed in time, so the window they're judged against must be too.
+    monkeypatch.setattr(
+        "app.services.views_top_videos.now_ist", lambda: datetime(2026, 10, 22, 13, 30, tzinfo=IST)
+    )
     db = MagicMock()
     db.channels.find_one = AsyncMock(return_value={"channel_id": "c_ig", "platform": "instagram"})
 
