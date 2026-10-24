@@ -4,6 +4,9 @@
   that has no rule of its own, so a newly posted reel is covered the moment it exists.
 - A reel's own rule lives in ``comment_dm_rules``, keyed by channel and Instagram media id, so it
   works for any reel on the account, including ones posted outside this app.
+- A reel that is still scheduled has no media id yet, so its rule lives in ``comment_dm_video_rules``,
+  keyed by our video id. Once the reel publishes, its video document carries the media id, and the
+  rule is found through it — nothing has to be moved at publish time.
 - Every comment that earns a DM becomes one ``comment_dm_events`` document, keyed by comment id.
   That key is what keeps a comment from being messaged twice when Meta's webhook and our own poll
   both report it, or the webhook arrives twice.
@@ -64,6 +67,49 @@ async def load_reel_rule(db: AsyncIOMotorDatabase, channel_id: str, media_id: st
     return _stored(doc)
 
 
+async def load_video_rule(db: AsyncIOMotorDatabase, channel_id: str, video_id: str) -> StoredRule | None:
+    doc = await db.comment_dm_video_rules.find_one({"channel_id": channel_id, "video_id": video_id})
+    return _stored(doc)
+
+
+async def list_video_rules(db: AsyncIOMotorDatabase, channel_id: str) -> dict[str, StoredRule]:
+    rules: dict[str, StoredRule] = {}
+    async for doc in db.comment_dm_video_rules.find({"channel_id": channel_id}):
+        rules[str(doc["video_id"])] = StoredRule.model_validate(doc)
+    return rules
+
+
+async def save_video_rule(
+    db: AsyncIOMotorDatabase, channel_id: str, video_id: str, rule: DmRule, now: datetime
+) -> StoredRule:
+    saved = stored_rule(rule, await load_video_rule(db, channel_id, video_id), now)
+    await db.comment_dm_video_rules.update_one(
+        {"channel_id": channel_id, "video_id": video_id}, {"$set": saved.model_dump()}, upsert=True
+    )
+    return saved
+
+
+async def clear_video_rule(db: AsyncIOMotorDatabase, channel_id: str, video_id: str) -> None:
+    await db.comment_dm_video_rules.delete_one({"channel_id": channel_id, "video_id": video_id})
+
+
+async def own_rules_by_media(db: AsyncIOMotorDatabase, channel_id: str) -> dict[str, StoredRule]:
+    """Every reel-specific rule keyed by media id: rules set on posted reels, plus rules set while a reel was
+    scheduled whose video has since published. A media-keyed rule wins when both exist."""
+    rules: dict[str, StoredRule] = {}
+    video_rules = await list_video_rules(db, channel_id)
+    if video_rules:
+        cursor = db.videos.find(
+            {"channel_id": channel_id, "video_id": {"$in": list(video_rules)}, "instagram_media_id": {"$exists": True}},
+            {"video_id": 1, "instagram_media_id": 1},
+        )
+        async for video in cursor:
+            if video.get("instagram_media_id"):
+                rules[str(video["instagram_media_id"])] = video_rules[str(video["video_id"])]
+    rules.update(await list_reel_rules(db, channel_id))
+    return rules
+
+
 async def list_reel_rules(db: AsyncIOMotorDatabase, channel_id: str) -> dict[str, StoredRule]:
     rules: dict[str, StoredRule] = {}
     async for doc in db.comment_dm_rules.find({"channel_id": channel_id}):
@@ -95,8 +141,17 @@ async def clear_reel_rule(db: AsyncIOMotorDatabase, channel_id: str, media_id: s
     await db.comment_dm_rules.delete_one({"channel_id": channel_id, "media_id": media_id})
 
 
+async def _own_rule(db: AsyncIOMotorDatabase, channel_id: str, media_id: str) -> StoredRule | None:
+    """The rule set for this reel itself: on the posted reel, or on it while it was still scheduled."""
+    reel = await load_reel_rule(db, channel_id, media_id)
+    if reel is not None:
+        return reel
+    video = await db.videos.find_one({"channel_id": channel_id, "instagram_media_id": media_id}, {"video_id": 1})
+    return await load_video_rule(db, channel_id, str(video["video_id"])) if video else None
+
+
 async def active_rule(db: AsyncIOMotorDatabase, channel_id: str, media_id: str) -> StoredRule | None:
-    return effective_rule(await load_reel_rule(db, channel_id, media_id), await load_default(db, channel_id))
+    return effective_rule(await _own_rule(db, channel_id, media_id), await load_default(db, channel_id))
 
 
 def own_ids(channel: dict[str, Any]) -> set[str]:
@@ -263,4 +318,5 @@ async def channels_with_rules(db: AsyncIOMotorDatabase) -> list[str]:
     """Channels with any rule switched on — the only ones worth polling."""
     ids = {str(c["channel_id"]) async for c in db.channels.find({f"{DEFAULT_FIELD}.rule.enabled": True})}
     ids |= {str(r["channel_id"]) async for r in db.comment_dm_rules.find({"rule.enabled": True})}
+    ids |= {str(r["channel_id"]) async for r in db.comment_dm_video_rules.find({"rule.enabled": True})}
     return sorted(ids)

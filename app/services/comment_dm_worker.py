@@ -38,7 +38,7 @@ from app.services.comment_dm_store import (
     claim_due,
     enqueue,
     fail_interrupted,
-    list_reel_rules,
+    own_rules_by_media,
     sent_since,
     update_event,
 )
@@ -153,7 +153,7 @@ def _event_from_graph(item: dict[str, Any], media_id: str) -> CommentEvent:
 async def _media_to_poll(db: AsyncIOMotorDatabase, channel: dict[str, Any], now: datetime) -> list[str]:
     """Reels whose comments could still earn a DM: ones with a rule on, plus recent ones under the default."""
     channel_id = str(channel["channel_id"])
-    reel_rules = await list_reel_rules(db, channel_id)
+    reel_rules = await own_rules_by_media(db, channel_id)
     media = {mid for mid, stored in reel_rules.items() if stored.rule.enabled}
     default = channel.get(DEFAULT_FIELD) or {}
     if (default.get("rule") or {}).get("enabled"):
