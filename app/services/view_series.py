@@ -28,11 +28,12 @@ from app.services.instagram_reel_hourly import HOUR, QUARTER, MetricReading, buc
 from app.timezone import IST
 
 Granularity = Literal["hour", "day"]
-RangeKey = Literal["48h", "7d", "28d", "90d"]
+RangeKey = Literal["24h", "48h", "7d", "28d", "90d"]
 Step = Literal["1h", "15m"]
 
 # Each range: how its bars are bucketed and how many there are.
 RANGES: dict[str, tuple[Granularity, int]] = {
+    "24h": ("hour", 24),
     "48h": ("hour", 48),
     "7d": ("hour", 7 * 24),
     "28d": ("day", 28),
