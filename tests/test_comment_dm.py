@@ -114,6 +114,12 @@ class TestStoredRule:
         assert stored_rule(_rule(), off, NOW + timedelta(hours=2)).enabled_at == NOW + timedelta(hours=2)
 
 
+def test_a_rule_read_back_from_mongo_compares_with_aware_comment_times():
+    # Mongo returns naive UTC datetimes; the webhook stamps comments in IST.
+    stored = StoredRule.model_validate({"rule": _rule().model_dump(), "enabled_at": datetime(2026, 10, 25, 6, 0)})
+    assert stored.enabled_at is not None and stored.enabled_at < NOW
+
+
 class TestSkipReason:
     def _reason(self, event: CommentEvent, **kw: Any) -> str | None:
         args: dict[str, Any] = {

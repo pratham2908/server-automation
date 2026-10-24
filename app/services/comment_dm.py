@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.timezone import IST
+from app.timezone import IST, assume_utc
 
 PRIVATE_REPLY_WINDOW = timedelta(days=7)
 # A queued DM still has to go out before Meta's window shuts, retries included.
@@ -94,6 +94,12 @@ class StoredRule(BaseModel):
     # old commenters in one go.
     enabled_at: datetime | None = None
     updated_at: datetime | None = None
+
+    @field_validator("enabled_at", "updated_at")
+    @classmethod
+    def _aware(cls, value: datetime | None) -> datetime | None:
+        # Mongo hands datetimes back naive (UTC); comparing one with a comment's aware timestamp raises.
+        return assume_utc(value) if value is not None else None
 
 
 def stored_rule(rule: DmRule, previous: StoredRule | None, now: datetime) -> StoredRule:

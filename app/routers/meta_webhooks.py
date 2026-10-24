@@ -63,5 +63,14 @@ async def receive(request: Request, db: AsyncIOMotorDatabase = Depends(get_db)) 
         if channel is None:
             logger.info("[CommentDM] Webhook comment %s on unknown media %s", event.comment_id, event.media_id)
             continue
-        queued += await enqueue(db, channel, event, source="webhook", now=now, rng=rng) == QUEUED
+        outcome = await enqueue(db, channel, event, source="webhook", now=now, rng=rng)
+        logger.info(
+            "[CommentDM] Webhook comment %s by @%s on %s (%s): %s",
+            event.comment_id,
+            event.username,
+            event.media_id,
+            channel["channel_id"],
+            outcome,
+        )
+        queued += outcome == QUEUED
     return {"comments": len(events), "queued": queued}
