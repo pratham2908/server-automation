@@ -685,14 +685,15 @@ class InstagramService:
 
         return cast(str, self._post(f"{comment_id}/replies", {"message": message}).get("id", ""))
 
-    def send_private_reply(self, ig_user_id: str, comment_id: str, text: str) -> str:
+    def send_private_reply(self, ig_user_id: str, comment_id: str, message: dict[str, Any]) -> str:
         """DM the person who wrote *comment_id* — Instagram's "private reply". Returns the message id.
 
-        Meta allows one per comment, within 7 days of it. Instagram Login needs
-        ``instagram_business_manage_comments``; Facebook Login also needs ``instagram_manage_messages``.
-        The recipient is an object, so this goes as a JSON body rather than form fields.
+        *message* is Meta's message object: ``{"text": ...}`` or a template attachment. Meta allows one
+        per comment, within 7 days of it. Instagram Login needs ``instagram_business_manage_comments``;
+        Facebook Login also needs ``instagram_manage_messages``. The recipient is an object, so this goes
+        as a JSON body rather than form fields.
         """
-        body = {"recipient": {"comment_id": comment_id}, "message": {"text": text}}
+        body = {"recipient": {"comment_id": comment_id}, "message": message}
         return str(self._post(f"{self._user_node(ig_user_id)}/messages", json_body=body).get("message_id", ""))
 
     def get_recent_comments(self, media_id: str, limit: int = 50) -> list[dict[str, Any]]:

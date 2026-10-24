@@ -70,6 +70,21 @@ class TestDmRule:
         assert _rule(reply_texts=["Follow for more!", "  "]).reply_texts == ["Follow for more!"]
 
 
+class TestButtons:
+    def test_at_most_three_with_short_labels_and_real_urls(self):
+        with pytest.raises(ValidationError):
+            _rule(buttons=[BUTTON] * 4)
+        with pytest.raises(ValidationError):
+            _rule(buttons=[{"title": "x" * 21, "url": "https://a.com"}])
+        with pytest.raises(ValidationError):
+            _rule(buttons=[{"title": "Go", "url": "javascript:alert(1)"}])
+
+    def test_the_template_text_limit_applies_only_with_buttons(self):
+        _rule(dm_text="x" * 900)
+        with pytest.raises(ValidationError):
+            _rule(dm_text="x" * 900, buttons=[BUTTON])
+
+
 class TestMatchedTrigger:
     def test_no_triggers_means_every_comment(self):
         assert matched_trigger(_rule(), "") == ANY_COMMENT
@@ -241,6 +256,28 @@ class TestEnqueue:
         assert await _enqueue(db, _event(comment_id="c2", created_at=NOW)) == SKIP_ALREADY_MESSAGED
         assert [d["status"] for d in db.comment_dm_events.docs] == ["pending", "skipped"]
 
+    async def test_the_rule_buttons_travel_with_the_queued_dm(self):
+        db = _db_with_rule(_rule(buttons=[BUTTON]))
+        await _enqueue(db, _event(created_at=NOW))
+        assert db.comment_dm_events.docs[0]["buttons"] == [BUTTON]
+
+    async def test_summary_counts_each_outcome(self):
+        def ev(i: int, **kw: Any) -> dict[str, Any]:
+            return {"comment_id": f"c{i}", "channel_id": "ch", "created_at": NOW, **kw}
+
+        db = DB(
+            comment_dm_events=[
+                ev(1, status="sent", reply_comment_id="r1"),
+                ev(2, status="sent"),
+                ev(3, status="failed"),
+                ev(4, status="pending"),
+                ev(5, status="sent", created_at=NOW - timedelta(days=3)),
+            ]
+        )
+        recent = await store.summary(db, "ch", NOW - timedelta(hours=24))
+        assert recent == {"comments": 4, "dms_sent": 2, "replies_posted": 1, "queued": 1, "failed": 1, "skipped": 0}
+        assert (await store.summary(db, "ch", None))["dms_sent"] == 3
+
     async def test_claim_takes_only_due_pending_events(self):
         db = DB(
             comment_dm_events=[
@@ -285,13 +322,17 @@ class FakeService:
         self.provider = provider
         self.dm_error = dm_error
         self.reply_error = reply_error
-        self.dms: list[tuple[str, str, str]] = []
+        self.dms: list[tuple[str, str, dict[str, Any]]] = []
+        # Instagram refusing button templates on a private reply, as it might.
+        self.refuse_templates = False
         self.comments: dict[str, list[dict[str, Any]]] = {}
 
-    def send_private_reply(self, ig_user_id: str, comment_id: str, text: str) -> str:
+    def send_private_reply(self, ig_user_id: str, comment_id: str, message: dict[str, Any]) -> str:
         if self.dm_error:
             raise self.dm_error
-        self.dms.append((ig_user_id, comment_id, text))
+        if self.refuse_templates and "attachment" in message:
+            raise _graph_error(100)
+        self.dms.append((ig_user_id, comment_id, message))
         return "m1"
 
     def reply_to_comment(self, comment_id: str, message: str) -> str:
@@ -309,6 +350,9 @@ class FakeManager:
 
     async def get_service_and_user_id(self, channel_id: str, prefer: str | None = None):
         return (self.service, "ig1") if self.service else None
+
+
+BUTTON = {"title": "Open it", "url": "https://tryalgoviz.com"}
 
 
 def _pending(**kw: Any) -> dict[str, Any]:
@@ -330,7 +374,26 @@ class TestSendOne:
         assert await send_one(db, FakeManager(service), _pending(), NOW) == "sent"
         doc = db.comment_dm_events.docs[0]
         assert (doc["status"], doc["dm_message_id"], doc["reply_comment_id"]) == ("sent", "m1", "r1")
-        assert service.dms == [("ig1", "c1", "hi")]
+        assert service.dms == [("ig1", "c1", {"text": "hi"})]
+
+    async def test_buttons_go_as_a_button_template(self):
+        db = DB(comment_dm_events=[_pending(status="sending")])
+        service = FakeService()
+        await send_one(db, FakeManager(service), _pending(buttons=[BUTTON]), NOW)
+        [(_, _, message)] = service.dms
+        payload = message["attachment"]["payload"]
+        assert payload["template_type"] == "button" and payload["buttons"][0]["url"] == BUTTON["url"]
+        assert db.comment_dm_events.docs[0]["dm_format"] == "buttons"
+
+    async def test_refused_buttons_fall_back_to_links_in_the_text(self):
+        db = DB(comment_dm_events=[_pending(status="sending")])
+        service = FakeService()
+        service.refuse_templates = True
+        assert await send_one(db, FakeManager(service), _pending(buttons=[BUTTON]), NOW) == "sent"
+        [(_, _, message)] = service.dms
+        assert message == {"text": f"hi\n\nOpen it: {BUTTON['url']}"}
+        doc = db.comment_dm_events.docs[0]
+        assert doc["dm_format"] == "text_fallback" and "nope" in doc["button_error"]
 
     async def test_a_failed_public_reply_does_not_undo_the_dm(self):
         db = DB(comment_dm_events=[_pending(status="sending")])

@@ -45,9 +45,7 @@ _ALERT = "#b91c1c"
 _ALERT_BG = "#fee2e2"
 _ALERT_EDGE = "#f19c9c"
 
-_FONT = (
-    "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif"
-)
+_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif"
 
 # Stand-in avatar colours, picked by name so a channel keeps the same one.
 _AVATAR_COLOURS = ("#4f46e5", "#0891b2", "#c2410c", "#7c3aed", "#0f766e", "#be123c")
@@ -146,7 +144,7 @@ def _avatar(entry: dict[str, Any]) -> str:
 def _pill(text: str, colour: str, background: str) -> str:
     return (
         f'<span style="display:inline-block;padding:3px 9px;border-radius:11px;'
-        f'background:{background};color:{colour};font:700 11px/1.4 {_FONT};'
+        f"background:{background};color:{colour};font:700 11px/1.4 {_FONT};"
         f'letter-spacing:.04em;white-space:nowrap;">{escape(text)}</span>'
     )
 

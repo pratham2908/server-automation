@@ -15,7 +15,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.timezone import IST, assume_utc
 
@@ -34,6 +34,10 @@ MAX_TRIGGERS = 20
 MAX_REPLY_TEXTS = 10
 DM_TEXT_LIMIT = 1000  # Instagram's cap on one message
 REPLY_TEXT_LIMIT = 300
+# Instagram's button template: at most 3 buttons, 20-character labels, and 640 characters of text.
+MAX_BUTTONS = 3
+BUTTON_TITLE_LIMIT = 20
+BUTTON_TEXT_LIMIT = 640
 
 STATUS_PENDING = "pending"
 STATUS_SENDING = "sending"
@@ -43,6 +47,21 @@ STATUS_SKIPPED = "skipped"
 EventStatus = Literal["pending", "sending", "sent", "failed", "skipped"]
 
 ANY_COMMENT = "*"
+
+
+class DmButton(BaseModel):
+    """A tappable link under the DM's text."""
+
+    title: str = Field(min_length=1, max_length=BUTTON_TITLE_LIMIT)
+    url: str = Field(max_length=2000, pattern=r"^https?://\S+$")
+
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("button title must not be blank")
+        return stripped
 
 
 class DmRule(BaseModel):
@@ -57,6 +76,14 @@ class DmRule(BaseModel):
     reply_texts: list[str] = Field(default_factory=list, max_length=MAX_REPLY_TEXTS)
     # Roughly how long after the comment the DM goes out; jittered so it doesn't land instantly.
     delay_seconds: int = Field(default=45, ge=0, le=3600)
+    # Links shown as buttons under the text. Empty sends plain text.
+    buttons: list[DmButton] = Field(default_factory=list, max_length=MAX_BUTTONS)
+
+    @model_validator(mode="after")
+    def _buttons_fit_the_template(self) -> DmRule:
+        if self.buttons and len(self.dm_text) > BUTTON_TEXT_LIMIT:
+            raise ValueError(f"with buttons, the message must be at most {BUTTON_TEXT_LIMIT} characters")
+        return self
 
     @field_validator("triggers")
     @classmethod
@@ -207,6 +234,30 @@ def send_delay(rule: DmRule, rng: random.Random) -> timedelta:
 
 def pick_reply(rule: DmRule, rng: random.Random) -> str | None:
     return rng.choice(rule.reply_texts) if rule.reply_texts else None
+
+
+def dm_message(text: str, buttons: list[DmButton]) -> dict[str, Any]:
+    """The ``message`` object for a DM: plain text, or Instagram's button template when there are buttons."""
+    if not buttons:
+        return {"text": text}
+    return {
+        "attachment": {
+            "type": "template",
+            "payload": {
+                "template_type": "button",
+                "text": text,
+                "buttons": [{"type": "web_url", "url": b.url, "title": b.title} for b in buttons],
+            },
+        }
+    }
+
+
+def text_with_links(text: str, buttons: list[DmButton]) -> str:
+    """The fallback when Instagram won't take buttons on this message: the links written under the text."""
+    if not buttons:
+        return text
+    lines = "\n".join(f"{b.title}: {b.url}" for b in buttons)
+    return f"{text}\n\n{lines}"[:DM_TEXT_LIMIT]
 
 
 def is_rate_limited(code: int | None) -> bool:

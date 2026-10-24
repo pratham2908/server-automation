@@ -25,8 +25,11 @@ from app.services.comment_dm import (
     STATUS_PENDING,
     STATUS_SENT,
     CommentEvent,
+    DmButton,
+    dm_message,
     is_rate_limited,
     retry_at,
+    text_with_links,
 )
 from app.services.comment_dm_store import (
     DEFAULT_FIELD,
@@ -69,6 +72,31 @@ def _graph_code(exc: Exception) -> int | None:
     return int(code) if isinstance(code, int) else None
 
 
+async def _send_dm(service: Any, ig_user_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    """Send the DM, with buttons when the rule has them. Returns the fields to record; raises when it can't send.
+
+    Meta doesn't document whether a private reply may carry a template. If it refuses the buttons
+    (anything but a rate limit), the same DM goes again as text with the links written out, so a
+    button never costs the commenter their message.
+    """
+    comment_id = str(event["comment_id"])
+    text = str(event["dm_text"])
+    buttons = [DmButton.model_validate(b) for b in event.get("buttons") or []]
+    try:
+        message_id = await asyncio.to_thread(
+            service.send_private_reply, ig_user_id, comment_id, dm_message(text, buttons)
+        )
+        return {"dm_message_id": message_id, "dm_format": "buttons" if buttons else "text"}
+    except requests.RequestException as exc:
+        if not buttons or is_rate_limited(_graph_code(exc)):
+            raise
+        button_error = graph_error_message(exc)
+    message_id = await asyncio.to_thread(
+        service.send_private_reply, ig_user_id, comment_id, {"text": text_with_links(text, buttons)}
+    )
+    return {"dm_message_id": message_id, "dm_format": "text_fallback", "button_error": button_error}
+
+
 async def send_one(db: AsyncIOMotorDatabase, manager: Any, event: dict[str, Any], now: datetime) -> str:
     """DM the commenter, then reply to the comment. Returns the status the event ends in."""
     comment_id = str(event["comment_id"])
@@ -85,7 +113,7 @@ async def send_one(db: AsyncIOMotorDatabase, manager: Any, event: dict[str, Any]
     service, ig_user_id = resolved
     attempts = int(event.get("attempts", 0)) + 1
     try:
-        message_id = await asyncio.to_thread(service.send_private_reply, ig_user_id, comment_id, event["dm_text"])
+        sent = await _send_dm(service, ig_user_id, event)
     except requests.RequestException as exc:
         error = graph_error_message(exc)
         again = retry_at(attempts, now) if is_rate_limited(_graph_code(exc)) else None
@@ -97,13 +125,7 @@ async def send_one(db: AsyncIOMotorDatabase, manager: Any, event: dict[str, Any]
         await update_event(db, comment_id, {"status": STATUS_FAILED, "attempts": attempts, "error": error}, now)
         return STATUS_FAILED
 
-    fields: dict[str, Any] = {
-        "status": STATUS_SENT,
-        "attempts": attempts,
-        "dm_message_id": message_id,
-        "sent_at": now,
-        "error": None,
-    }
+    fields: dict[str, Any] = {"status": STATUS_SENT, "attempts": attempts, "sent_at": now, "error": None, **sent}
     reply_text = event.get("reply_text")
     if reply_text:
         # The DM is what matters; a failed public reply is recorded but doesn't undo it.
