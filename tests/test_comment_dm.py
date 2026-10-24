@@ -204,6 +204,19 @@ class TestParseWebhook:
         assert parse_comment_webhook(payload) == []
         assert parse_comment_webhook({"object": "page", "entry": []}) == []
 
+    def test_a_messaging_delivery_with_a_millisecond_time_is_ignored_not_fatal(self):
+        payload = {
+            "object": "instagram",
+            "entry": [{"id": "1784", "time": 1792878917929, "messaging": [{"sender": {"id": "1"}, "read": {}}]}],
+        }
+        assert parse_comment_webhook(payload) == []
+
+    def test_a_millisecond_time_on_a_comment_is_read_as_milliseconds(self):
+        payload = _comment_payload()
+        payload["entry"][0]["time"] = int(NOW.timestamp() * 1000)
+        [event] = parse_comment_webhook(payload)
+        assert event.created_at == NOW
+
     def test_skips_a_change_without_ids(self):
         assert parse_comment_webhook(_comment_payload(media={})) == []
 

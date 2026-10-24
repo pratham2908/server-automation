@@ -283,6 +283,14 @@ def _as_str(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
+def _entry_time(stamp: Any) -> datetime | None:
+    """An entry's ``time``: seconds on comment deliveries, milliseconds on messaging ones."""
+    if not isinstance(stamp, int | float) or stamp <= 0:
+        return None
+    seconds = stamp / 1000 if stamp > 1e11 else stamp
+    return datetime.fromtimestamp(seconds, tz=IST)
+
+
 def parse_comment_webhook(payload: dict[str, Any]) -> list[CommentEvent]:
     """The comment events in one webhook delivery; anything that isn't a comment is ignored.
 
@@ -297,8 +305,7 @@ def parse_comment_webhook(payload: dict[str, Any]) -> list[CommentEvent]:
         if not isinstance(entry, dict):
             continue
         account_id = _as_str(entry.get("id"))
-        stamp = entry.get("time")
-        created_at = datetime.fromtimestamp(stamp, tz=IST) if isinstance(stamp, int | float) else None
+        created_at = _entry_time(entry.get("time"))
         for change in entry.get("changes") or []:
             if not isinstance(change, dict) or change.get("field") != "comments":
                 continue
