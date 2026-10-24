@@ -546,3 +546,47 @@ def test_events_carry_their_reel_title(api_client):
     )
     [event] = client.get("/api/v1/channels/ch/comment-dm/events").json()
     assert event["title"] == "Star" and event["status"] == "sent"
+
+
+# --- scheduled reels ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestScheduledReelRules:
+    async def test_a_rule_set_while_scheduled_answers_once_the_reel_posts(self):
+        db = DB(channels=[dict(CHANNEL)], videos=[{"channel_id": "ch", "video_id": "v-1", "status": "queued"}])
+        await store.save_video_rule(db, "ch", "v-1", _rule(triggers=["nice"]), NOW - timedelta(days=1))
+        # Not posted yet: no media id points at it, so nothing matches.
+        assert await _enqueue(db, _event(text="nice", created_at=NOW)) == store.NO_RULE
+        db.videos.docs[0].update(status="published", instagram_media_id="111111")
+        assert await _enqueue(db, _event(text="nice", created_at=NOW)) == store.QUEUED
+
+    async def test_a_posted_reel_rule_wins_over_the_scheduled_one(self):
+        db = DB(
+            channels=[dict(CHANNEL)],
+            videos=[{"channel_id": "ch", "video_id": "v-1", "instagram_media_id": "111111"}],
+        )
+        await store.save_video_rule(db, "ch", "v-1", _rule(enabled=False), NOW)
+        await store.save_reel_rule(db, "ch", "111111", _rule(), NOW - timedelta(days=1))
+        assert (await store.own_rules_by_media(db, "ch"))["111111"].rule.enabled
+
+    async def test_the_poll_and_channel_list_see_scheduled_rules(self):
+        db = DB(
+            channels=[dict(CHANNEL)],
+            videos=[{"channel_id": "ch", "video_id": "v-1", "instagram_media_id": "111111"}],
+        )
+        await store.save_video_rule(db, "ch", "v-1", _rule(), NOW)
+        assert list(await store.own_rules_by_media(db, "ch")) == ["111111"]
+        assert await store.channels_with_rules(db) == ["ch"]
+
+
+def test_scheduled_video_rules_through_the_routes(api_client):
+    client, db = api_client
+    db.videos.docs.append({"channel_id": "ch", "video_id": "c304efc5-e51a", "status": "queued", "title": "Next"})
+    base = "/api/v1/channels/ch/comment-dm"
+    assert [v["video_id"] for v in client.get(f"{base}/scheduled-videos").json()] == ["c304efc5-e51a"]
+    assert client.put(f"{base}/videos/c304efc5-e51a", json={"dm_text": "hi"}).status_code == 200
+    assert client.put(f"{base}/videos/unknown-video", json={"dm_text": "hi"}).status_code == 404
+    [video] = client.get(base).json()["videos"]
+    assert video["title"] == "Next" and video["status"] == "queued" and video["media_id"] is None
+    assert client.delete(f"{base}/videos/c304efc5-e51a").json() == {"deleted": True}

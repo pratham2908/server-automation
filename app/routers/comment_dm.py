@@ -35,6 +35,8 @@ config_router = APIRouter(prefix="/api/v1/comment-dm", tags=["comment-dm"], depe
 
 # Instagram media ids are numeric; anything else is a mistake, not a reel.
 MEDIA_ID = Path(pattern=r"^[0-9]{5,32}$")
+# Our video ids are UUIDs.
+VIDEO_ID = Path(pattern=r"^[A-Za-z0-9-]{8,64}$")
 # The webhook fields we keep subscribed: comments drive the DMs; messages was already on and stays on.
 WEBHOOK_FIELDS = ["comments", "messages"]
 WEBHOOK_FIELDS_FIELD = "instagram_webhook_fields"
@@ -46,10 +48,29 @@ class ReelRuleOut(BaseModel):
     stored: StoredRule
 
 
+class VideoRuleOut(BaseModel):
+    """A rule set on one of our videos — usually while it was still scheduled."""
+
+    video_id: str
+    title: str | None = None
+    status: str | None = None
+    scheduled_at: datetime | None = None
+    # Set once the reel has published; the rule then answers its comments.
+    media_id: str | None = None
+    stored: StoredRule
+
+
+class ScheduledVideoOut(BaseModel):
+    video_id: str
+    title: str | None = None
+    scheduled_at: datetime | None = None
+
+
 class OverviewOut(BaseModel):
     channel_id: str
     default: StoredRule | None
     reels: list[ReelRuleOut]
+    videos: list[VideoRuleOut]
     # Sending needs an Instagram Login token; reading comments for the poll needs a Facebook Login one.
     can_send: bool
     can_poll: bool
@@ -132,10 +153,30 @@ async def overview(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) 
     channel = await _channel(db, channel_id)
     reel_rules = await store.list_reel_rules(db, channel_id)
     titles = await _titles(db, channel_id, list(reel_rules))
+    video_rules = await store.list_video_rules(db, channel_id)
+    video_docs = {
+        str(v["video_id"]): v
+        async for v in db.videos.find(
+            {"channel_id": channel_id, "video_id": {"$in": list(video_rules)}},
+            {"video_id": 1, "title": 1, "status": 1, "scheduled_at": 1, "instagram_media_id": 1},
+        )
+    }
+    videos = [
+        VideoRuleOut(
+            video_id=vid,
+            title=video_docs.get(vid, {}).get("title") or None,
+            status=video_docs.get(vid, {}).get("status"),
+            scheduled_at=video_docs.get(vid, {}).get("scheduled_at"),
+            media_id=video_docs.get(vid, {}).get("instagram_media_id") or None,
+            stored=s,
+        )
+        for vid, s in video_rules.items()
+    ]
     return OverviewOut(
         channel_id=channel_id,
         default=await store.load_default(db, channel_id),
         reels=[ReelRuleOut(media_id=mid, title=titles.get(mid) or None, stored=s) for mid, s in reel_rules.items()],
+        videos=videos,
         can_send=has_provider(channel, PROVIDER_INSTAGRAM),
         can_poll=has_provider(channel, PROVIDER_FACEBOOK),
         webhook_fields=[str(f) for f in channel.get(WEBHOOK_FIELDS_FIELD) or []],
@@ -170,6 +211,39 @@ async def delete_reel_rule(
 ) -> dict[str, bool]:
     await _channel(db, channel_id)
     await store.clear_reel_rule(db, channel_id, media_id)
+    return {"deleted": True}
+
+
+async def _video(db: AsyncIOMotorDatabase, channel_id: str, video_id: str) -> None:
+    if not await db.videos.find_one({"channel_id": channel_id, "video_id": video_id}, {"_id": 1}):
+        raise HTTPException(404, "Video not found on this channel")
+
+
+@router.get("/scheduled-videos", response_model=list[ScheduledVideoOut])
+async def scheduled_videos(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> list[ScheduledVideoOut]:
+    """Reels queued to post, soonest first, so a rule can be ready before the first comment."""
+    await _channel(db, channel_id)
+    cursor = db.videos.find(
+        {"channel_id": channel_id, "status": "queued"}, {"video_id": 1, "title": 1, "scheduled_at": 1}
+    ).sort("scheduled_at", 1)
+    return [ScheduledVideoOut.model_validate(v) for v in await cursor.limit(100).to_list(100)]
+
+
+@router.put("/videos/{video_id}", response_model=StoredRule)
+async def put_video_rule(
+    channel_id: str, rule: DmRule, video_id: str = VIDEO_ID, db: AsyncIOMotorDatabase = Depends(get_db)
+) -> StoredRule:
+    await _channel(db, channel_id)
+    await _video(db, channel_id, video_id)
+    return await store.save_video_rule(db, channel_id, video_id, rule, now_ist())
+
+
+@router.delete("/videos/{video_id}")
+async def delete_video_rule(
+    channel_id: str, video_id: str = VIDEO_ID, db: AsyncIOMotorDatabase = Depends(get_db)
+) -> dict[str, bool]:
+    await _channel(db, channel_id)
+    await store.clear_video_rule(db, channel_id, video_id)
     return {"deleted": True}
 
 

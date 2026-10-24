@@ -165,6 +165,7 @@ async def connect_db(
     await _db.comment_dm_events.create_index([("channel_id", 1), ("media_id", 1), ("person", 1)])
     await _db.comment_dm_events.create_index([("channel_id", 1), ("status", 1), ("sent_at", 1)])
     await _db.comment_dm_rules.create_index([("channel_id", 1), ("media_id", 1)], unique=True)
+    await _db.comment_dm_video_rules.create_index([("channel_id", 1), ("video_id", 1)], unique=True)
     # AI cost observability — recent-first feed plus per-model/per-task rollups.
     await _db.ai_call_logs.create_index([("timestamp", -1)])
     await _db.ai_call_logs.create_index([("task", 1), ("timestamp", -1)])
