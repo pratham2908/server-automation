@@ -8,7 +8,7 @@ and ``comment_dm_worker.py`` for how the DMs go out.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import requests
@@ -21,7 +21,7 @@ from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services import comment_dm_store as store
 from app.services import meta_webhook_config
-from app.services.comment_dm import DmRule, StoredRule
+from app.services.comment_dm import DmButton, DmRule, StoredRule
 from app.services.instagram import graph_error_message
 from app.services.instagram_tokens import PROVIDER_FACEBOOK, PROVIDER_INSTAGRAM, has_provider
 from app.timezone import now_ist
@@ -69,10 +69,31 @@ class EventOut(BaseModel):
     error: str | None = None
     reply_error: str | None = None
     dm_text: str = ""
+    buttons: list[DmButton] = []
+    # "text", "buttons", or "text_fallback" when Instagram refused the buttons and the links went as text.
+    dm_format: str | None = None
+    button_error: str | None = None
+    dm_message_id: str | None = None
     reply_text: str | None = None
+    reply_comment_id: str | None = None
+    commented_at: datetime | None = None
     created_at: datetime | None = None
     send_after: datetime | None = None
     sent_at: datetime | None = None
+
+
+class DmCounts(BaseModel):
+    comments: int
+    dms_sent: int
+    replies_posted: int
+    queued: int
+    failed: int
+    skipped: int
+
+
+class SummaryOut(BaseModel):
+    last_24h: DmCounts
+    all_time: DmCounts
 
 
 class SubscribeOut(BaseModel):
@@ -163,6 +184,15 @@ async def events(
     found = await store.list_events(db, channel_id, media_id, limit)
     titles = await _titles(db, channel_id, sorted({str(e["media_id"]) for e in found}))
     return [EventOut.model_validate({**e, "title": titles.get(str(e["media_id"])) or None}) for e in found]
+
+
+@router.get("/summary", response_model=SummaryOut)
+async def summary(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> SummaryOut:
+    await _channel(db, channel_id)
+    return SummaryOut(
+        last_24h=DmCounts(**await store.summary(db, channel_id, now_ist() - timedelta(hours=24))),
+        all_time=DmCounts(**await store.summary(db, channel_id, None)),
+    )
 
 
 @router.post("/subscribe", response_model=SubscribeOut)

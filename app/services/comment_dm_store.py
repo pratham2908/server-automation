@@ -182,6 +182,7 @@ async def enqueue(
         "source": source,
         "dm_text": active.rule.dm_text,
         "reply_text": pick_reply(active.rule, rng),
+        "buttons": [b.model_dump() for b in active.rule.buttons],
         "status": STATUS_SKIPPED if reason else STATUS_PENDING,
         "skip_reason": reason,
         "send_after": now + send_delay(active.rule, rng),
@@ -237,6 +238,25 @@ async def list_events(
     if media_id:
         query["media_id"] = media_id
     return list(await db.comment_dm_events.find(query, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit))
+
+
+async def summary(db: AsyncIOMotorDatabase, channel_id: str, since: datetime | None) -> dict[str, int]:
+    """How many comments earned a DM since *since* (all time when None), and how each one went."""
+    base: dict[str, Any] = {"channel_id": channel_id}
+    if since is not None:
+        base["created_at"] = {"$gte": since}
+
+    async def count(extra: dict[str, Any]) -> int:
+        return int(await db.comment_dm_events.count_documents({**base, **extra}))
+
+    return {
+        "comments": await count({}),
+        "dms_sent": await count({"status": STATUS_SENT}),
+        "replies_posted": await count({"reply_comment_id": {"$exists": True}}),
+        "queued": await count({"status": {"$in": [STATUS_PENDING, STATUS_SENDING]}}),
+        "failed": await count({"status": STATUS_FAILED}),
+        "skipped": await count({"status": STATUS_SKIPPED}),
+    }
 
 
 async def channels_with_rules(db: AsyncIOMotorDatabase) -> list[str]:
