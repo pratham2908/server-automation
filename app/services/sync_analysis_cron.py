@@ -41,7 +41,7 @@ logger = get_logger(__name__)
 
 _DEFAULT_ANALYSIS_THRESHOLD = 3
 # How often the cron looks for due channels. It wakes on the minute, so a sync
-# slot (:05, :20, …) starts within a second of its time; the tick itself is a
+# slot (:00, :15, …) starts within a second of its time; the tick itself is a
 # single indexed query.
 _TICK_SECONDS = 60
 

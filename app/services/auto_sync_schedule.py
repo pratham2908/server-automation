@@ -10,11 +10,11 @@ daily otherwise. The cron works out whether a channel has such a video on every
 tick, so publishing one switches the channel to the fast cadence without
 anything being stored.
 
-Syncs land on fixed IST clock slots — :05, :20, :35 and :50 while fresh, 00:05
+Syncs land on fixed IST clock slots — :00, :15, :30 and :45 while fresh, 00:00
 once a day otherwise — instead of counting on from the last run, which used to
 drift a minute later every hour. A channel is due when its last sync is older
-than the most recent slot, so a server that comes back at :08 runs the missed
-:05 sync at once and is back on :20 for the next. A sync costs a YouTube channel about two Data API units
+than the most recent slot, so a server that comes back at :03 runs the missed
+:00 sync at once and is back on :15 for the next. A sync costs a YouTube channel about two Data API units
 per 50 videos, so even 96 a day stay far inside the 10,000-unit daily quota.
 """
 
@@ -37,9 +37,10 @@ FRESH_REEL_DAYS = 7
 # quarter-hour readings show real shape, not repeats of the same number.
 FRESH_INTERVAL = timedelta(minutes=15)
 IDLE_INTERVAL_HOURS = 24
-# Where the slots sit past each interval boundary (from IST midnight): five minutes after the
-# hour gives the platform's counts a moment to settle on the hour that just closed.
-SLOT_OFFSET = timedelta(minutes=5)
+# Where the slots sit past each interval boundary (from IST midnight). On the quarter-hour itself so
+# the readings line up with the clock the charts are drawn on; each reading is stamped when it
+# completes, under a minute later, and the charts place a gain by time overlap, so it lands correctly.
+SLOT_OFFSET = timedelta(0)
 
 
 def auto_sync_config(channel: dict[str, Any]) -> AutoSyncConfig:
@@ -74,7 +75,7 @@ def latest_slot(now: datetime, interval: timedelta) -> datetime:
     local = now.astimezone(IST)
     first = local.replace(hour=0, minute=0, second=0, microsecond=0) + SLOT_OFFSET
     if local < first:
-        # Before today's first slot (00:00–00:05): the newest one is yesterday's last.
+        # Before today's first slot (before the first slot): the newest one is yesterday's last.
         first -= timedelta(days=1)
     return first + interval * ((local - first) // interval)
 
