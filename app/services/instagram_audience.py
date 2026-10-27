@@ -20,9 +20,13 @@ AUDIENCE_METRICS: dict[str, str] = {
     "followers": "follower_demographics",
 }
 DEMOGRAPHIC_BREAKDOWNS: tuple[str, ...] = ("age", "gender", "country", "city")
-TIMEFRAMES: tuple[str, ...] = ("this_week", "this_month")
+# Reached and engaged answer to each of these (probed live 2026-10-27; last_30_days is refused for them).
+TIMEFRAMES: tuple[str, ...] = ("this_week", "this_month", "last_14_days", "last_90_days")
+# follower_demographics ignores the timeframe (all six values returned identical numbers), so it
+# is asked once and the answer stored under every timeframe rather than paid for four times.
+FOLLOWER_TIMEFRAME = "this_month"
 # Demographics move slowly and cost one call per audience × breakdown × timeframe
-# (24 per refresh), so one refresh a day is plenty.
+# (36 per refresh), so one refresh a day is plenty.
 AUDIENCE_MAX_AGE = timedelta(hours=20)
 
 # Story metrics Instagram reports (probed live 2026-10-16). Navigation is asked
@@ -72,6 +76,18 @@ def parse_demographics(body: Mapping[str, Any] | None) -> list[dict[str, Any]]:
                 if values:
                     out.append({"value": str(values[0]), "count": int(row.get("value") or 0)})
     return sorted(out, key=lambda r: r["count"], reverse=True)
+
+
+def data_changed_at(previous: Mapping[str, Any] | None, audiences: Mapping[str, Any], now: datetime) -> datetime:
+    """When Instagram's figures last actually changed, as far as our daily pulls can tell.
+
+    Instagram refreshes demographics about every two days, so a pull often returns exactly what
+    the last one did. Our own fetch time would then make two-day-old numbers look fresh; this
+    keeps the moment we first saw these numbers. A first pull can only say "no later than now".
+    """
+    if not previous or previous.get("audiences") != audiences:
+        return now
+    return previous.get("data_changed_at") or previous.get("fetched_at") or now
 
 
 def audience_is_stale(last_fetched: datetime | None, now: datetime) -> bool:
