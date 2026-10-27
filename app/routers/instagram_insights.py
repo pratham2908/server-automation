@@ -37,7 +37,15 @@ from app.services.instagram_content_analysis import (
     posting_slots,
     watch_through,
 )
-from app.services.instagram_reel_hourly import HOURLY_METRICS, MAX_GAP_HOURS, MAX_HOURS, MetricReading, hourly_gains
+from app.services.instagram_reel_hourly import (
+    HOURLY_METRICS,
+    LEVEL_METRICS,
+    MAX_GAP_HOURS,
+    MAX_HOURS,
+    MetricReading,
+    hourly_gains,
+    hourly_levels,
+)
 from app.services.instagram_reel_snapshot import MEASURED_ONLY
 from app.services.video_properties import parse_property_filter, property_filter_query
 from app.timezone import assume_utc, now_ist, to_ist_iso
@@ -146,9 +154,13 @@ async def get_reel_timeline(
 
 @router.get("/reels/{media_id}/hourly", response_model=ReelHourlyOut)
 async def get_reel_hourly(channel_id: str, media_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> ReelHourlyOut:
-    """A reel's views, likes, comments, shares and saves gained in each IST hour, from the sync's readings."""
-    video = await db.videos.find_one({"channel_id": channel_id, "instagram_media_id": media_id}, {"published_at": 1})
+    """A reel's views, likes, comments, shares and saves gained in each IST hour, plus where skip rate and
+    watch time stood at its end, from the sync's readings."""
+    video = await db.videos.find_one(
+        {"channel_id": channel_id, "instagram_media_id": media_id}, {"published_at": 1, "metadata.duration_seconds": 1}
+    )
     published = parse_published_at(video.get("published_at")) if video else None
+    duration = number_or_none(((video or {}).get("metadata") or {}).get("duration_seconds"))
     # One reading before the window is needed to place the window's first hour.
     since = now_ist() - timedelta(hours=MAX_HOURS) - timedelta(days=1)
     cursor = db.instagram_reel_snapshots.find(
@@ -157,12 +169,28 @@ async def get_reel_hourly(channel_id: str, media_id: str, db: AsyncIOMotorDataba
     readings = [
         MetricReading(
             at=assume_utc(snap["at"]),
-            values={m: float(snap[m]) for m in HOURLY_METRICS if isinstance(snap.get(m), int | float)},
+            values={
+                m: float(snap[m]) for m in (*HOURLY_METRICS, *LEVEL_METRICS) if isinstance(snap.get(m), int | float)
+            },
         )
         async for snap in cursor
     ]
-    hours = [ReelHourOut(start=h.start.isoformat(), **h.values) for h in hourly_gains(published, readings)]
+    levels = hourly_levels(readings)
+    hours = [
+        ReelHourOut(start=h.start.isoformat(), **h.values, **_level_fields(levels.get(h.start, {}), duration))
+        for h in hourly_gains(published, readings)
+    ]
     return ReelHourlyOut(media_id=media_id, max_gap_hours=MAX_GAP_HOURS, hours=hours)
+
+
+def _level_fields(level: dict[str, float], duration_seconds: float | None) -> dict[str, float | None]:
+    avg = level.get("avg_view_duration_seconds")
+    through = watch_through(avg, duration_seconds)
+    return {
+        "skip_rate": level.get("skip_rate"),
+        "avg_watch_seconds": avg,
+        "watch_through": None if through is None else round(through, 3),
+    }
 
 
 @router.get("/content-analysis", response_model=ContentAnalysisOut)
