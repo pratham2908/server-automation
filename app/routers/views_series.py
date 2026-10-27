@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app.database import get_channel_platform, get_db
 from app.dependencies import verify_api_key
+from app.services.channel_quality import channel_level
 from app.services.instagram_content_analysis import parse_published_at
 from app.services.instagram_reel_hourly import HOUR, MAX_HOURS, MetricReading
 from app.services.instagram_reel_snapshot import MEASURED_ONLY
@@ -121,6 +122,15 @@ async def _hourly_readings(
     since: datetime | None = None,
 ) -> tuple[list[MetricReading], datetime | None]:
     since = since or now_ist() - _READ_BACK
+    if video_id is None and metric in LEVEL_SNAPSHOT_FIELDS:
+        # The channel's figure is stored as weighted sums with each sync's totals; the ratio is taken here.
+        cursor = db.channel_view_snapshots.find({"channel_id": channel_id, "at": {"$gte": since}})
+        channel_readings = [
+            MetricReading(at=assume_utc(doc["at"]), values={metric: level})
+            async for doc in cursor.sort("at", 1)
+            if (level := channel_level(doc, metric)) is not None
+        ]
+        return channel_readings, None
     field = LEVEL_SNAPSHOT_FIELDS.get(metric, metric)
     scale = 1.0
     if metric == "watch_through":
@@ -245,8 +255,10 @@ async def _views_series(
 
     is_level = metric in LEVEL_SNAPSHOT_FIELDS
     if is_level:
-        if video_id is None or platform != "instagram":
-            raise HTTPException(status_code=422, detail="Skip rate and watch time are recorded per Instagram reel")
+        if platform != "instagram":
+            raise HTTPException(
+                status_code=422, detail="Skip rate and watch time are recorded for Instagram reels only"
+            )
         # A level has no gain: the chart reads where it stood at the end of each bucket.
         measure = "total"
 

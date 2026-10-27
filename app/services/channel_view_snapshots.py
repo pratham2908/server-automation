@@ -14,7 +14,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 
 async def record_channel_totals(
-    db: AsyncIOMotorDatabase, channel_id: str, platform: str, totals: Mapping[str, int] | None, now: datetime
+    db: AsyncIOMotorDatabase, channel_id: str, platform: str, totals: Mapping[str, float] | None, now: datetime
 ) -> None:
     """Insert this sync's totals; skipped when they're incomplete, since a short sum would read as a drop."""
     if not totals:

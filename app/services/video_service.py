@@ -22,6 +22,7 @@ from app.database import (
 from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
 from app.services.auto_sync_schedule import needs_reel_insights
+from app.services.channel_quality import channel_quality_sums
 from app.services.channel_view_snapshots import record_channel_totals
 from app.services.downloader import (
     download_instagram_media_to_r2,
@@ -1841,13 +1842,16 @@ class VideoService:
         ig = await self._get_instagram_service(channel_id)
         if not ig:
             raise ChannelNotConnectedError("No Instagram token")
-        last_read = {
-            doc["instagram_media_id"]: doc.get("insights_synced_at")
-            async for doc in self.db.videos.find(
-                {"channel_id": channel_id, "instagram_media_id": {"$ne": None}},
-                {"instagram_media_id": 1, "insights_synced_at": 1},
-            )
-        }
+        last_read: dict[str, Any] = {}
+        durations: dict[str, float] = {}
+        async for doc in self.db.videos.find(
+            {"channel_id": channel_id, "instagram_media_id": {"$ne": None}},
+            {"instagram_media_id": 1, "insights_synced_at": 1, "metadata.duration_seconds": 1},
+        ):
+            last_read[doc["instagram_media_id"]] = doc.get("insights_synced_at")
+            length = (doc.get("metadata") or {}).get("duration_seconds")
+            if isinstance(length, int | float):
+                durations[doc["instagram_media_id"]] = float(length)
         db_ids = set(last_read)
         now = now_ist()
 
@@ -1858,7 +1862,7 @@ class VideoService:
             published = isoparse(reel["timestamp"]) if reel.get("timestamp") else None
             return not incremental or needs_reel_insights(published, last_read.get(reel["id"]), now)
 
-        channel_totals_now: dict[str, int] | None = None
+        channel_totals_now: dict[str, float] | None = None
         try:
             # One call per 100 posts returns every post with its insights, so every
             # reel's numbers are refreshed each sync for the price of one request.
@@ -1868,7 +1872,11 @@ class VideoService:
             unread = [r["id"] for r in ig_reels if r["id"] not in insights_map]
             if unread:
                 insights_map.update(ig.get_reel_insights(unread))
-            channel_totals_now = channel_totals(sweep.posts, sweep.insights)
+            totals = channel_totals(sweep.posts, sweep.insights)
+            # Skip rate and watch time ride along with the counts, and are dropped with them when the sum is short.
+            channel_totals_now = (
+                {**totals, **channel_quality_sums(sweep.reels, sweep.insights, durations)} if totals else None
+            )
         except requests.HTTPError as exc:
             # The per-reel path still works if Instagram ever refuses the combined
             # request (an unexpected media type, say); it reads only the due reels.
