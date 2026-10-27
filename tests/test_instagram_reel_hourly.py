@@ -97,3 +97,22 @@ class TestQuarterGains:
         readings = [reading(1, views=100), reading(2, views=160), reading(2.25, views=170)]
         result = bucket_gains(None, readings, QUARTER)
         assert views(result) == [None, None, None, None, 10]
+
+
+class TestHourlyLevels:
+    def test_last_reading_in_each_hour_wins(self) -> None:
+        from app.services.instagram_reel_hourly import hourly_levels
+
+        readings = [
+            reading(0.1, skip_rate=40.0, avg_view_duration_seconds=3.0),
+            reading(0.8, skip_rate=42.0, avg_view_duration_seconds=3.4),
+            reading(1.5, skip_rate=44.0),
+        ]
+        levels = hourly_levels(readings)
+        assert levels[at(0)] == {"skip_rate": 42.0, "avg_view_duration_seconds": 3.4}
+        assert levels[at(1)] == {"skip_rate": 44.0}
+
+    def test_hours_without_readings_are_absent(self) -> None:
+        from app.services.instagram_reel_hourly import hourly_levels
+
+        assert hourly_levels([reading(0.5, views=10.0), reading(3.5, skip_rate=1.0)]).keys() == {at(3)}

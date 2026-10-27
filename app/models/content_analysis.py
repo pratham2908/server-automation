@@ -45,6 +45,10 @@ class ReelHourOut(BaseModel):
     comments: float | None = None
     shares: float | None = None
     saves: float | None = None
+    # Where these stood at the last reading in the hour (levels, not gains); None if no reading fell in it.
+    skip_rate: float | None = None
+    avg_watch_seconds: float | None = None
+    watch_through: float | None = None
 
 
 class ReelHourlyOut(BaseModel):

@@ -21,6 +21,9 @@ from app.timezone import IST
 
 # Cumulative counts each snapshot records, in the order the chart offers them.
 HOURLY_METRICS = ("views", "likes", "comments", "shares", "saves")
+# Rates and averages each snapshot records. Unlike the counts they are levels, not gains: the
+# chart shows where each stood at the end of the hour, never a sum of them.
+LEVEL_METRICS = ("skip_rate", "avg_view_duration_seconds")
 # Readings further apart than this don't place their gain in a particular hour.
 MAX_GAP_HOURS = 3.0
 # Nor in a particular quarter-hour. Readings are 15 minutes apart, so this lets one missed
@@ -129,3 +132,19 @@ def bucket_gains(published_at: datetime | None, readings: Sequence[MetricReading
         )
         hour += step
     return out
+
+
+def hourly_levels(
+    readings: Sequence[MetricReading], metrics: Sequence[str] = LEVEL_METRICS
+) -> dict[datetime, dict[str, float]]:
+    """Each IST hour's last reading of every level metric, for the hours that have one.
+
+    A level has no gap rule: a reading is the value at that moment whatever came
+    before it, so an hour with no reading is simply absent.
+    """
+    levels: dict[datetime, dict[str, float]] = {}
+    for reading in sorted(readings, key=lambda r: r.at):
+        found = {m: float(reading.values[m]) for m in metrics if m in reading.values}
+        if found:
+            levels.setdefault(floor_to(reading.at, HOUR), {}).update(found)
+    return levels
