@@ -151,7 +151,6 @@ def _daily_row(channel_id: str, media_id: str, day: ReelDay) -> dict[str, Any]:
         "media_id": media_id,
         "date": day.date,
         "views": round(day.views, 1),
-        "follows": _rounded(day.follows, 2),
         "profile_visits": _rounded(day.profile_visits, 2),
         "bio_link_taps": _rounded(day.bio_link_taps, 2),
         "rough": day.rough,
@@ -193,14 +192,19 @@ async def _write_estimates(db: AsyncIOMotorDatabase, channel_id: str) -> None:
         if est is not None:
             set_doc.update(
                 {
-                    "metadata.estimated_follows": round(est.follows, 1),
                     "metadata.estimated_profile_visits": round(est.profile_visits, 1),
                     "metadata.estimated_bio_link_taps": round(est.bio_link_taps, 1),
                     "metadata.follow_estimate_quality": est.quality,
                     "metadata.follow_estimate_through": est.through,
                 }
             )
-        await db.videos.update_one({"channel_id": channel_id, "instagram_media_id": media_id}, {"$set": set_doc})
+        # Follows are not estimated per reel: sharing a day's follows out by views gives every reel live that
+        # day the same rate. Exact ones come from the Business Suite table (``follows_import``), so any
+        # estimate stored earlier is removed.
+        await db.videos.update_one(
+            {"channel_id": channel_id, "instagram_media_id": media_id},
+            {"$set": set_doc, "$unset": {"metadata.estimated_follows": ""}},
+        )
 
     # Rows are replaced, not appended: a later reading or a newly reported day
     # changes a day already written.
