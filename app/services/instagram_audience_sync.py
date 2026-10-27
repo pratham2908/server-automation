@@ -23,8 +23,10 @@ from app.services.instagram import InstagramService
 from app.services.instagram_audience import (
     AUDIENCE_METRICS,
     DEMOGRAPHIC_BREAKDOWNS,
+    FOLLOWER_TIMEFRAME,
     TIMEFRAMES,
     audience_is_stale,
+    data_changed_at,
     parse_demographics,
     parse_metric_values,
     parse_story_navigation,
@@ -42,13 +44,24 @@ async def refresh_audience(db: AsyncIOMotorDatabase, ig: InstagramService, chann
         return
     audiences: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}
     for name, metric in AUDIENCE_METRICS.items():
-        for timeframe in TIMEFRAMES:
+        # Followers are the same whatever the timeframe, so one pass is enough (see FOLLOWER_TIMEFRAME).
+        asked = (FOLLOWER_TIMEFRAME,) if name == "followers" else TIMEFRAMES
+        for timeframe in asked:
             for breakdown in DEMOGRAPHIC_BREAKDOWNS:
                 body = await asyncio.to_thread(ig.get_demographics, ig_user_id, metric, breakdown, timeframe)
                 audiences.setdefault(name, {}).setdefault(timeframe, {})[breakdown] = parse_demographics(body)
+        if name == "followers":
+            audiences[name] = {timeframe: audiences[name][FOLLOWER_TIMEFRAME] for timeframe in TIMEFRAMES}
     await db.instagram_audience.update_one(
         {"channel_id": channel_id, "date": now.date().isoformat()},
-        {"$set": {"channel_id": channel_id, "fetched_at": now, "audiences": audiences}},
+        {
+            "$set": {
+                "channel_id": channel_id,
+                "fetched_at": now,
+                "data_changed_at": data_changed_at(latest, audiences, now),
+                "audiences": audiences,
+            }
+        },
         upsert=True,
     )
 

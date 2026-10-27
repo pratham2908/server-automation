@@ -145,7 +145,8 @@ async def test_stale_audience_fetches_every_breakdown_and_stores_one_doc(monkeyp
         return _breakdown_body(metric, breakdown, [("x", 1)])
 
     await sync.refresh_audience(db, SimpleNamespace(get_demographics=demographics), "c", "ig1")
-    assert len(calls) == 3 * 2 * 4
+    # reached and engaged across 4 timeframes, plus followers once (their timeframe changes nothing), 4 breakdowns each.
+    assert len(calls) == (2 * 4 + 1) * 4
     (query, stored) = db.instagram_audience.upserts[0]
     assert query == {"channel_id": "c", "date": "2026-10-16"}
     assert stored["audiences"]["reached"]["this_month"]["city"] == [{"value": "x", "count": 1}]
@@ -177,3 +178,79 @@ async def test_a_fresh_story_keeps_its_last_numbers_when_instagram_withholds_the
     assert "metrics" not in stored  # $set leaves the earlier reading in place
     assert "Not enough viewers" in stored["insights_note"]
     assert stored["posted_at"] == datetime(2026, 10, 16, 11, 32, 9, tzinfo=timezone.utc)
+
+
+# --- timeframes and how fresh Instagram's own numbers are ---------------------
+
+
+class _FakeDemographics:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    def get_demographics(self, _uid: str, metric: str, breakdown: str, timeframe: str) -> dict[str, Any]:
+        self.calls.append((metric, breakdown, timeframe))
+        return _breakdown_body(metric, breakdown, [("x", 5)])
+
+
+class _AudienceCollection:
+    def __init__(self, latest: dict[str, Any] | None) -> None:
+        self.latest = latest
+        self.saved: dict[str, Any] = {}
+
+    async def find_one(self, *_a: Any, **_k: Any) -> dict[str, Any] | None:
+        return self.latest
+
+    async def update_one(self, _flt: Any, update: dict[str, Any], **_k: Any) -> None:
+        self.saved = update["$set"]
+
+
+def _refresh(latest: dict[str, Any] | None = None) -> tuple[_FakeDemographics, dict[str, Any]]:
+    ig = _FakeDemographics()
+    coll = _AudienceCollection(latest)
+    db = SimpleNamespace(instagram_audience=coll)
+    import asyncio
+
+    asyncio.run(sync.refresh_audience(db, ig, "c1", "u1"))  # type: ignore[arg-type]
+    return ig, coll.saved
+
+
+def test_reached_and_engaged_are_asked_for_every_timeframe():
+    ig, saved = _refresh()
+    for kind in ("reached", "engaged"):
+        assert set(saved["audiences"][kind]) == {"this_week", "this_month", "last_14_days", "last_90_days"}
+
+
+def test_followers_are_asked_once_because_the_timeframe_changes_nothing():
+    ig, saved = _refresh()
+    follower_calls = [c for c in ig.calls if c[0] == "follower_demographics"]
+    assert len(follower_calls) == 4  # one per breakdown, not one per breakdown and timeframe
+    assert saved["audiences"]["followers"]["this_week"] == saved["audiences"]["followers"]["last_90_days"]
+
+
+def test_a_refresh_costs_36_calls():
+    ig, _ = _refresh()
+    assert len(ig.calls) == 36
+
+
+def test_first_pull_dates_the_figures_to_now():
+    _, saved = _refresh()
+    assert saved["data_changed_at"] == saved["fetched_at"]
+
+
+def test_unchanged_figures_keep_the_time_they_were_first_seen():
+    first = datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc)
+    _, saved = _refresh()
+    previous = {
+        "fetched_at": first,
+        "data_changed_at": first,
+        "audiences": saved["audiences"],
+    }
+    _, again = _refresh(previous)
+    assert again["data_changed_at"] == first
+
+
+def test_changed_figures_are_dated_to_the_pull_that_saw_the_change():
+    first = datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc)
+    previous = {"fetched_at": first, "data_changed_at": first, "audiences": {"reached": {}}}
+    _, saved = _refresh(previous)
+    assert saved["data_changed_at"] == saved["fetched_at"] != first

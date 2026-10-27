@@ -55,10 +55,12 @@ class DemographicRow(BaseModel):
 
 
 class AudienceOut(BaseModel):
-    """``audiences[reached|engaged|followers][this_week|this_month][age|gender|country|city]``."""
+    """``audiences[reached|engaged|followers][this_week|this_month|last_14_days|last_90_days][age|gender|country|city]``."""
 
     channel_id: str
     fetched_at: str | None = None
+    # When Instagram's figures last changed, as far as our pulls can tell; they refresh about every two days.
+    data_changed_at: str | None = None
     audiences: dict[str, dict[str, dict[str, list[DemographicRow]]]] = {}
 
 
@@ -84,7 +86,10 @@ async def get_audience(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_d
     if not doc:
         return AudienceOut(channel_id=channel_id)
     return AudienceOut(
-        channel_id=channel_id, fetched_at=to_ist_iso(doc.get("fetched_at")), audiences=doc.get("audiences") or {}
+        channel_id=channel_id,
+        fetched_at=to_ist_iso(doc.get("fetched_at")),
+        data_changed_at=to_ist_iso(doc.get("data_changed_at")) if doc.get("data_changed_at") else None,
+        audiences=doc.get("audiences") or {},
     )
 
 
