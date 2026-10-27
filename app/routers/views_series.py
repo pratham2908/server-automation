@@ -22,6 +22,7 @@ from app.services.instagram_reel_hourly import HOUR, MAX_HOURS, MetricReading
 from app.services.instagram_reel_snapshot import MEASURED_ONLY
 from app.services.view_series import (
     DAY,
+    LEVEL_SNAPSHOT_FIELDS,
     RANGES,
     STEPS,
     Align,
@@ -47,7 +48,7 @@ router = APIRouter(
     dependencies=[Depends(verify_api_key)],
 )
 
-Metric = Literal["views", "likes", "comments", "shares", "saves"]
+Metric = Literal["views", "likes", "comments", "shares", "saves", "skip_rate", "avg_watch_seconds", "watch_through"]
 # Hourly ranges reach back at most MAX_HOURS; a day more finds the reading before the first hour.
 _READ_BACK = timedelta(hours=MAX_HOURS + 24)
 
@@ -103,6 +104,14 @@ async def _published_at(
     return parse_published_at(video.get("published_at")) if video else None
 
 
+async def _duration_seconds(db: AsyncIOMotorDatabase, channel_id: str, media_id: str | None) -> float | None:
+    video = await db.videos.find_one(
+        {"channel_id": channel_id, "instagram_media_id": media_id}, {"metadata.duration_seconds": 1}
+    )
+    value = ((video or {}).get("metadata") or {}).get("duration_seconds")
+    return float(value) if isinstance(value, int | float) else None
+
+
 async def _hourly_readings(
     db: AsyncIOMotorDatabase,
     channel_id: str,
@@ -112,6 +121,14 @@ async def _hourly_readings(
     since: datetime | None = None,
 ) -> tuple[list[MetricReading], datetime | None]:
     since = since or now_ist() - _READ_BACK
+    field = LEVEL_SNAPSHOT_FIELDS.get(metric, metric)
+    scale = 1.0
+    if metric == "watch_through":
+        # Without the reel's length there is no share to draw.
+        length = await _duration_seconds(db, channel_id, video_id)
+        if not length:
+            return [], await _published_at(db, channel_id, platform, video_id)
+        scale = 1 / length
     if video_id is None:
         cursor = db.channel_view_snapshots.find({"channel_id": channel_id, "at": {"$gte": since}})
     elif platform == "threads":
@@ -125,9 +142,9 @@ async def _hourly_readings(
             {"channel_id": channel_id, "youtube_video_id": video_id, "at": {"$gte": since}}
         )
     readings = [
-        MetricReading(at=assume_utc(doc["at"]), values={metric: float(doc[metric])})
+        MetricReading(at=assume_utc(doc["at"]), values={metric: float(doc[field]) * scale})
         async for doc in cursor.sort("at", 1)
-        if isinstance(doc.get(metric), int | float)
+        if isinstance(doc.get(field), int | float)
     ]
     return readings, await _published_at(db, channel_id, platform, video_id)
 
@@ -225,6 +242,13 @@ async def _views_series(
     channel = await _channel(db, channel_id)
     platform = get_channel_platform(channel)
     now = now_ist()
+
+    is_level = metric in LEVEL_SNAPSHOT_FIELDS
+    if is_level:
+        if video_id is None or platform != "instagram":
+            raise HTTPException(status_code=422, detail="Skip rate and watch time are recorded per Instagram reel")
+        # A level has no gain: the chart reads where it stood at the end of each bucket.
+        measure = "total"
 
     if align == "posted" or measure == "total":
         points, last = await _curve_series(

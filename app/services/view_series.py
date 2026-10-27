@@ -54,6 +54,15 @@ RANGES: dict[str, tuple[Granularity, int]] = {
     "90d": ("day", 90),
 }
 
+# Rates and averages rather than counts: each reading is where the figure stood, so a bucket has no
+# "gain" — only the level at its end. The snapshot field each is read from; watch-through is the
+# average watch time as a share of the reel's length, so it is scaled by the duration when loaded.
+LEVEL_SNAPSHOT_FIELDS: dict[str, str] = {
+    "skip_rate": "skip_rate",
+    "avg_watch_seconds": "avg_view_duration_seconds",
+    "watch_through": "avg_view_duration_seconds",
+}
+
 # The bucket an hourly range's bars are cut into.
 STEPS: dict[str, timedelta] = {"1h": HOUR, "15m": QUARTER}
 DAY = timedelta(days=1)
