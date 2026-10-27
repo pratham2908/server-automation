@@ -141,11 +141,10 @@ async def get_reel_timeline(
         ReelDayOut(
             date=doc["date"],
             views=doc.get("views") or 0.0,
-            follows=doc.get("follows"),
             profile_visits=doc.get("profile_visits"),
             bio_link_taps=doc.get("bio_link_taps"),
             rough=bool(doc.get("rough")),
-            status=day_status(doc["date"], doc.get("follows") is not None, today),
+            status=day_status(doc["date"], doc.get("profile_visits") is not None, today),
         )
         async for doc in cursor
     ]
@@ -255,8 +254,7 @@ async def get_content_analysis(
             watch_hours=number_or_none(meta.get("estimated_hours_watched")),
             views_per_reach=number_or_none(meta.get("views_per_reach")),
             engagement_rate=number_or_none(meta.get("engagement_rate")),
-            estimated_follows=number_or_none(meta.get("estimated_follows")),
-            follow_quality=meta.get("follow_estimate_quality"),
+            follows=number_or_none(meta.get("follows")),
             views_24h=number_or_none(meta.get("views_24h")),
             views_48h=number_or_none(meta.get("views_48h")),
             views_7d=number_or_none(meta.get("views_7d")),

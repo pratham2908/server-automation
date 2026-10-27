@@ -84,11 +84,11 @@ class ReelAnalysisOut(BaseModel):
     views_per_reach: float | None = None
     # Interactions per reached account, as a percentage.
     engagement_rate: float | None = None
-    estimated_follows: float | None = None
+    # Instagram: exact follows from the Business Suite table, once pasted in; never estimated.
+    follows: float | None = None
     # YouTube only: real subscribers gained from this video, and views that stayed past the opening.
     subscribers_gained: float | None = None
     engaged_views: float | None = None
-    follow_quality: str | None = None
     views_24h: float | None = None
     views_48h: float | None = None
     views_7d: float | None = None

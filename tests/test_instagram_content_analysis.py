@@ -237,6 +237,7 @@ class _Coll:
         self.docs = docs or []
         self.updates: list[tuple[dict[str, Any], dict[str, Any]]] = []
         self.bulk: list[Any] = []
+        self.unsets: list[dict[str, Any]] = []
 
     def find(self, query: dict[str, Any], projection: Any = None) -> Any:
         async def rows() -> Any:
@@ -247,6 +248,8 @@ class _Coll:
 
     async def update_one(self, query: dict[str, Any], update: dict[str, Any]) -> None:
         self.updates.append((query, update["$set"]))
+        if "$unset" in update:
+            self.unsets.append(update["$unset"])
 
     async def bulk_write(self, ops: list[Any], ordered: bool = True) -> None:
         self.bulk.extend(ops)
@@ -271,10 +274,12 @@ async def test_write_estimates_stores_speed_and_daily_rows():
     [(query, stored)] = db.videos.updates
     assert query == {"channel_id": "c", "instagram_media_id": "m1"}
     assert stored["metadata.views_24h"] == 1000
-    assert stored["metadata.estimated_follows"] == 10
+    # A day's follows are never shared out per reel; exact ones are pasted in from the Business Suite table.
+    assert "metadata.estimated_follows" not in stored
+    assert db.videos.unsets == [{"metadata.estimated_follows": ""}]
     assert "metadata.follows_per_1k_views" not in stored
     rows = [op._doc for op in db.instagram_reel_daily.bulk]
-    assert [(r["date"], r["views"], r["follows"]) for r in rows] == [
-        ("2026-10-10", 1000, 10),
-        ("2026-10-11", 100, None),
+    assert [(r["date"], r["views"], "follows" in r) for r in rows] == [
+        ("2026-10-10", 1000, False),
+        ("2026-10-11", 100, False),
     ]
