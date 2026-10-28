@@ -38,6 +38,7 @@ from app.services.instagram_reel_metrics import reel_metadata
 from app.services.instagram_reel_snapshot import MEASURED_ONLY, graduation_fields, snapshot_values
 from app.services.r2 import R2Service
 from app.services.reel_duration_sync import refresh_reel_durations
+from app.services.reel_location import location_fields
 from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
 from app.services.schedule_operation import (
     schedule_on_platform,
@@ -1407,6 +1408,8 @@ class VideoService:
         first_comment: str | None = None,
         trial_graduation: str | None = None,
         trial_check: TrialCheck | None = None,
+        location_id: str | None = None,
+        location_name: str | None = None,
     ) -> dict[str, Any]:
 
         settings = get_settings()
@@ -1415,6 +1418,10 @@ class VideoService:
             raise ValueError("Channel not found")
         platform = get_channel_platform(channel)
         comment = validate_comment(first_comment, platform)
+        place = location_fields(location_id, location_name, platform)
+        if any(place.values()) and video_id.lower() == "all":
+            # The same place on a whole queue is far more likely a mistake than an intention.
+            raise ValueError("A location can only be set when scheduling a single video")
         if comment and video_id.lower() == "all":
             # One comment across a whole queue is far more likely to be a
             # mistake than an intention, and it would be tedious to undo.
@@ -1457,7 +1464,7 @@ class VideoService:
                 await self.db.videos.update_one({"_id": v_doc["_id"]}, {"$set": fields})
                 # The workers read the doc handed to them, not a re-fetch.
                 v_doc.update(fields)
-            trial = trial_fields(trial_graduation, trial_check, v_doc.get("trial_graduation"), platform)
+            trial = {**trial_fields(trial_graduation, trial_check, v_doc.get("trial_graduation"), platform), **place}
             if trial:
                 await self.db.videos.update_one({"_id": v_doc["_id"]}, {"$set": trial})
                 v_doc.update(trial)
@@ -1555,6 +1562,8 @@ class VideoService:
         first_comment: str | None = None,
         trial_graduation: str | None = None,
         trial_check: TrialCheck | None = None,
+        location_id: str | None = None,
+        location_name: str | None = None,
     ) -> dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
@@ -1562,7 +1571,10 @@ class VideoService:
         channel = await self.db.channels.find_one({"channel_id": channel_id})
         platform = get_channel_platform(channel) if channel else "youtube"
         comment = validate_comment(first_comment, platform)
-        trial = trial_fields(trial_graduation, trial_check, video.get("trial_graduation"), platform)
+        trial = {
+            **trial_fields(trial_graduation, trial_check, video.get("trial_graduation"), platform),
+            **location_fields(location_id, location_name, platform),
+        }
         if video.get("status") == "scheduled":
             return await self._reschedule_on_youtube(channel_id, video, platform, new_time, first_comment, comment)
         if video.get("status") != "queued":

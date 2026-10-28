@@ -12,12 +12,16 @@ import asyncio
 import os
 from typing import Any
 
+import requests
+
 from app.database import is_channel_paused, update_channel_task_status
 from app.logger import get_logger
 from app.services.errors import get_error_service
 from app.services.first_comment import post_and_record
+from app.services.instagram import graph_error_message
 from app.services.publish_failure import build_failure_marker
 from app.services.publish_failure_notify import notify_publish_failure
+from app.services.reel_location import api_location_id, is_location_refusal
 from app.services.schedule_operation import _build_instagram_caption
 from app.services.trial_graduation import arm_fields
 from app.timezone import now_ist
@@ -99,15 +103,32 @@ async def _publish_one_reel(
         # publish_reel_from_url polls the container with time.sleep for up to
         # ~400 s. Run inline it froze the event loop — every API request and every
         # other worker — for as long as a reel took to process.
-        media_id = await asyncio.to_thread(
-            instagram_service.publish_reel_from_url,
-            ig_user_id=ig_user_id,
-            video_url=video_url,
-            caption=caption,
-            thumb_offset=thumb_offset_ms,
-            cover_url=cover_url,
-            trial_graduation=video_doc.get("trial_graduation"),
-        )
+        async def publish(location_id: str | None) -> str:
+            return await asyncio.to_thread(
+                instagram_service.publish_reel_from_url,
+                ig_user_id=ig_user_id,
+                video_url=video_url,
+                caption=caption,
+                thumb_offset=thumb_offset_ms,
+                cover_url=cover_url,
+                trial_graduation=video_doc.get("trial_graduation"),
+                location_id=location_id,
+            )
+
+        location_id = api_location_id(video_doc)
+        location_dropped: str | None = None
+        try:
+            media_id = await publish(location_id)
+        except requests.HTTPError as exc:
+            reason = graph_error_message(exc)
+            if not (location_id and is_location_refusal(reason)):
+                raise
+            # A reel without its location beats no reel: it goes out untagged and the reason is kept on it.
+            logger.warning(
+                "[Instagram] Location %s refused for '%s' (%s); publishing without it", location_id, video_id, reason
+            )
+            location_dropped = reason[:300]
+            media_id = await publish(None)
 
         now = now_ist()
 
@@ -119,6 +140,7 @@ async def _publish_one_reel(
                     "status": "published",
                     "published_at": now,
                     "updated_at": now,
+                    **({"location_dropped_reason": location_dropped} if location_dropped else {}),
                     # Starts the graduation timer (if one was asked for) from the moment it is live.
                     **arm_fields(video_doc, now),
                 }

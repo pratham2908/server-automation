@@ -115,6 +115,14 @@ class ScheduleRequest(BaseModel):
         description="Instagram only. MANUAL or SS_PERFORMANCE publishes the reel as a trial reel; "
         "an empty string turns it off; omit to leave it as it is",
     )
+    location_id: str | None = Field(
+        None,
+        description="Instagram only. The Facebook place ID to tag the reel with; an empty string clears it; "
+        "omit to leave it as it is",
+    )
+    location_name: str | None = Field(
+        None, description="The place's name, shown in the app; Instagram is only sent the ID"
+    )
     trial_check: TrialCheck | None = Field(
         None,
         description="With MANUAL: check the reel's numbers every hour after it publishes, until "
@@ -554,6 +562,8 @@ async def schedule_video(
             body.first_comment if body else None,
             body.trial_graduation if body else None,
             body.trial_check if body else None,
+            location_id=body.location_id if body else None,
+            location_name=body.location_name if body else None,
         )
     except Exception as e:
         error_service = get_error_service(service.db)
@@ -649,7 +659,14 @@ async def reschedule_video(
     """
     try:
         return await service.reschedule_video(
-            channel_id, video_id, body.scheduled_at, body.first_comment, body.trial_graduation, body.trial_check
+            channel_id,
+            video_id,
+            body.scheduled_at,
+            body.first_comment,
+            body.trial_graduation,
+            body.trial_check,
+            location_id=body.location_id,
+            location_name=body.location_name,
         )
     except Exception as e:
         error_service = get_error_service(service.db)

@@ -163,3 +163,68 @@ def test_a_custom_flag_without_a_stored_key_falls_back_rather_than_crashing():
     ig, _ = _publish({"custom_thumbnail": True, "ai_packaging": {"best_thumbnail_timestamp": 2}})
     assert ig.kwargs["cover_url"] is None
     assert ig.kwargs["thumb_offset"] == 2000
+
+
+# --- location tag ---------------------------------------------------------------
+
+
+def test_a_reels_place_id_is_sent_with_the_container():
+    ig, _ = _publish({"location_id": "106078429431815"})
+    assert ig.kwargs["location_id"] == "106078429431815"
+
+
+def test_a_name_without_an_id_sends_no_location():
+    ig, _ = _publish({"location_name": "London, UK"})
+    assert ig.kwargs["location_id"] is None
+
+
+def test_the_container_request_carries_location_id_only_when_there_is_one():
+    from app.services.instagram import InstagramService
+
+    def sent(**kwargs: Any) -> dict[str, Any]:
+        svc = InstagramService(access_token="t")
+        seen: dict[str, Any] = {}
+
+        def fake_post(_endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            seen.update(params or {})
+            return {"id": "c1"}
+
+        svc._post = fake_post  # type: ignore[method-assign]
+        svc.get_container_status = lambda _cid: ("FINISHED", "")  # type: ignore[method-assign]
+        svc.publish_container = lambda _uid, _cid: "m1"  # type: ignore[method-assign]
+        svc.publish_reel_from_url("123", "https://r2/v.mp4", "cap", **kwargs)
+        return seen
+
+    assert sent(location_id="106078429431815")["location_id"] == "106078429431815"
+    assert "location_id" not in sent()
+
+
+def test_a_refused_location_publishes_without_it_and_keeps_the_reason():
+    import requests
+
+    response = requests.Response()
+    response.status_code = 400
+    response._content = b'{"error": {"message": "Param location_id is not a valid location page ID"}}'
+
+    class _Refusing(_FakeInstagram):
+        calls: list[Any] = []
+
+        def publish_reel_from_url(self, **kwargs: Any) -> str:
+            self.calls.append(kwargs["location_id"])
+            if kwargs["location_id"]:
+                raise requests.HTTPError(response=response)
+            return "media-1"
+
+    ig, r2 = _Refusing(), _FakeR2()
+    db = _FakeDB()
+    ok = asyncio.run(
+        auto_publisher._publish_one_reel(
+            db=db,
+            r2_service=r2,
+            instagram_service=ig,
+            channel_doc={"channel_id": "c1", "instagram_user_id": "ig1"},
+            video_doc={"video_id": "v1", "r2_object_key": "c1/v1.mp4", "title": "t", "location_id": "999999"},
+            queue_entry={"_id": "q1"},
+        )
+    )
+    assert ok and ig.calls == ["999999", None]
