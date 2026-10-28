@@ -719,6 +719,15 @@ class InstagramService:
         body = self._get(conversation_id, {"fields": f"messages.limit({limit}){{{self._DM_FIELDS}}}"})
         return list((body.get("messages") or {}).get("data", []))
 
+    def send_dm(self, ig_user_id: str, recipient_id: str, text: str) -> str:
+        """Send a text DM into an existing conversation; returns the message id.
+
+        Instagram only accepts this within 24 hours of the person's last message to the account,
+        and never to someone who hasn't written or commented. A sent message can't be unsent here.
+        """
+        body = {"recipient": {"id": recipient_id}, "message": {"text": text}}
+        return str(self._post(f"{self._user_node(ig_user_id)}/messages", json_body=body).get("message_id", ""))
+
     def own_username(self, ig_user_id: str) -> str | None:
         """This account's handle, to tell which side of a conversation is us."""
         username = self._get(self._user_node(ig_user_id), {"fields": "username"}).get("username")

@@ -7,6 +7,7 @@ handle, so which side is us is worked out here from the account's own username.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from dateutil.parser import isoparse
@@ -110,6 +111,24 @@ def parse_conversation(raw: Mapping[str, Any], own_username: str | None) -> DmCo
 def parse_thread(raw_messages: Sequence[Mapping[str, Any]], own_username: str | None) -> list[DmMessageOut]:
     """Messages oldest first — Meta sends them newest first, but a thread reads downward."""
     return [parse_message(m, own_username) for m in reversed(raw_messages)]
+
+
+# Instagram lets an account message someone for this long after their last message to it.
+REPLY_WINDOW = timedelta(hours=24)
+
+
+def reply_window_ends_at(messages: Sequence[DmMessageOut], now: datetime) -> str | None:
+    """When the 24-hour reply window closes, or None if it is already shut or nothing of theirs is in view.
+
+    The window runs from the person's newest message, so one of ours doesn't extend it. Only the
+    messages fetched are seen: a thread where we have written more than that since their last
+    message reads as closed, which errs on the side of not offering a send that would be refused.
+    """
+    theirs = [m.created_at for m in messages if not m.from_me and m.created_at]
+    if not theirs:
+        return None
+    ends = datetime.fromisoformat(max(theirs)) + REPLY_WINDOW
+    return to_ist_iso(ends) if ends > now else None
 
 
 def next_cursor(page: Mapping[str, Any]) -> str | None:
