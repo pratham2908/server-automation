@@ -696,6 +696,34 @@ class InstagramService:
         body = {"recipient": {"comment_id": comment_id}, "message": message}
         return str(self._post(f"{self._user_node(ig_user_id)}/messages", json_body=body).get("message_id", ""))
 
+    # Each conversation with its newest message, so a list needs one call rather than one per thread.
+    _CONVERSATION_FIELDS = (
+        "id,updated_time,participants,"
+        "messages.limit(1){id,created_time,from,message,attachments,shares,story,is_unsupported}"
+    )
+    _DM_FIELDS = "id,created_time,from,to,message,attachments,shares,story,reply_to,is_unsupported"
+
+    def list_conversations(self, ig_user_id: str, limit: int = 20, after: str | None = None) -> dict[str, Any]:
+        """One page of the account's DM conversations, newest first, as Meta returns them.
+
+        Needs ``instagram_manage_messages`` (Instagram Login: ``instagram_business_manage_messages``).
+        Only reads when called — nothing here polls.
+        """
+        params: dict[str, Any] = {"platform": "instagram", "fields": self._CONVERSATION_FIELDS, "limit": str(limit)}
+        if after:
+            params["after"] = after
+        return self._get(f"{self._user_node(ig_user_id)}/conversations", params)
+
+    def get_conversation_messages(self, conversation_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """The newest *limit* messages of one conversation, newest first."""
+        body = self._get(conversation_id, {"fields": f"messages.limit({limit}){{{self._DM_FIELDS}}}"})
+        return list((body.get("messages") or {}).get("data", []))
+
+    def own_username(self, ig_user_id: str) -> str | None:
+        """This account's handle, to tell which side of a conversation is us."""
+        username = self._get(self._user_node(ig_user_id), {"fields": "username"}).get("username")
+        return str(username) if username else None
+
     def get_recent_comments(self, media_id: str, limit: int = 50) -> list[dict[str, Any]]:
         """The newest top-level comments on a media item, with the commenter's id where Meta gives it.
 
