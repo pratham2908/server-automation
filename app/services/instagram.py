@@ -1181,6 +1181,7 @@ class InstagramService:
         thumb_offset: int | None = None,
         cover_url: str | None = None,
         trial_graduation: str | None = None,
+        location_id: str | None = None,
         poll_interval: float = 10.0,
         max_polls: int = 40,
     ) -> str:
@@ -1208,6 +1209,9 @@ class InstagramService:
         trial_params = trial_params_json(trial_graduation)
         if trial_params:
             params["trial_params"] = trial_params
+        # A Facebook place ID; Instagram checks it and refuses one that isn't a location page.
+        if location_id:
+            params["location_id"] = location_id
 
         try:
             data = self._post(f"{self._user_node(ig_user_id)}/media", params)
