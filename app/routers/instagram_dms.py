@@ -12,7 +12,7 @@ import asyncio
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.database import get_db
 from app.dependencies import verify_api_key
@@ -23,8 +23,10 @@ from app.services.instagram_dm_inbox import (
     next_cursor,
     parse_conversation,
     parse_thread,
+    reply_window_ends_at,
 )
 from app.services.instagram_tokens import PROVIDER_INSTAGRAM
+from app.timezone import now_ist
 
 router = APIRouter(
     prefix="/api/v1/channels/{channel_id}/instagram/dms",
@@ -47,6 +49,20 @@ class ThreadOut(BaseModel):
     channel_id: str
     conversation_id: str
     messages: list[DmMessageOut]
+    # When we may no longer message this person; None once that has passed.
+    reply_window_ends_at: str | None = None
+
+
+class SendIn(BaseModel):
+    recipient_id: str = Field(pattern=r"^[0-9]{5,32}$")
+    # Instagram caps a text DM at 1,000 characters.
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class SendOut(BaseModel):
+    channel_id: str
+    recipient_id: str
+    message_id: str
 
 
 async def _service(channel_id: str, db: AsyncIOMotorDatabase) -> tuple[InstagramService, str, str | None]:
@@ -69,6 +85,10 @@ async def _service(channel_id: str, db: AsyncIOMotorDatabase) -> tuple[Instagram
 
 def _refused(exc: requests.RequestException) -> HTTPException:
     message = graph_error_message(exc)
+    if "window" in message.casefold():
+        return HTTPException(
+            409, f"Instagram only allows a reply within 24 hours of their last message: {message[:200]}"
+        )
     if "manage_messages" in message:
         return HTTPException(
             403,
@@ -111,4 +131,25 @@ async def get_dm_thread(
         raw = await asyncio.to_thread(service.get_conversation_messages, conversation_id, limit)
     except requests.RequestException as exc:
         raise _refused(exc) from exc
-    return ThreadOut(channel_id=channel_id, conversation_id=conversation_id, messages=parse_thread(raw, own))
+    messages = parse_thread(raw, own)
+    return ThreadOut(
+        channel_id=channel_id,
+        conversation_id=conversation_id,
+        messages=messages,
+        reply_window_ends_at=reply_window_ends_at(messages, now_ist()),
+    )
+
+
+@router.post("/send", response_model=SendOut)
+async def send_dm(channel_id: str, body: SendIn, db: AsyncIOMotorDatabase = Depends(get_db)) -> SendOut:
+    """Send one text DM, only because this was called — nothing replies on its own.
+
+    Instagram decides whether it may go: it must be within 24 hours of the person's last message.
+    A refusal comes back with Instagram's own reason.
+    """
+    service, ig_user_id, _ = await _service(channel_id, db)
+    try:
+        message_id = await asyncio.to_thread(service.send_dm, ig_user_id, body.recipient_id, body.text)
+    except requests.RequestException as exc:
+        raise _refused(exc) from exc
+    return SendOut(channel_id=channel_id, recipient_id=body.recipient_id, message_id=message_id)

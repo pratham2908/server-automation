@@ -174,3 +174,82 @@ def test_an_unknown_channel_is_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (
         _wire(monkeypatch, _Service()).get("/api/v1/channels/nope/instagram/dms", headers=_headers()).status_code == 404
     )
+
+
+# ---- sending ----
+
+
+def _msg(created: str, mine: bool) -> Any:
+    from app.services.instagram_dm_inbox import DmMessageOut
+
+    return DmMessageOut(id=created, created_at=created, from_me=mine, text="x")
+
+
+def test_the_window_runs_from_their_newest_message_not_ours() -> None:
+    from datetime import datetime
+
+    from app.services.instagram_dm_inbox import reply_window_ends_at
+    from app.timezone import IST
+
+    now = datetime(2026, 10, 28, 12, 0, tzinfo=IST)
+    thread = [_msg("2026-10-27T20:00:00+05:30", False), _msg("2026-10-28T11:00:00+05:30", True)]
+    assert reply_window_ends_at(thread, now) == "2026-10-28T20:00:00+05:30"
+
+
+def test_a_window_that_has_passed_or_never_opened_is_none() -> None:
+    from datetime import datetime
+
+    from app.services.instagram_dm_inbox import reply_window_ends_at
+    from app.timezone import IST
+
+    now = datetime(2026, 10, 28, 12, 0, tzinfo=IST)
+    assert reply_window_ends_at([_msg("2026-10-26T20:00:00+05:30", False)], now) is None
+    assert reply_window_ends_at([_msg("2026-10-28T11:00:00+05:30", True)], now) is None
+    assert reply_window_ends_at([], now) is None
+
+
+def test_sending_goes_out_only_when_called_and_returns_the_message_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _Service()
+    sent: list[tuple[str, str, str]] = []
+
+    def send_dm(ig_user_id: str, recipient_id: str, text: str) -> str:
+        sent.append((ig_user_id, recipient_id, text))
+        return "mid.1"
+
+    service.send_dm = send_dm  # type: ignore[attr-defined]
+    client = _wire(monkeypatch, service)
+    assert service.calls == [] and sent == []
+    result = client.post(
+        "/api/v1/channels/ch/instagram/dms/send", headers=_headers(), json={"recipient_id": "12345678", "text": "hi"}
+    )
+    assert result.json()["message_id"] == "mid.1" and sent == [("1", "12345678", "hi")]
+
+
+def test_a_closed_window_is_a_409_with_instagrams_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = requests.Response()
+    response.status_code = 400
+    response._content = b'{"error": {"message": "This message is sent outside of allowed window."}}'
+    service = _Service()
+
+    def refuse(*_: Any) -> str:
+        raise requests.HTTPError(response=response)
+
+    service.send_dm = refuse  # type: ignore[attr-defined]
+    result = _wire(monkeypatch, service).post(
+        "/api/v1/channels/ch/instagram/dms/send", headers=_headers(), json={"recipient_id": "12345678", "text": "hi"}
+    )
+    assert result.status_code == 409 and "24 hours" in result.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"recipient_id": "abc", "text": "hi"},
+        {"recipient_id": "12345678", "text": ""},
+        {"recipient_id": "12345678", "text": "x" * 1001},
+    ],
+)
+def test_a_malformed_send_never_reaches_instagram(monkeypatch: pytest.MonkeyPatch, body: dict[str, str]) -> None:
+    service = _Service()
+    result = _wire(monkeypatch, service).post("/api/v1/channels/ch/instagram/dms/send", headers=_headers(), json=body)
+    assert result.status_code == 422 and service.calls == []
