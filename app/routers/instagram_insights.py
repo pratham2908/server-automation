@@ -25,6 +25,7 @@ from app.models.content_analysis import (
     slot_out,
 )
 from app.services.instagram_audience import story_is_live
+from app.services.instagram_audience_history import history_days
 from app.services.instagram_content_analysis import (
     GroupStat,
     PostingSlot,
@@ -85,6 +86,45 @@ class StoryOut(BaseModel):
     navigation: dict[str, int] = {}
     # Why Instagram held back the numbers, e.g. "Not enough viewers" on a fresh story.
     insights_note: str | None = None
+
+
+class AudienceHistoryDayOut(BaseModel):
+    date: str
+    fetched_at: str | None = None
+    # False when Instagram's figures equal the previous stored day's (its refresh lags our daily pull).
+    changed: bool
+    rows: list[DemographicRow]
+
+
+class AudienceHistoryOut(BaseModel):
+    channel_id: str
+    audience: str
+    timeframe: str
+    breakdown: str
+    days: list[AudienceHistoryDayOut] = []
+
+
+@router.get("/audience/history", response_model=AudienceHistoryOut)
+async def get_audience_history(
+    channel_id: str,
+    audience: Literal["reached", "engaged", "followers"] = "followers",
+    timeframe: Literal["this_week", "this_month", "last_14_days", "last_90_days"] = "this_month",
+    breakdown: Literal["age", "gender", "country", "city"] = "country",
+    days: int = Query(90, ge=2, le=365),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> AudienceHistoryOut:
+    """One breakdown for each stored day, oldest first, for plotting how the audience shifts."""
+    docs = await db.instagram_audience.find({"channel_id": channel_id}).sort("date", -1).limit(days).to_list(days)
+    return AudienceHistoryOut(
+        channel_id=channel_id,
+        audience=audience,
+        timeframe=timeframe,
+        breakdown=breakdown,
+        days=[
+            AudienceHistoryDayOut(**{**d, "fetched_at": to_ist_iso(d["fetched_at"]) if d["fetched_at"] else None})
+            for d in history_days(docs, audience, timeframe, breakdown)
+        ],
+    )
 
 
 @router.get("/audience", response_model=AudienceOut)
