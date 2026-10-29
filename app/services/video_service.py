@@ -30,6 +30,7 @@ from app.services.downloader import (
 )
 from app.services.error_reporting import create_monitored_task, report_error
 from app.services.first_comment import pending_fields, platform_id_field, validate_comment
+from app.services.insight_glitch import regressed_reels
 from app.services.instagram import InstagramService
 from app.services.instagram_audience_sync import refresh_audience, refresh_stories
 from app.services.instagram_follow_sync import refresh_follow_estimates
@@ -1856,11 +1857,15 @@ class VideoService:
             raise ChannelNotConnectedError("No Instagram token")
         last_read: dict[str, Any] = {}
         durations: dict[str, float] = {}
+        previous_views: dict[str, float] = {}
         async for doc in self.db.videos.find(
             {"channel_id": channel_id, "instagram_media_id": {"$ne": None}},
-            {"instagram_media_id": 1, "insights_synced_at": 1, "metadata.duration_seconds": 1},
+            {"instagram_media_id": 1, "insights_synced_at": 1, "metadata.duration_seconds": 1, "metadata.views": 1},
         ):
             last_read[doc["instagram_media_id"]] = doc.get("insights_synced_at")
+            stored_views = (doc.get("metadata") or {}).get("views")
+            if isinstance(stored_views, int | float):
+                previous_views[doc["instagram_media_id"]] = float(stored_views)
             length = (doc.get("metadata") or {}).get("duration_seconds")
             if isinstance(length, int | float):
                 durations[doc["instagram_media_id"]] = float(length)
@@ -1895,6 +1900,17 @@ class VideoService:
             logger.warning("Combined media sweep refused for '%s' (%s) — reading reels one by one", channel_id, exc)
             ig_reels = ig.get_reels(channel["instagram_user_id"])
             insights_map = ig.get_reel_insights([r["id"] for r in ig_reels if due(r)])
+        # Instagram sometimes answers views=0 for a reel that has hundreds of thousands. Keep what we
+        # had for those reels and skip the channel total, which would dip and then spike on recovery.
+        glitched = regressed_reels(insights_map, previous_views)
+        if glitched:
+            logger.warning(
+                "Instagram read lower views than stored for %d reel(s) of '%s' — keeping the old numbers: %s",
+                len(glitched),
+                channel_id,
+                sorted(glitched),
+            )
+            channel_totals_now = None
         media_ids = [r["id"] for r in ig_reels]
         missing = await self._archive_missing_instagram_videos(channel_id, set(media_ids))
         await record_channel_totals(self.db, channel_id, "instagram", channel_totals_now, now)
@@ -1904,6 +1920,8 @@ class VideoService:
         counts_by_media: dict[str, dict[str, float | int | bool]] = {}
         for r in ig_reels:
             mid = r["id"]
+            if mid in glitched:
+                continue
             ins = insights_map.get(mid, {})
 
             # Likes and comments come on the media object; everything else from insights.
