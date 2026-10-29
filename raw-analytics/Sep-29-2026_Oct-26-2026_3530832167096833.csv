@@ -1,0 +1,351 @@
+﻿"Post ID","Account ID","Account username","Account name",Description,"Duration (sec)","Publish time",Permalink,"Post type","Data comment",Date,Views,Reach,Likes,Shares,Follows,Comments,Saves
+18014148158960529,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Recursion vs Memoization
+
+Recursion vs Memoization — Fibonacci (N = 7)
+
+Both lanes compute fib(7) = 13. Plain recursion recomputes every branch and takes 41 calls; memoization answers a repeat from the cache and takes 13.
+
+#dsa #recursion #coding #interview #tryalgoviz",10,"09/29/2026 06:17",https://www.instagram.com/reel/Dd32LjNnaNg/,"IG reel",,Lifetime,2599,1908,16,1,1,1,6
+18005358497790973,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pre-Order Traversal Visualization
+
+Pre-Order Traversal Visualization
+
+Handle the node first, then its left and right subtrees. All 15 values come out root-first — which is why pre-order is what you use to copy a tree.
+
+#dsa #binarytree #coding #interview #tryalgoviz",16,"10/04/2026 06:56",https://www.instagram.com/reel/DeEynsKDOPX/,"IG reel",,Lifetime,2568,2006,28,2,5,2,23
+18089660219239716,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Two Pointers Always Catch the Loop
+
+Two Pointers Always Catch the Loop
+
+Slow moves one node, fast moves two. Once both are inside the loop the gap between them closes by exactly 1 on every move — so fast can never jump past slow, and a collision is guaranteed. On this 10-node list they meet at 3 after 7 moves.
+
+#dsa #linkedlist #coding #interview #tryalgoviz",13,"10/05/2026 23:25",https://www.instagram.com/reel/DeJIoTdjVXm/,"IG reel",,Lifetime,3042,2316,21,4,1,1,8
+18370269229213272,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Tower of Hanoi in 31 Moves
+
+Tower of Hanoi in 31 Moves
+
+Five disks, three pegs, one rule: never stack a bigger disk on a smaller one. Move the top four aside, shift the biggest across, then move the four back on — that single idea solves it in 31 moves, which is 2⁵ − 1. The same method on 64 disks needs 2⁶⁴ − 1.
+
+#dsa #recursion #coding #interview #tryalgoviz",18,"10/07/2026 05:33",https://www.instagram.com/reel/DeMXk9VgVdn/,"IG reel",,Lifetime,8337,6716,95,35,15,3,55
+17915596476467127,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","12 HTTP Status Codes to Know
+
+12 HTTP Status Codes to Know
+
+Every tap on Maya's phone gets a number back. 200: here's the page. 304: use your saved copy. 404: that page doesn't exist. 429: you tapped Buy ten times, slow down. 503: the shop is too busy. The first digit tells you who to blame: 2 worked, 3 elsewhere, 4 you, 5 the server.
+
+#webdevelopment #http #coding #programming #tryalgoviz",16,"10/07/2026 22:55",https://www.instagram.com/reel/DeOO04WCo3C/,"IG reel",,Lifetime,3844,3076,76,41,9,1,77
+17965246850981868,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Horizontal vs Vertical Scaling
+
+Horizontal vs Vertical Scaling
+
+One server is drowning in requests and the wait climbs to 240 ms. Vertical: buy a bigger server, 4 CPUs up to 16. Horizontal: add servers behind a load balancer. It works both ways, until the traffic keeps coming. The big server maxes out at 16 CPUs and the wait hits 640 ms. Six servers hold 80 ms. Bigger has a limit. More doesn't.
+
+#systemdesign #scaling #backend #coding #tryalgoviz",9,"10/08/2026 22:34",https://www.instagram.com/reel/DeQxLxeEsyA/,"IG reel",,Lifetime,22026,13807,122,17,17,3,81
+17960652795220840,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Why Maps Feels Instant
+
+Why Maps Feels Instant
+
+Plain Dijkstra floods outward from your start, nearest road first, until it reaches the goal: 6,783 roads explored for a 10.3 km route. Now run it from the start and the goal at once. The two floods meet in the middle after 3,643 roads, on the same route. Searching from both ends checks 1.9x fewer roads.
+
+#dsa #algorithms #graphs #coding #tryalgoviz",14,"10/09/2026 05:34",https://www.instagram.com/reel/DeRhN8eE4NB/,"IG reel",,Lifetime,684133,403338,3950,317,249,20,915
+18355487149171085,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","How a Race Condition Happens
+
+How a Race Condition Happens
+
+Asha and Ben tap the last free seat, C3, at the same moment. Without a lock, both apps see C3 as free, both take the payment, and two people turn up for one seat. With a lock, Asha's tap holds C3 while she pays, so Ben is told it's taken and books C4. The whole fix is one rule: check and book must be one step.
+
+#computerscience #concurrency #coding #interview #tryalgoviz",16,"10/09/2026 21:34",https://www.instagram.com/reel/DeTPGvclElF/,"IG reel",,Lifetime,2265,1664,14,3,4,1,9
+18096740597640528,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Load Balancer vs Reverse Proxy vs API Gateway
+
+Load Balancer vs Reverse Proxy vs API Gateway
+
+All three sit in front of your servers, but each does a different job. A load balancer reads the load on 3 identical copies of the same app and sends every request to the least busy one. A reverse proxy is one app's front door: it unlocks HTTPS, keeps a copy of each page, and answers repeats from its cache so the app never even knows. An API gateway is one door to many services: no login gets a 401, /photos and /cart go to different services, and more than 5 requests a second get a 429 before the services ever see them. Balancer spreads. Proxy guards. Gateway routes.
+
+#systemdesign #loadbalancer #apigateway #backend #tryalgoviz",17,"10/10/2026 00:45",https://www.instagram.com/reel/DeTk7eDCrZx/,"IG reel",,Lifetime,2770,2378,40,7,11,2,44
+17972832849154969,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Your hi Ships Like a Parcel
+
+Your “hi” Ships Like a Parcel
+
+You text Friend “hi”, and your phone packs it like a parcel. Application writes the note, Presentation locks it, Session tags the chat, Transport numbers the box, Network adds Friend's address, Data Link picks the next stop, and Physical sends it as bits. Friend's phone unpacks it in reverse: 7 layers to pack it, 7 to unpack it.
+
+#networking #osimodel #systemdesign #coding #interview #tryalgoviz",15,"10/10/2026 06:44",https://www.instagram.com/reel/DeUOC50FFhr/,"IG reel",,Lifetime,1559,1280,19,2,2,1,10
+18116708915336148,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","15 Must-Know Networking Concepts
+
+15 Must-Know Networking Concepts
+
+Fifteen live tiles, each doing the one job its concept is for: DNS turns google.com into an IP address, ports let one address run many programs, NAT puts many devices behind one IP, and a load balancer spreads requests across servers. HTTP sends “card 4242” where anyone can read it; HTTPS sends gibberish. 15 concepts, one screen.
+
+#networking #computernetworks #networkingbasics #dns #tryalgoviz",11,"10/10/2026 21:32",https://www.instagram.com/reel/DeVzn-lm9yQ/,"IG reel",,Lifetime,211732,165530,2260,1071,876,3,4405
+18095510192234734,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Minesweeper (LeetCode 529): One Click Opens 49 of 80 Cells
+
+Minesweeper (LeetCode 529): One Click Opens 49 of 80 Cells
+
+One click on a 10 × 8 board hiding 10 mines. Every zero opens all 8 of its neighbours and pushes them onto a BFS queue; every number stops the spread right there. 27 zeros spread, 22 numbers stopped it: 1 click → 49 of 80 cells.
+
+#dsa #minesweeper #floodfill #bfs #tryalgoviz",11,"10/11/2026 04:33",https://www.instagram.com/reel/DeWj4jTAQbi/,"IG reel",,Lifetime,5447,3739,29,4,2,6,12
+18413705002083481,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Bubble Sort in 19 Swaps
+
+Bubble Sort in 19 Swaps
+
+Eight blocks, and the only move allowed is swapping two neighbours. Each pass carries the biggest block still out of place to the end, where it stays. The worst case for 8 is 28 swaps over 7 passes; this run needs 19 and stops after 5, because a pass with no swaps means everything is already in order.
+
+#dsa #bubblesort #sortingalgorithms #algorithms #tryalgoviz",15,"10/11/2026 08:35",https://www.instagram.com/reel/DeW_fkeimL_/,"IG reel",,Lifetime,2120,1718,21,3,2,1,5
+18109126028267647,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Maze Pathfinding with BFS
+
+Maze Pathfinding with BFS
+
+Pour water in at the start and it spreads through the maze one ring at a time, the colour marking how far each cell is. The first drop to reach the exit took the shortest way: water tried 249 cells, and the way out is 34 steps.
+
+#dsa #bfs #pathfinding #graphs #tryalgoviz",14,"10/11/2026 21:30",https://www.instagram.com/reel/DeYYRa2j3Lx/,"IG reel",,Lifetime,2435,1857,27,2,6,2,13
+17941592823098143,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Latency Numbers Every Developer Should Know: If 1 Nanosecond Took 1 Second
+
+Stretch time so 1 nanosecond lasts 1 second, then watch the CPU wait for one value. An L1 cache read feels like 0.5 seconds, RAM 1.7 minutes, an SSD read 1.7 days, a data-center round trip 5.8 days, a hard-disk seek 3.8 months. Overseas and back is 150 ms — 4.8 years — the same as 300 million L1 cache reads.
+
+#systemdesign #latencynumbers #latency #computerarchitecture #tryalgoviz",10,"10/12/2026 04:31",https://www.instagram.com/reel/DeZIcXQDBYL/,"IG reel",,Lifetime,2715,1961,15,0,1,2,11
+18120902993515730,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","A* vs Dijkstra on a Real Map of Delhi
+
+Delhi University to IGI Airport on Delhi's real streets. Dijkstra floods outward in every direction and explores 6,027 roads before it finds the shortest route. A* leans toward the airport and explores 990. Same 23.1 km route — A* explored 6.1× fewer roads.
+
+#dsa #astar #dijkstra #pathfinding #tryalgoviz",13,"10/12/2026 21:35",https://www.instagram.com/reel/Dea9iwwgSw0/,"IG reel",,Lifetime,23610,16020,77,6,2,3,23
+17931121431164773,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","HTTPS on Public Wi-Fi: What a Hacker Still Sees
+
+Maya logs in to shop.com on café Wi-Fi while a hacker on the same network listens. Over HTTP he reads all of it: username maya, password hunter2, site shop.com. Over HTTPS the same login crosses scrambled and his screen shows dots. HTTPS hid her login, not the site.
+
+#security #https #publicwifi #encryption #tryalgoviz",12,"10/13/2026 04:33",https://www.instagram.com/reel/DebtZGwDbJ7/,"IG reel",,Lifetime,2050,1565,19,1,4,2,18
+18644295295050660,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","10 Must-Know Time Complexity Patterns
+
+Ten live boards, all running the same n = 8 on one clock. Hash lookup finishes in 3 steps. Permutations is still going at 40,320 when the reel ends.
+
+#dsa #timecomplexity #bigo #algorithms #tryalgoviz",8,"10/13/2026 08:33",https://www.instagram.com/reel/DecI8xskrLx/,"IG reel",,Lifetime,3800,2411,41,13,8,2,72
+18105120209570678,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Binary Search: One Word in 10 Looks
+
+1,024 sorted words and one to find. Open the middle, see which half the word must be in, throw the other half away. Ten looks finds it, and a million words would take only 20.
+
+#dsa #binarysearch #algorithms #bigo #tryalgoviz",12,"10/13/2026 21:03",https://www.instagram.com/reel/DedeziAjxjd/,"IG reel",,Lifetime,288,222,3,0,1,1,0
+18106400861206780,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Dijkstra's Algorithm Visualization: Why 5 Roads Beat 3
+
+Home to the airport across a small town. Dijkstra always settles the nearest place first, then checks every road out of it — Fort drops from 37 to 28 min the moment a road through Park is found. The route with the fewest roads, 3 through Hill and Fort, takes 44 min. Dijkstra's answer takes 5 roads and 35 min.
+
+#dsa #dijkstra #shortestpath #graphs #tryalgoviz",15,"10/14/2026 00:04",https://www.instagram.com/reel/Dedzfa_DmXH/,"IG reel",,Lifetime,2352,1855,21,5,2,4,11
+18075351374719737,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Container With Most Water (Two Pointers) Visualization
+
+Start at the widest pair of 9 walls and always move the shorter one inward. Maximum area 49, between walls 1 and 8, without ever testing every pair.
+
+#dsa #twopointers #containerwithmostwater #leetcode #tryalgoviz",11,"10/14/2026 03:00",https://www.instagram.com/reel/DeeHmZ-k_Zi/,"IG reel",,Lifetime,202,151,0,0,0,1,0
+18117674809963010,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","4 Pathfinding Algorithms Race Across Barcelona
+
+One trip across Barcelona's real streets, four ways. Dijkstra floods 10,048 roads to find the shortest route. BFS counts junctions, not distance, and floods 9,964. A* finds the same shortest route after 8,071. Greedy explores just 170 roads and arrives first, 2.1 km longer.
+
+#dsa #pathfinding #astar #dijkstra #tryalgoviz",14,"10/14/2026 06:01",https://www.instagram.com/reel/DeecR3sCbtS/,"IG reel",,Lifetime,5240,3617,11,0,0,1,8
+17965547111984556,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Sudoku Solver: How Backtracking Fills 19 Blanks
+
+This animation fills 19 blank cells by backtracking: take the first legal digit, and on a dead end, erase it and try the next. It finishes in 67 tries, where brute force would face 9¹⁹ boards.
+
+#dsa #backtracking #sudoku #leetcode #tryalgoviz",14,"10/14/2026 21:01",https://www.instagram.com/reel/DegDUsjCYfy/,"IG reel",,Lifetime,169,130,3,10,0,1,0
+17922720708224998,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Bubble Sort Visualization: 64 Bars, 1,194 Swaps
+
+Every bar is coloured by its value, so a sorted array is a clean rainbow. Bubble sort swaps neighbours until it lines up: 1,194 swaps and 1,971 compares for 64 bars. It stops after 54 of its 63 passes, because a pass with no swaps means the array is already sorted.
+
+#dsa #bubblesort #sortingalgorithms #algorithms #tryalgoviz",14,"10/15/2026 05:03",https://www.instagram.com/reel/Deg6a6rFZ_D/,"IG reel",,Lifetime,4120,3014,18,1,3,2,4
+18117147788002683,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Concurrency vs Parallelism: Taking Turns vs Running at Once
+
+Three orders come in at once. Concurrency is one cook taking turns: all three pans in progress, only one on the heat, so all three are served in 27 minutes. Parallelism is three cooks, one pan each, all at once: served in 9 minutes. Concurrency takes turns. Parallelism runs at once.
+
+#computerscience #concurrency #parallelism #multithreading #tryalgoviz",10,"10/15/2026 21:04",https://www.instagram.com/reel/Deioca_kayY/,"IG reel",,Lifetime,8860,5850,71,20,17,2,39
+18090592871234505,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","CAPTCHA: How “I’m Not a Robot” Spots a Bot
+
+Visitors stream into the same checkbox. A person pauses 0.6s and their cursor curves and overshoots: 70% straight, speed swinging ±69%, plus cookies and a real browser, so they get the tick. A bot clicks instantly, 100% straight at one steady speed, ±0%, with no cookies, and gets the traffic-light puzzle. Most visitors pass; now and then a bot gets the pictures. Your score is set before you click.
+
+#security #captcha #recaptcha #botdetection #tryalgoviz",16,"10/16/2026 01:05",https://www.instagram.com/reel/DejECP9DHs9/,"IG reel",,Lifetime,1880,1561,10,1,1,3,6
+18129396647505631,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","15 Must-Know System Design Concepts
+
+Fifteen live tiles, one job each. A load balancer spreads requests across servers, a cache serves repeat reads from memory, a rate limiter caps requests per client, sharding splits data across databases, and a circuit breaker stops calls to a failing service. 15 concepts, one screen.
+
+#systemdesign #softwarearchitecture #backend #scalability #tryalgoviz",6,"10/16/2026 05:01",https://www.instagram.com/reel/DejfAvogUdt/,"IG reel",,Lifetime,2882,1895,48,8,4,1,85
+18110555246615569,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Polling vs WebSocket Explained with a Kitchen
+
+Same kitchen, same order. With a WebSocket the chef calls “Ready!” and the waiter takes the plate straight away, still hot. With polling the waiter only checks every 12 seconds, so the plate lands just after he has been and sits 10 seconds going cold. Polling keeps asking. A WebSocket gets told.
+
+#systemdesign #websocket #polling #realtime #tryalgoviz",8,"10/16/2026 09:03",https://www.instagram.com/reel/Dej6vWpCdxW/,"IG reel",,Lifetime,150,118,1,0,0,1,0
+18631374601054357,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Two Sum, 3 Ways
+
+One list of 7 numbers, target 100, solved three ways in turn: check every pair, sort and walk two pointers inward, then one pass with a hash map that remembers what it has seen. Same answer every time, 18 + 82 = 100. The hash map needs 7 lookups; brute force checks 21 pairs.
+
+#dsa #twosum #hashmap #twopointers #tryalgoviz",15,"10/16/2026 21:02",https://www.instagram.com/reel/DelNCV_kQbm/,"IG reel",,Lifetime,40275,30132,505,98,91,1,249
+18107717377960843,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","5 Weird Sorting Algorithms
+
+Stalin Sort deletes anything out of order. Thanos Sort snaps half the list away until what is left is sorted. Communist Sort gives everyone the average. Bogo Sort shuffles until it gets lucky. Sleep Sort lets small numbers wake up first. Only one of them keeps every number and sorts it.
+
+#sortingalgorithms #programmerhumor #coding #computerscience #tryalgoviz",9,"10/17/2026 05:02",https://www.instagram.com/reel/DemD7BykiWl/,"IG reel",,Lifetime,209,158,3,0,0,1,0
+18139144069528909,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Binary Search vs Linear Search: Guess My Number
+
+I'm thinking of a number from 1 to 100. One player guesses 1, 2, 3 and needs 67 tries. The other always guesses the middle and throws away half the board each time: 7 tries. With a million numbers it is 20 guesses against a million.
+
+#dsa #binarysearch #linearsearch #bigo #tryalgoviz",11,"10/17/2026 09:03",https://www.instagram.com/reel/DemfjaikXGb/,"IG reel",,Lifetime,26269,17497,118,4,7,3,13
+17983003586905358,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","DFS vs BFS: Same Maze, 143 Steps vs 39
+
+Two searches leave the same maze cell. Depth-first takes the first way out wherever it leads and snakes 143 steps to the goal; breadth-first floods nearest-first and walks 39, the shortest route there is. BFS path 3.7× shorter, same maze.
+
+#dsa #dfs #bfs #pathfinding #tryalgoviz",11,"10/17/2026 21:05",https://www.instagram.com/reel/DenyFtUjOML/,"IG reel",,Lifetime,18695,12665,102,2,4,3,24
+18131933866762906,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Why AI Chat Types Word by Word: Server-Sent Events
+
+Same question, same answer, two chat apps. Without streaming you stare at Thinking for 3.5 seconds and then all 20 words land at once. With Server-Sent Events the server keeps one line open and pushes each word the moment it exists, so the first word shows at 0.3 seconds. Both finish together. One just feels instant.
+
+#systemdesign #sse #serversentevents #chatgpt #tryalgoviz",11,"10/18/2026 01:02",https://www.instagram.com/reel/DeoNOmOgQTf/,"IG reel",,Lifetime,144,123,0,0,0,1,1
+18099020630350280,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","8 Must-Know Sorting Algorithms for Coding Interviews
+
+Eight sorting algorithms on the same bars, all at once. Every bar is coloured by its value, so a sorted array turns into a clean rainbow. Merge sort finishes first, then radix, quick and shell. Bubble sort is still swapping when the rest are done.
+
+#sortingalgorithms #dsa #algorithms #codinginterview #tryalgoviz",7,"10/18/2026 05:03",https://www.instagram.com/reel/DeoozdyDtkC/,"IG reel",,Lifetime,2798,1753,38,5,6,1,17
+17965543677197336,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","4 Tree Traversals: Pre, In, Post and Level Order
+
+One 7-node binary search tree, walked four ways at once: pre-order, in-order, post-order and level-order. Same 7 nodes, 4 different orders, and in-order reads a BST back sorted, 12 → 89.
+
+#dsa #binarytree #treetraversal #bst #tryalgoviz",9,"10/18/2026 09:04",https://www.instagram.com/reel/DepEXlDieUA/,"IG reel",,Lifetime,158,140,4,1,0,1,2
+18129288070700767,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Polling vs WebSocket: Why Your Food Goes Cold
+
+Your food is ready, so why is it going cold? With polling, the waiter only checks every 12 seconds. He hears ""not ready"" and leaves, and right after, the plate is ready and just sits there. With a WebSocket, the chef rings the second it's done and it goes straight to the table, still hot. Polling keeps asking. A WebSocket just gets told.
+
+#systemdesign #websocket #polling #realtime #tryalgoviz",24,"10/18/2026 11:01",https://www.instagram.com/reel/DepRxmgCAFp/,"IG reel",,Lifetime,168,143,2,1,0,1,1
+18128595668489778,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Deadlock Explained: 4 Cars, 1 Intersection, Nobody Moves
+
+Four cars roll into an intersection with the light out. Each one takes a square and waits for the square ahead, which the next car is holding. That circle of waiting is a deadlock: nobody can move, and nobody ever will on their own. Break the circle and it clears. The light comes on, one car backs up, and everyone gets through.
+
+#operatingsystems #deadlock #computerscience #concurrency #tryalgoviz",13,"10/18/2026 21:03",https://www.instagram.com/reel/DeqWuB2CUTM/,"IG reel",,Lifetime,28786,24910,110,35,8,5,33
+18013353137985346,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Dijkstra's Algorithm: Fewer Roads Isn't Faster
+
+Home to the airport. The route with the fewest roads goes through Hill and Fort: 3 roads, 44 min. Dijkstra settles the nearest place first and checks every road out of it, and lands on 5 roads and 35 min.
+
+#dsa #dijkstra #shortestpath #graphs #tryalgoviz",13,"10/19/2026 01:01",https://www.instagram.com/reel/Deqx8HSCj7k/,"IG reel",,Lifetime,174,148,2,0,0,1,0
+17995158375045106,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","System Design Interview: Every One Uses These 15 Concepts
+
+Fifteen live tiles, one job each. A load balancer spreads requests across servers, a cache serves repeat reads from memory, a rate limiter caps requests per client, sharding splits data across databases, and a circuit breaker stops calls to a failing service. 15 concepts, one screen.
+
+#systemdesign #softwarearchitecture #backend #scalability #tryalgoviz",11,"10/19/2026 05:03",https://www.instagram.com/reel/DerNmAdklWE/,"IG reel",,Lifetime,147,130,1,2,0,1,1
+18057907436567892,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Big O Notation Visualized: 7 Time Complexities Race on 16 Items
+
+Seven time complexities race on the same 16 items, all doing 32 steps a second. O(1), O(log n), O(n) and O(n log n) are done in 2 seconds. O(n²) takes 8. O(2ⁿ) would need 34 minutes, and O(n!) needs 20,700 years.
+
+#dsa #bigo #timecomplexity #algorithms #tryalgoviz",11,"10/19/2026 11:03",https://www.instagram.com/reel/Der24ZhEjoh/,"IG reel",,Lifetime,194,134,1,0,0,1,2
+18139247323711659,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","CI/CD Explained: The Broken Build That Never Reached Users
+
+Every commit goes down the same line. Push it, and BUILD packs it into an image. TEST runs every check, 24 of 24. Only then does DEPLOY roll it out, one server at a time, so users never notice. Then v43 shows up with a failing test. The line stops it, and it never reaches a single user. The fix, v44, takes the same road and ships.
+
+#cicd #devops #systemdesign #softwareengineering #tryalgoviz",16,"10/19/2026 20:04",https://www.instagram.com/reel/Des0w3SEY3m/,"IG reel",,Lifetime,2964,2282,28,2,1,1,20
+18112070324154449,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Git Commands: 10 You'll Use Every Day
+
+Ten Git commands, each on its own commit graph. Commit saves a snapshot, branch starts a new line of work, checkout moves you onto it, merge joins two branches and rebase replays your work on top. Cherry-pick copies one commit over. Revert undoes with a new commit, reset moves the branch back. Push and pull sync you with GitHub.
+
+#git #github #coding #programming #tryalgoviz",11,"10/20/2026 05:03",https://www.instagram.com/reel/Detya-CDPuL/,"IG reel",,Lifetime,7268,4734,138,37,24,3,264
+18140913622577982,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Best Time to Buy and Sell Stock: 45 Tries or 10
+
+Ten days of prices. When should you buy and sell? Trying every buy and sell pair takes 45 tries. One pass that remembers the lowest price so far looks at each day once, 10 looks, and finds the same answer: buy at 1, sell at 8, +7.
+
+#dsa #leetcode #arrays #codinginterview #tryalgoviz",9,"10/20/2026 07:10",https://www.instagram.com/reel/DeuBBiqkqa7/,"IG reel",,Lifetime,148,110,1,0,0,1,0
+18117285926017808,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms: 5 Ways Across Barcelona, Only One Wins
+
+Same start, same goal, every road in Barcelona: Sagrada Família → Camp Nou. Dijkstra floods 7,028 roads to find the 5.5 km route. Searching from both ends meets in the middle and checks 4,456. BFS counts turns, not distance, and ends up 0.3 km longer. Greedy checks only 69 roads and lands 0.7 km longer. A* finds the same 5.5 km route with 960 roads, 7.3x fewer than Dijkstra, because it always knows roughly where the goal is.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",20,"10/20/2026 09:04",https://www.instagram.com/reel/DeuN_byCa0O/,"IG reel",,Lifetime,15914,11675,103,2,1,1,7
+18141191710621593,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Load Balancer vs Reverse Proxy vs API Gateway: They Look the Same. They're Not.
+
+Three boxes sit in front of your servers and they look alike. The load balancer gives each of 3 identical copies an even share. The reverse proxy answers from its cache, so the app server is never even asked. The API gateway sends /photos to Photos and /cart to a different service. Balancer spreads. Proxy guards. Gateway routes.
+
+#systemdesign #loadbalancer #reverseproxy #apigateway #tryalgoviz",10,"10/21/2026 01:01",https://www.instagram.com/reel/Dev7gUdgrwn/,"IG reel",,Lifetime,132,108,1,0,0,1,1
+18179647585444899,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Operating System Concepts: Your Laptop Runs on These 15 Ideas
+
+Fifteen live tiles, one idea each. A process is a program loaded and running, threads share its memory, a context switch saves one process and loads another, a mutex lets one thread in at a time, and a deadlock is two threads each waiting on the other, forever. Paging, the stack, the heap, system calls and interrupts are all here too.
+
+#operatingsystem #computerscience #os #coding #tryalgoviz",11,"10/21/2026 05:02",https://www.instagram.com/reel/DewXKJukwul/,"IG reel",,Lifetime,8462,6267,88,27,25,1,213
+18115048853153451,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms: LaGuardia to Times Square, 5 Ways
+
+Same start, same goal, every road in New York: LaGuardia Airport → Times Square. A* finds the 11.7 km route after checking 2,877 roads, because it always knows roughly where the goal is. Greedy checks only 366 roads and lands 2.4 km longer. Searching from both ends meets in the middle after 6,386. BFS counts turns, not distance, and ends up 0.8 km longer. Dijkstra floods 10,878 roads to find the same 11.7 km route, 3.8x more than A*.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",12,"10/21/2026 06:33",https://www.instagram.com/reel/Dewhi7TEyoD/,"IG reel",,Lifetime,168,120,0,1,0,1,0
+18123158137933512,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms: Kengeri to Whitefield, 5 Ways
+
+Same start, same goal, every road in Bengaluru: Kengeri → Whitefield. Dijkstra floods 37,088 roads to find the 31.8 km route. BFS counts turns, not distance, and ends up 0.7 km longer. Searching from both ends meets in the middle after 25,620. Greedy checks only 195 roads and drives 9.4 km further. A* finds the same 31.8 km route with 10,144 roads, 3.7x fewer than Dijkstra, because it always knows roughly where the goal is.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",12,"10/21/2026 20:04",https://www.instagram.com/reel/Dex-UUeAIMN/,"IG reel",,Lifetime,13522,8552,58,10,7,2,11
+18119236136072442,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","CAPTCHA: The Click Isn't the Test
+
+You tick ""I'm not a robot"" and think the click proved it. It didn't. A real hand curves, slows and pauses on the way to the box, so it gets the tick with no puzzle. A bot moves in a ruler-straight line at one speed and clicks at once, so it gets the traffic lights. Your score is set before you click.
+
+#security #captcha #recaptcha #botdetection #tryalgoviz",10,"10/22/2026 01:01",https://www.instagram.com/reel/DeygWb8grEC/,"IG reel",,Lifetime,162,118,0,0,0,1,0
+18641605735041233,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Race Condition: The Bank Paid ₹10,000 and Kept ₹5,000
+
+One account, ₹10,000. An ATM withdrawal and a UPI payment of ₹5,000 each hit it in the same second. Both read ₹10,000, both work out ₹5,000 left, and the second write lands over the first. The bank paid out ₹10,000 and still shows ₹5,000. With a lock, the phone waits until the ATM is done, reads ₹5,000 and writes ₹0. Read and update as one step. That's a lock.
+
+#computerscience #concurrency #racecondition #multithreading #tryalgoviz",14,"10/22/2026 09:03",https://www.instagram.com/reel/DezXdOziZdV/,"IG reel",,Lifetime,132,117,0,1,0,1,1
+18187182037415786,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms Across All of New York: Coney Island to Harlem
+
+Same start, same goal, every street in New York: Coney Island → the Apollo Theater in Harlem. Dijkstra floods 28,187 roads to find the 28.5 km route. BFS counts turns, not distance, and ends up 8.9 km longer. Greedy checks only 270 roads and drives 4 km further. Searching from both ends meets in the middle after 23,717. A* finds the same 28.5 km route with 9,989 roads, 2.8x fewer than Dijkstra, because it always knows roughly where the goal is.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",12,"10/22/2026 10:08",https://www.instagram.com/reel/Deze-2nE2kA/,"IG reel",,Lifetime,12968,8442,55,4,1,1,5
+18134109472759003,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Container With Most Water: 21 Tries or 6
+
+Seven walls. Which two hold the most water? Measuring every pair takes 21 tries. Two pointers start at both ends and always move the shorter wall in, so they need just 6 measures and find the same answer: 8 × 4 = 32.
+
+#dsa #twopointers #containerwithmostwater #leetcode #tryalgoviz",9,"10/22/2026 11:04",https://www.instagram.com/reel/DezlYZpknQK/,"IG reel",,Lifetime,183,130,0,0,0,1,1
+18120727114945234,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","6 Must-Know Star Patterns for Coding Interviews
+
+Six star patterns, each printed one star at a time by two nested loops: a pyramid, a heart, a Christmas tree, a diamond, an arrow and an hourglass. Same idea every time. The outer loop picks the row, the inner loop decides which spots get a star.
+
+#starpattern #patternprinting #coding #programming #tryalgoviz",7,"10/23/2026 05:04",https://www.instagram.com/reel/De1g-fnDPmF/,"IG reel",,Lifetime,46806,29410,352,45,9,4,354
+17968426974209549,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms Across All of Chicago: Dijkstra vs A* vs BFS
+
+Same start, same goal, every street in Chicago: Wrigley Field to the Southwest Side. Dijkstra floods 19,583 roads to find the 19.3 km route. Greedy checks only 169 roads and drives 2.2 km further. BFS counts turns, not distance, and ends up 7.9 km longer. Searching from both ends meets in the middle after 15,610. A* finds the same 19.3 km route with 8,514 roads, 2.3x fewer than Dijkstra, because it always knows roughly where the goal is.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",14,"10/23/2026 07:01",https://www.instagram.com/reel/De1uSjTEjKP/,"IG reel",,Lifetime,126216,74903,997,11,17,3,41
+17949138087304416,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms Across All of London: Canary Wharf to Heathrow
+
+Same start, same goal, every street in London: Canary Wharf to Heathrow. BFS counts turns, not distance: 30,375 roads and a route 2 km too long. Greedy checks only 186 roads and drives 3.6 km further. Dijkstra floods 35,068 roads to find the 32.5 km route. Searching from both ends meets in the middle after 21,905. A* finds the same 32.5 km route with just 5,368 roads, 6.5x fewer than Dijkstra, because it always knows roughly where Heathrow is.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",14,"10/24/2026 01:00",https://www.instagram.com/reel/De3p3CDggid/,"IG reel",,Lifetime,286365,172640,1727,67,47,15,174
+17986120161085415,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms Across Mumbai: Dadar to Colaba Causeway
+
+Same start, same goal, the streets of Mumbai's island city: Dadar Station to Colaba Causeway. Dijkstra floods 10,037 roads to find the 11.4 km route. BFS counts turns, not distance: 10,045 roads and a route 1.3 km too long. Greedy checks only 96 roads and drives 1.1 km further. Searching from both ends meets in the middle after 8,735. A* finds the same 11.4 km route with just 1,141 roads, 8.8x fewer than Dijkstra, because it always knows roughly where Colaba is.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",14,"10/24/2026 04:31",https://www.instagram.com/reel/De4B-I3D8Gp/,"IG reel",,Lifetime,2747,1850,20,5,1,2,6
+18132827515784555,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Big O Notation as a Race: O(1) vs O(n!) on 20 Items
+
+Six time complexities race on the same 20 items, one step every microsecond. O(1) is done in 1 µs, O(log n) in 4.3 µs, O(n) in 20 µs and O(n²) in 400 µs. O(2ⁿ) needs a full second. O(n!) needs 77,000 years, so the crowd goes home.
+
+#dsa #bigo #timecomplexity #algorithms #tryalgoviz",9,"10/24/2026 07:02",https://www.instagram.com/reel/De4TOA8ETlC/,"IG reel",,Lifetime,12884,8267,57,17,1,2,9
+18131915507499628,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms Across Delhi: Red Fort to IGI Airport
+
+Same start, same goal, the streets of Delhi: Red Fort to IGI Airport. Dijkstra floods 24,989 roads to find the 21.7 km route. BFS counts turns, not distance: 24,179 roads and a route 3.3 km too long. Greedy checks only 1,285 roads and drives 9.2 km further. Searching from both ends meets in the middle after 11,726. A* finds the same 21.7 km route with 7,018 roads, 3.6x fewer than Dijkstra, because it always knows roughly where the airport is. Which city should we race next? Drop it in the comments.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",14,"10/24/2026 21:04",https://www.instagram.com/reel/De5zk0KjZfl/,"IG reel",,Lifetime,3634,2268,22,24,2,1,4
+18019533566958288,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Comment LIMIT and I'll DM you more visuals like this one
+Rate Limiting: How Sites Stop Password Bots
+
+A bot guesses your password nonstop while you log in once from your phone. The login server allows 5 tries a minute, and every device keeps its own count. The bot burns all 5 by ""dragon"", guess 6 bounces, and its screen says Too many attempts. Try again in 0:59. Your phone used 1 try and got in.
+
+#systemdesign #ratelimiting #cybersecurity #backend #tryalgoviz",8,"10/25/2026 04:01",https://www.instagram.com/reel/De6jVbIDoCW/,"IG reel",,Lifetime,259,172,1,1,0,1,0
+17976771405139537,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms Across Manhattan: Times Square to Yankee Stadium
+
+Same start, same goal, the streets of Manhattan: Times Square to Yankee Stadium. Dijkstra floods 7,326 roads to find the 10.0 km route. BFS counts turns, not distance: 6,592 roads and a route 3.1 km too long. Greedy checks only 136 roads and drives 1.6 km further. Searching from both ends meets in the middle after 5,968. A* finds the same 10.0 km route with 1,144 roads, 6.4x fewer than Dijkstra, because it always knows roughly where Yankee Stadium is. Which city should we race next? Drop it in the comments.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",14,"10/25/2026 07:02",https://www.instagram.com/reel/De64DV9j4V4/,"IG reel",,Lifetime,225061,134025,1210,11,14,4,46
+18105122774256870,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms Across Hyderabad: Salar Jung Museum to HITEC City
+
+Same start, same goal, the streets of Hyderabad: Salar Jung Museum to HITEC City. Dijkstra floods 33,259 roads to find the 14.6 km route. BFS counts turns, not distance: 33,353 roads and a route 2.2 km too long. Greedy checks only 187 roads and drives 4.8 km further. Searching from both ends meets in the middle after 23,624. A* finds the same 14.6 km route with 4,583 roads, 7.3x fewer than Dijkstra, because it always knows roughly where HITEC City is. Which city or college should we race next? Drop it in the comments.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",14,"10/25/2026 20:32",https://www.instagram.com/reel/De8Uv2Cj52_/,"IG reel",,Lifetime,21150,12777,189,17,5,3,27
+18091921454240537,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms Across Paris: Eiffel Tower to Stade de France
+
+Same start, same goal, the streets of Paris: the Eiffel Tower to the Stade de France. Dijkstra floods 9,793 roads to find the 10.4 km route. BFS counts turns, not distance: 9,496 roads and a route 2.6 km too long. Greedy checks only 117 roads and drives 2.5 km further. Searching from both ends meets in the middle after 7,448. A* finds the same 10.4 km route with 3,858 roads, 2.5x fewer than Dijkstra, because it always knows roughly where the stadium is. Which city should we race next? Drop it in the comments.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",14,"10/26/2026 01:05",https://www.instagram.com/reel/De8z8ielLvf/,"IG reel",,Lifetime,464564,281612,1672,30,18,2,49
+17993725347109004,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Comment PATTERN and I'll DM you the step by step visuals
+Distributed Systems: 10 Patterns Every Dev Should Know
+
+Ten live tiles, one pattern each. Retry with backoff waits longer between each try, a timeout stops waiting on a slow server, an idempotency key makes sure a retry never charges twice, a dead letter queue parks messages that keep failing, and leader election picks a new leader when one crashes. Then a distributed lock, a write-ahead log, webhooks, WebSockets and long polling.
+
+#systemdesign #distributedsystems #backend #softwarearchitecture #tryalgoviz",10,"10/26/2026 20:02",https://www.instagram.com/reel/De-2DbJDHZr/,"IG reel",,Lifetime,6161,3884,74,18,9,3,124
+18132786583806702,17841418776716682,tryalgoviz,"TryAlgoViz | DSA Visualizer","Pathfinding Algorithms Across Kolkata: Howrah Bridge to Jadavpur
+
+Same start, same goal, the streets of Kolkata: Howrah Bridge to Jadavpur. Dijkstra floods 12,849 roads to find the 10.7 km route. BFS counts turns, not distance: 11,213 roads and a route 1.3 km too long. Greedy checks only 94 roads and drives 1.4 km further. Searching from both ends meets in the middle after 11,959. A* finds the same 10.7 km route with 1,987 roads, 6.5x fewer than Dijkstra, because it always knows roughly where Jadavpur is. Which city should we race next? Drop it in the comments.
+
+#dijkstra #astar #pathfinding #algorithms #tryalgoviz",14,"10/26/2026 22:02",https://www.instagram.com/reel/De_D25gDTYs/,"IG reel",,Lifetime,2917,1812,25,0,0,3,2
