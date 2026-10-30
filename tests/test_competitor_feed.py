@@ -313,3 +313,17 @@ def test_a_second_write_replaces_the_first():
     got = asyncio.run(read_cached_profile(db, "someone"))
     assert got is not None and got["profile"]["followers_count"] == 20
     assert len(db.col.docs) == 1
+
+
+def test_view_count_is_carried_and_absent_stays_none():
+    assert normalise_post({"id": "1", "view_count": 135914})["view_count"] == 135914
+    assert normalise_post({"id": "1", "media_type": "IMAGE"})["view_count"] is None
+
+
+def test_post_stats_keeps_only_the_counts():
+    from app.services.competitor_feed import post_stats
+
+    row = post_stats({"id": "1", "permalink": "https://ig/reel/X/", "timestamp": "t", "caption": "long",
+                      "view_count": 10, "like_count": 2, "comments_count": 1, "media_product_type": "REELS"})
+    assert row == {"id": "1", "permalink": "https://ig/reel/X/", "timestamp": "t", "media_product_type": "REELS",
+                   "like_count": 2, "comments_count": 1, "view_count": 10}

@@ -40,6 +40,18 @@ from app.services.instagram_tokens import (
 # burns calls against a shared rate budget.
 MIN_MEDIA_PAGE_SIZE = 6
 
+# What the competitor feed asks for per post: enough to download it. view_count
+# is served for other accounts' media (verified 2026-10-11 and 2026-10-31).
+FEED_MEDIA_FIELDS = (
+    "id,caption,media_type,media_product_type,media_url,thumbnail_url,"
+    "permalink,timestamp,like_count,comments_count,view_count,"
+    "children{id,media_type,media_url,thumbnail_url}"
+)
+# Only the counts, for refreshing posts a caller already has. Meta weighs a query
+# by how much it carries, not by call count: captions and carousel children are
+# what tripped the app-wide limit (code 4), so this leaves both out.
+STATS_MEDIA_FIELDS = "id,permalink,timestamp,media_type,media_product_type,like_count,comments_count,view_count"
+
 
 def graph_error_message(exc: Exception) -> str:
     """Meta's own words for a failed Graph call.
@@ -349,7 +361,12 @@ class InstagramService:
         }
 
     def _discover_media_page(
-        self, own_ig_user_id: str, target_username: str, page_size: int, after: str | None
+        self,
+        own_ig_user_id: str,
+        target_username: str,
+        page_size: int,
+        after: str | None,
+        media_fields: str = FEED_MEDIA_FIELDS,
     ) -> tuple[list[dict[str, Any]], dict[str, Any], int]:
         """One page of business_discovery media, shrinking the ask if Meta balks.
 
@@ -365,13 +382,7 @@ class InstagramService:
         size = page_size
         while True:
             cursor = f".after({after})" if after else ""
-            fields = (
-                f"business_discovery.username({target_username})"
-                f"{{media.limit({size}){cursor}"
-                f"{{id,caption,media_type,media_product_type,media_url,thumbnail_url,"
-                f"permalink,timestamp,like_count,comments_count,"
-                f"children{{id,media_type,media_url,thumbnail_url}}}}}}"
-            )
+            fields = f"business_discovery.username({target_username}){{media.limit({size}){cursor}{{{media_fields}}}}}"
             try:
                 data = self._get(own_ig_user_id, {"fields": fields})
             except requests.HTTPError as exc:
@@ -393,7 +404,12 @@ class InstagramService:
             return list(media.get("data", [])), dict(media.get("paging") or {}), size
 
     def discover_all_media(
-        self, own_ig_user_id: str, target_username: str, limit: int = 250, page_size: int = 50
+        self,
+        own_ig_user_id: str,
+        target_username: str,
+        limit: int = 250,
+        page_size: int = 50,
+        media_fields: str = FEED_MEDIA_FIELDS,
     ) -> list[dict[str, Any]]:
         """Every recent media item on *target_username*, raw, with no filtering.
 
@@ -433,7 +449,9 @@ class InstagramService:
         max_pages = max(1, -(-limit // MIN_MEDIA_PAGE_SIZE)) + 2
 
         for _ in range(max_pages):
-            page, paging, size = self._discover_media_page(own_ig_user_id, target_username, size, after)
+            page, paging, size = self._discover_media_page(
+                own_ig_user_id, target_username, size, after, media_fields
+            )
             if not page:
                 break
 

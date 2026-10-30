@@ -185,3 +185,21 @@ def test_an_exception_with_no_response_falls_back_to_its_text():
 def test_a_body_without_an_error_block_falls_back():
     exc = _http_error(500, {"something": "else"})
     assert "500" in graph_error_message(exc)
+
+
+def test_the_feed_asks_for_view_counts_and_stats_ask_for_nothing_heavy():
+    from app.services.instagram import STATS_MEDIA_FIELDS
+
+    svc, rec = _service([_page(["a"]), _page(["b"])])
+    calls: list[str] = []
+    real = svc._get
+
+    def spy(endpoint, params=None):
+        calls.append((params or {}).get("fields", ""))
+        return real(endpoint, params)
+
+    svc._get = spy  # type: ignore[method-assign]
+    svc.discover_all_media("own", "target", limit=1)
+    svc.discover_all_media("own", "target", limit=1, media_fields=STATS_MEDIA_FIELDS)
+    assert "view_count" in calls[0] and "children" in calls[0]
+    assert "view_count" in calls[1] and "caption" not in calls[1] and "children" not in calls[1]

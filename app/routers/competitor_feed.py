@@ -25,13 +25,14 @@ from app.services.competitor_feed import (
     PROFILE_TTL_HOURS,
     is_profile_fresh,
     normalise_post,
+    post_stats,
     read_cached_profile,
     select_source_channel,
     summarise,
     trim_to_new,
     write_cached_profile,
 )
-from app.services.instagram import graph_error_message
+from app.services.instagram import STATS_MEDIA_FIELDS, graph_error_message
 from app.services.instagram_tokens import PROVIDER_FACEBOOK
 from app.timezone import now_ist, to_ist_iso
 
@@ -80,9 +81,27 @@ class CompetitorPost(BaseModel):
     caption: str = ""
     comments_count: int = 0
     like_count: int | None = Field(None, description="None means the account hides likes — not the same as zero")
+    view_count: int | None = Field(None, description="Plays; None when Meta gives none (photos)")
     media_url: str | None = Field(None, description="Directly downloadable. Absent for video: use permalink instead")
     thumbnail_url: str | None = Field(None, description="Poster frame; present for video")
     children: list[MediaChild] = Field(default_factory=list, description="Carousel frames")
+
+
+class PostStats(BaseModel):
+    id: str
+    permalink: str
+    timestamp: str
+    media_product_type: str = ""
+    like_count: int | None = None
+    comments_count: int = 0
+    view_count: int | None = None
+
+
+class CompetitorStats(BaseModel):
+    username: str
+    posts: list[PostStats]
+    returned: int
+    source_channel_id: str = Field(description="Which of our channels' tokens ran the query")
 
 
 class CompetitorProfile(BaseModel):
@@ -225,4 +244,38 @@ async def get_competitor_feed(
         source_channel_id=channel["channel_id"],
         profile_cached=profile_cached,
         profile_fetched_at=profile_fetched_at,
+    )
+
+
+@router.get("/{username}/stats", response_model=CompetitorStats)
+async def get_competitor_stats(
+    username: str,
+    limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    via_channel_id: str | None = Query(None, description="Force a specific source channel's token"),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Views, likes and comments of an account's recent posts, newest first —
+    for refreshing counts on posts the caller already has. No profile, captions
+    or carousel frames, which keeps each page light on Meta's shared budget."""
+    service, channel, ig_user_id = await _load_service(db, via_channel_id)
+    target = username.lstrip("@").strip()
+    try:
+        raw = await asyncio.to_thread(
+            service.discover_all_media, ig_user_id, target, limit, 50, STATS_MEDIA_FIELDS
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except Exception as exc:
+        reason = graph_error_message(exc)
+        logger.warning("Competitor stats failed for '%s': %s", target, reason)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Instagram rejected the lookup for '{target}': {reason[:300]}",
+        )
+    posts = [post_stats(item) for item in raw]
+    return CompetitorStats(
+        username=target,
+        posts=[PostStats(**post) for post in posts],
+        returned=len(posts),
+        source_channel_id=channel["channel_id"],
     )
