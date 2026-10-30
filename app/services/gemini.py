@@ -787,7 +787,7 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
     # Multimodal video retention analysis
     # ------------------------------------------------------------------
 
-    async def _generate_preferring(self, prompt: str, model: str, task: str) -> str:
+    async def _generate_preferring(self, prompt: str, model: str, *, task: str) -> str:
         """A text call on *model*, falling back to the default chain if that model fails."""
         try:
             return await self._generate(prompt, specific_model=model, task=task)
@@ -1158,7 +1158,7 @@ Return a JSON array with one entry per comment:
 
 Classify every comment. Do not skip any."""
 
-        text = await self._generate_preferring(prompt, self._COMMENT_SENTIMENT_MODEL, "comment_sentiment")
+        text = await self._generate_preferring(prompt, self._COMMENT_SENTIMENT_MODEL, task="comment_sentiment")
         try:
             return _loads_json_array(text)
         except (json.JSONDecodeError, TypeError):
@@ -1223,7 +1223,7 @@ What to do: {intent}
 Return a JSON object:
 {{"reply": "..."}}"""
 
-        text = await self._generate_preferring(prompt, self._COMMENT_REPLY_MODEL, "comment_reply")
+        text = await self._generate_preferring(prompt, self._COMMENT_REPLY_MODEL, task="comment_reply")
         try:
             result = json.loads(text)
             from typing import cast
