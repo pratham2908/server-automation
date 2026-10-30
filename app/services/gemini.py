@@ -154,6 +154,10 @@ class GeminiService:
     _TEXT_MODEL_CHAIN = [
         "grok-4.7",
     ]
+    # Comment replies are written in a persona's voice, which Sonnet holds better than Grok; telling
+    # praise from a complaint is easy enough for Haiku. Either falls back to the chain above.
+    _COMMENT_REPLY_MODEL = "claude-sonnet-5-5"
+    _COMMENT_SENTIMENT_MODEL = "claude-haiku-5-5"
 
     def __init__(self) -> None:
         logger.info("Initializing Gemini via the One AI gateway")
@@ -783,6 +787,14 @@ Return a JSON array containing exactly {count} objects, with exactly these keys:
     # Multimodal video retention analysis
     # ------------------------------------------------------------------
 
+    async def _generate_preferring(self, prompt: str, model: str, task: str) -> str:
+        """A text call on *model*, falling back to the default chain if that model fails."""
+        try:
+            return await self._generate(prompt, specific_model=model, task=task)
+        except Exception as exc:
+            logger.warning("%s on '%s' failed (%s); using the default text model", task, model, exc)
+            return await self._generate(prompt, task=task)
+
     async def _generate_with_video(self, video_path: str, prompt: str, task: str = "retention_analysis") -> str:
         """Run multimodal generate with a video file.
 
@@ -1146,7 +1158,7 @@ Return a JSON array with one entry per comment:
 
 Classify every comment. Do not skip any."""
 
-        text = await self._generate(prompt, task="comment_sentiment")
+        text = await self._generate_preferring(prompt, self._COMMENT_SENTIMENT_MODEL, "comment_sentiment")
         try:
             return _loads_json_array(text)
         except (json.JSONDecodeError, TypeError):
@@ -1211,7 +1223,7 @@ What to do: {intent}
 Return a JSON object:
 {{"reply": "..."}}"""
 
-        text = await self._generate(prompt, task="comment_reply")
+        text = await self._generate_preferring(prompt, self._COMMENT_REPLY_MODEL, "comment_reply")
         try:
             result = json.loads(text)
             from typing import cast
