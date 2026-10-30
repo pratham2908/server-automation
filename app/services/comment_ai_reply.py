@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field, field_validator
 from app.services.comment_dm import SKIP_BEFORE_RULE, SKIP_OWN, SKIP_TOO_OLD, CommentEvent
 from app.timezone import assume_utc
 
-INSTRUCTIONS_LIMIT = 1500
 # A public reply has no window of its own, but a reply to a months-old comment reads as a bot.
 MAX_COMMENT_AGE = timedelta(days=7)
 
@@ -34,7 +33,7 @@ class AiReplyConfig(BaseModel):
 
     enabled: bool = False
     # Written by the owner and added to the prompt: tone, things to mention, things never to say.
-    instructions: str = Field(default="", max_length=INSTRUCTIONS_LIMIT)
+    instructions: str = ""
     delay_seconds: int = Field(default=60, ge=0, le=3600)
 
     @field_validator("instructions")
