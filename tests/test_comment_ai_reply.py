@@ -23,8 +23,10 @@ def _event(**kw: object) -> CommentEvent:
     return CommentEvent.model_validate({**base, **kw})
 
 
-def _reason(event: CommentEvent, since: datetime | None = None) -> str | None:
-    return skip_reason(event, own_ids={"99"}, own_username="mine", active_since=since, now=NOW)
+def _reason(event: CommentEvent, since: datetime | None = None, threads: bool = False) -> str | None:
+    return skip_reason(
+        event, own_ids={"99"}, own_username="mine", active_since=since, now=NOW, reply_in_threads=threads
+    )
 
 
 def test_plain_comment_may_be_answered() -> None:
@@ -36,6 +38,12 @@ def test_own_nested_and_old_comments_are_skipped() -> None:
     assert _reason(_event(username="Mine")) == SKIP_OWN
     assert _reason(_event(parent_id="p")) == SKIP_NESTED
     assert _reason(_event(created_at=NOW - timedelta(days=8))) == SKIP_TOO_OLD
+
+
+def test_thread_replies_are_answered_only_when_the_channel_allows_it() -> None:
+    nested = _event(parent_id="p")
+    assert _reason(nested, threads=True) is None
+    assert _reason(nested, threads=False) == SKIP_NESTED
 
 
 def test_comments_before_switch_on_are_left_alone() -> None:

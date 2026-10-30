@@ -75,6 +75,7 @@ async def enqueue(
         own_username=str(channel.get("instagram_username") or ""),
         active_since=config.enabled_at,
         now=now,
+        reply_in_threads=config.reply_in_threads,
     )
     if reason is None and dm_replies_publicly:
         reason = SKIP_OWN_DM_REPLY

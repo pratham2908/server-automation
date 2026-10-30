@@ -35,6 +35,8 @@ class AiReplyConfig(BaseModel):
     # Written by the owner and added to the prompt: tone, things to mention, things never to say.
     instructions: str = ""
     delay_seconds: int = Field(default=60, ge=0, le=3600)
+    # Answer a comment that is itself a reply inside someone else's thread, not just top-level ones.
+    reply_in_threads: bool = False
 
     @field_validator("instructions")
     @classmethod
@@ -75,13 +77,14 @@ def skip_reason(
     own_username: str,
     active_since: datetime | None,
     now: datetime,
+    reply_in_threads: bool = False,
 ) -> str | None:
     """Why this comment must not get an AI reply, or None when it may."""
     if (event.from_id and event.from_id in own_ids) or (
         own_username and event.username.lower() == own_username.lower()
     ):
         return SKIP_OWN
-    if event.parent_id:
+    if event.parent_id and not reply_in_threads:
         return SKIP_NESTED
     if event.created_at is not None:
         if active_since is not None and event.created_at < active_since:
