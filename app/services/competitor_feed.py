@@ -9,7 +9,9 @@ What the caller gets and does not get is dictated by Instagram's
 ``business_discovery``, and is worth stating plainly since none of it is
 negotiable from our side:
 
-* **No view counts, ever.** Not exposed for other people's media.
+* **View counts, yes.** ``view_count`` comes back for other accounts' media
+  (an older note here said never; verified otherwise on 2026-10-11 and
+  2026-10-31). ``None`` when Meta omits it, as for a photo.
 * **Likes are optional.** An account can hide them, and Meta then omits the
   field entirely — which is why ``like_count`` is ``None`` here rather than 0.
   Zero and hidden are different facts and collapsing them loses the distinction.
@@ -106,10 +108,18 @@ def normalise_post(raw: dict[str, Any]) -> dict[str, Any]:
         "caption": raw.get("caption", ""),
         "comments_count": int(raw.get("comments_count", 0)),
         "like_count": int(raw["like_count"]) if raw.get("like_count") is not None else None,
+        "view_count": int(raw["view_count"]) if raw.get("view_count") is not None else None,
         "media_url": raw.get("media_url"),
         "thumbnail_url": raw.get("thumbnail_url"),
         "children": children,
     }
+
+
+def post_stats(raw: dict[str, Any]) -> dict[str, Any]:
+    """One Graph media item reduced to its counts (the stats endpoint's row)."""
+    row = normalise_post(raw)
+    return {k: row[k] for k in ("id", "permalink", "timestamp", "media_product_type",
+                                "like_count", "comments_count", "view_count")}
 
 
 def trim_to_new(
