@@ -236,7 +236,7 @@ def _enclosing_method_tasks() -> dict[str, set[str]]:
         for inner in ast.walk(node):
             if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
                 continue
-            if inner.func.attr not in ("_generate", "_generate_with_video"):
+            if inner.func.attr not in ("_generate", "_generate_with_video", "_generate_preferring"):
                 continue
             for keyword in inner.keywords:
                 if keyword.arg == "task" and isinstance(keyword.value, ast.Constant):
