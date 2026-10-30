@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
+from app.services import comment_ai_reply_store
+from app.services.comment_ai_reply import AiReplyConfig, StoredAiReply
 from app.services.comment_reply_approval import (
     PendingReplyNotFoundError,
     ReplyPostFailedError,
@@ -74,6 +76,39 @@ async def trigger_comment_replies(
 
 class ReplySettingsUpdate(BaseModel):
     mode: str = Field(..., description="'auto' posts positive replies itself; 'review' drafts for approval")
+
+
+class AiReplyOut(AiReplyConfig):
+    channel_id: str
+    # Whether Meta is set to tell us about this account's comments; without it nothing is answered.
+    webhook_subscribed: bool
+    enabled_at: str | None = None
+
+
+@router.get("/ai-reply", response_model=AiReplyOut)
+async def get_ai_reply(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> AiReplyOut:
+    channel = await _require_channel(db, channel_id)
+    return _ai_reply_out(channel_id, channel, await comment_ai_reply_store.load_config(db, channel_id))
+
+
+@router.put("/ai-reply", response_model=AiReplyOut)
+async def put_ai_reply(channel_id: str, body: AiReplyConfig, db: AsyncIOMotorDatabase = Depends(get_db)) -> AiReplyOut:
+    """Turn webhook-driven AI replies on or off for this channel, with the owner's instructions and delay."""
+    channel = await _require_channel(db, channel_id)
+    if channel.get("platform") != "instagram":
+        raise HTTPException(status_code=422, detail="AI replies from webhooks are Instagram only")
+    saved = await comment_ai_reply_store.save_config(db, channel_id, body, now_ist())
+    return _ai_reply_out(channel_id, channel, saved)
+
+
+def _ai_reply_out(channel_id: str, channel: dict[str, Any], stored: StoredAiReply | None) -> AiReplyOut:
+    config = stored or StoredAiReply()
+    return AiReplyOut(
+        **config.model_dump(exclude={"enabled_at", "updated_at"}),
+        channel_id=channel_id,
+        webhook_subscribed="comments" in (channel.get("instagram_webhook_fields") or []),
+        enabled_at=config.enabled_at.isoformat() if config.enabled_at else None,
+    )
 
 
 class ApproveRequest(BaseModel):

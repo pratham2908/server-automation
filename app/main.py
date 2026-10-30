@@ -39,6 +39,7 @@ _post_publisher_task = None
 _threads_publisher_task = None
 _threads_token_task = None
 _comment_dm_task = None
+_comment_ai_reply_task = None
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +292,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background comment-to-DM worker started")
 
+    # ---- AI comment replies: answers webhook comments once each channel's delay has passed ----
+    from app.services.comment_ai_reply_worker import run_comment_ai_reply_worker
+
+    global _comment_ai_reply_task
+    _comment_ai_reply_task = create_monitored_task(
+        run_comment_ai_reply_worker(db, instagram_service_manager, gemini_service),
+        feature="Background: AI comment reply worker",
+    )
+    logger.info("Background AI comment reply worker started")
+
     yield
 
     # ---- Shutdown ----
@@ -321,6 +332,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _threads_publisher_task,
         _threads_token_task,
         _comment_dm_task,
+        _comment_ai_reply_task,
     ):
         if task and not task.done():
             task.cancel()

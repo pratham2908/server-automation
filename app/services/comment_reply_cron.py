@@ -65,6 +65,9 @@ async def run_comment_reply_cron(
                 channel_id = channel.get("channel_id")
                 if not channel_id:
                     continue
+                if (channel.get("comment_ai_reply") or {}).get("enabled"):
+                    # Answered from the webhook as comments arrive; reading them again here would race it.
+                    continue
                 try:
                     stats = await run_comment_reply_cycle(
                         channel_id=channel_id,
