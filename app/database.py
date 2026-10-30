@@ -159,6 +159,8 @@ async def connect_db(
         [("channel_id", 1), ("replied_at", -1)],
     )
     # Comment-to-DM: the unique comment id is what stops a comment being messaged twice.
+    await _db.comment_ai_reply_queue.create_index("comment_id", unique=True)
+    await _db.comment_ai_reply_queue.create_index([("status", 1), ("send_after", 1)])
     await _db.comment_dm_events.create_index("comment_id", unique=True)
     await _db.comment_dm_events.create_index([("status", 1), ("send_after", 1)])
     await _db.comment_dm_events.create_index([("channel_id", 1), ("created_at", -1)])

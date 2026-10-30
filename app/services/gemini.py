@@ -1159,6 +1159,7 @@ Classify every comment. Do not skip any."""
         platform: str = "youtube",
         sentiment: str = "positive",
         video_context: str = "",
+        instructions: str = "",
     ) -> str:
         """Generate a reply that reads like the channel owner typed it, not like a brand account.
 
@@ -1188,6 +1189,12 @@ Classify every comment. Do not skip any."""
 
         about = video_context or f"Title: {video_title}"
         medium = "an Instagram comment" if platform == "instagram" else "a YouTube comment"
+        # The owner's own words for this channel; they sit after the defaults so they win where they differ.
+        owner = (
+            f"\nThe channel owner's instructions for replies. Follow them over anything else here:\n{instructions}\n"
+            if instructions
+            else ""
+        )
 
         prompt = f"""You run this channel and are replying to {medium} on your own video.
 
@@ -1200,7 +1207,7 @@ The comment:
 What to do: {intent}
 
 {REPLY_VOICE_RULES}
-
+{owner}
 Return a JSON object:
 {{"reply": "..."}}"""
 

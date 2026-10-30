@@ -16,7 +16,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
 from app.logger import get_logger
-from app.services import meta_webhook_config
+from app.services import comment_ai_reply_store, meta_webhook_config
 from app.services.comment_dm import parse_comment_webhook, verify_signature
 from app.services.comment_dm_store import QUEUED, channel_for_webhook, enqueue
 from app.timezone import now_ist
@@ -73,4 +73,16 @@ async def receive(request: Request, db: AsyncIOMotorDatabase = Depends(get_db)) 
             outcome,
         )
         queued += outcome == QUEUED
+        # AI replies ride the same webhook. A comment that earned a DM with its own public reply is left
+        # to that reply, so one comment never gets two.
+        public_reply = outcome == QUEUED and bool(
+            (await db.comment_dm_events.find_one({"comment_id": event.comment_id}, {"reply_text": 1}) or {}).get(
+                "reply_text"
+            )
+        )
+        ai_outcome = await comment_ai_reply_store.enqueue(
+            db, channel, event, dm_replies_publicly=public_reply, now=now, rng=rng
+        )
+        if ai_outcome != comment_ai_reply_store.OFF:
+            logger.info("[AiReply] Webhook comment %s on %s: %s", event.comment_id, channel["channel_id"], ai_outcome)
     return {"comments": len(events), "queued": queued}
