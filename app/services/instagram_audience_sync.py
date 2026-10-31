@@ -37,21 +37,35 @@ from app.timezone import now_ist
 logger = get_logger(__name__)
 
 
-async def refresh_audience(db: AsyncIOMotorDatabase, ig: InstagramService, channel_id: str, ig_user_id: str) -> None:
+async def refresh_audience(
+    db: AsyncIOMotorDatabase, ig: InstagramService, channel_id: str, ig_user_id: str, *, force: bool = False
+) -> bool:
+    """Pull every breakdown and store today's snapshot; returns whether it pulled.
+
+    The sync calls this hourly and only pulls once the last snapshot is a day old;
+    *force* (the WHO card's Refetch button) pulls now regardless. When Instagram
+    refuses every single breakdown (an expired token, a rate limit) nothing is
+    stored, so a bad pull can't blank out the last good snapshot.
+    """
     now = now_ist()
     latest = await db.instagram_audience.find_one({"channel_id": channel_id}, sort=[("fetched_at", -1)])
-    if not audience_is_stale((latest or {}).get("fetched_at"), now):
-        return
+    if not force and not audience_is_stale((latest or {}).get("fetched_at"), now):
+        return False
     audiences: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}
+    answered = 0
     for name, metric in AUDIENCE_METRICS.items():
         # Followers are the same whatever the timeframe, so one pass is enough (see FOLLOWER_TIMEFRAME).
         asked = (FOLLOWER_TIMEFRAME,) if name == "followers" else TIMEFRAMES
         for timeframe in asked:
             for breakdown in DEMOGRAPHIC_BREAKDOWNS:
                 body = await asyncio.to_thread(ig.get_demographics, ig_user_id, metric, breakdown, timeframe)
+                answered += body is not None
                 audiences.setdefault(name, {}).setdefault(timeframe, {})[breakdown] = parse_demographics(body)
         if name == "followers":
             audiences[name] = {timeframe: audiences[name][FOLLOWER_TIMEFRAME] for timeframe in TIMEFRAMES}
+    if answered == 0:
+        logger.warning("Instagram answered no demographics for '%s'; keeping the last snapshot", channel_id)
+        return False
     await db.instagram_audience.update_one(
         {"channel_id": channel_id, "date": now.date().isoformat()},
         {
@@ -64,6 +78,7 @@ async def refresh_audience(db: AsyncIOMotorDatabase, ig: InstagramService, chann
         },
         upsert=True,
     )
+    return True
 
 
 def _parse_timestamp(value: object) -> datetime | None:
