@@ -1434,7 +1434,8 @@ class VideoService:
             vids = []
             for e in entries:
                 v = await self.db.videos.find_one({"channel_id": channel_id, "video_id": e["video_id"]})
-                if v and v.get("status") == "ready":
+                # A reel's reserved fallback only goes out if that reel misses its bar.
+                if v and v.get("status") == "ready" and not v.get("fallback_for"):
                     vids.append(v)
         else:
             v = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
