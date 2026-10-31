@@ -6,7 +6,8 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+import requests
+from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
@@ -24,8 +25,10 @@ from app.models.content_analysis import (
     rounded,
     slot_out,
 )
+from app.services.instagram import graph_error_message
 from app.services.instagram_audience import story_is_live
 from app.services.instagram_audience_history import history_days
+from app.services.instagram_audience_sync import refresh_audience
 from app.services.instagram_content_analysis import (
     GroupStat,
     PostingSlot,
@@ -127,9 +130,45 @@ async def get_audience_history(
     )
 
 
+# A Refetch pressed again within this window returns the snapshot just taken instead of 24 more calls.
+REFETCH_COOLDOWN = timedelta(minutes=2)
+_refetching: set[str] = set()
+
+
 @router.get("/audience", response_model=AudienceOut)
 async def get_audience(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> AudienceOut:
     """The latest demographics snapshot; empty until the first Instagram sync stores one."""
+    return await _latest_audience(db, channel_id)
+
+
+@router.post("/audience/refresh", response_model=AudienceOut)
+async def refetch_audience(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> AudienceOut:
+    """Pull the demographics from Instagram now instead of waiting for the daily pull."""
+    import app.main as main_mod
+
+    if channel_id in _refetching:
+        raise HTTPException(409, "Already fetching this channel's demographics")
+    latest = await db.instagram_audience.find_one({"channel_id": channel_id}, sort=[("fetched_at", -1)])
+    if latest and now_ist() - assume_utc(latest["fetched_at"]) < REFETCH_COOLDOWN:
+        return await _latest_audience(db, channel_id)
+    manager = main_mod.instagram_service_manager
+    resolved = await manager.get_service_and_user_id(channel_id) if manager else None
+    if resolved is None:
+        raise HTTPException(422, "No Instagram token on this channel")
+    ig, ig_user_id = resolved
+    _refetching.add(channel_id)
+    try:
+        pulled = await refresh_audience(db, ig, channel_id, ig_user_id, force=True)
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Instagram refused: {graph_error_message(exc)[:300]}") from exc
+    finally:
+        _refetching.discard(channel_id)
+    if not pulled:
+        raise HTTPException(502, "Instagram returned no demographics just now; the last snapshot is kept")
+    return await _latest_audience(db, channel_id)
+
+
+async def _latest_audience(db: AsyncIOMotorDatabase, channel_id: str) -> AudienceOut:
     doc = await db.instagram_audience.find_one({"channel_id": channel_id}, sort=[("fetched_at", -1)])
     if not doc:
         return AudienceOut(channel_id=channel_id)

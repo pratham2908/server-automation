@@ -254,3 +254,92 @@ def test_changed_figures_are_dated_to_the_pull_that_saw_the_change():
     previous = {"fetched_at": first, "data_changed_at": first, "audiences": {"reached": {}}}
     _, saved = _refresh(previous)
     assert saved["data_changed_at"] == saved["fetched_at"] != first
+
+
+@pytest.mark.asyncio
+async def test_a_forced_refresh_pulls_even_a_fresh_audience(monkeypatch):
+    monkeypatch.setattr(sync, "now_ist", lambda: NOW)
+    db = SimpleNamespace(instagram_audience=_Coll([{"channel_id": "c", "fetched_at": NOW - timedelta(minutes=30)}]))
+    ig = SimpleNamespace(get_demographics=lambda _u, m, b, _t: _breakdown_body(m, b, [("x", 1)]))
+    assert await sync.refresh_audience(db, ig, "c", "ig1", force=True) is True
+    assert len(db.instagram_audience.upserts) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_pull_instagram_refuses_entirely_keeps_the_last_snapshot(monkeypatch):
+    monkeypatch.setattr(sync, "now_ist", lambda: NOW)
+    db = SimpleNamespace(instagram_audience=_Coll([{"channel_id": "c", "fetched_at": NOW - timedelta(days=2)}]))
+    ig = SimpleNamespace(get_demographics=lambda *_a: None)
+    assert await sync.refresh_audience(db, ig, "c", "ig1", force=True) is False
+    assert db.instagram_audience.upserts == []
+
+
+def _router_db(latest: dict[str, Any] | None) -> SimpleNamespace:
+    class _Audience:
+        def __init__(self) -> None:
+            self.doc = latest
+
+        async def find_one(self, *_a: Any, **_k: Any) -> dict[str, Any] | None:
+            return self.doc
+
+        async def update_one(self, _q: Any, update: dict[str, Any], **_k: Any) -> None:
+            self.doc = {**(self.doc or {}), **update["$set"]}
+
+    return SimpleNamespace(instagram_audience=_Audience())
+
+
+@pytest.mark.asyncio
+async def test_refetch_pulls_now_and_returns_the_new_snapshot(monkeypatch):
+    from app.routers import instagram_insights as router
+
+    calls: list[str] = []
+
+    def demographics(_u: str, metric: str, breakdown: str, _t: str) -> dict[str, Any]:
+        calls.append(metric)
+        return _breakdown_body(metric, breakdown, [("IN", 5)])
+
+    class _Manager:
+        async def get_service_and_user_id(self, channel_id: str):
+            return SimpleNamespace(get_demographics=demographics), "ig1"
+
+    monkeypatch.setattr("app.main.instagram_service_manager", _Manager(), raising=False)
+    monkeypatch.setattr(sync, "now_ist", lambda: NOW)
+    monkeypatch.setattr(router, "now_ist", lambda: NOW)
+    db = _router_db({"channel_id": "c", "fetched_at": NOW - timedelta(hours=3), "audiences": {}})
+    out = await router.refetch_audience("c", db)
+    assert calls
+    assert out.fetched_at is not None and out.audiences["reached"]["this_week"]["country"][0].count == 5
+
+
+@pytest.mark.asyncio
+async def test_refetch_right_after_a_pull_reuses_it(monkeypatch):
+    from app.routers import instagram_insights as router
+
+    class _Manager:
+        async def get_service_and_user_id(self, channel_id: str):
+            raise AssertionError("no Instagram call inside the cooldown")
+
+    monkeypatch.setattr("app.main.instagram_service_manager", _Manager(), raising=False)
+    monkeypatch.setattr(router, "now_ist", lambda: NOW)
+    db = _router_db({"channel_id": "c", "fetched_at": NOW - timedelta(seconds=30), "audiences": {}})
+    out = await router.refetch_audience("c", db)
+    assert out.fetched_at is not None
+
+
+@pytest.mark.asyncio
+async def test_refetch_reports_when_instagram_answers_nothing(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.routers import instagram_insights as router
+
+    class _Manager:
+        async def get_service_and_user_id(self, channel_id: str):
+            return SimpleNamespace(get_demographics=lambda *_a: None), "ig1"
+
+    monkeypatch.setattr("app.main.instagram_service_manager", _Manager(), raising=False)
+    monkeypatch.setattr(router, "now_ist", lambda: NOW)
+    db = _router_db(None)
+    with pytest.raises(HTTPException) as err:
+        await router.refetch_audience("c", db)
+    assert err.value.status_code == 502
+    assert router._refetching == set()
