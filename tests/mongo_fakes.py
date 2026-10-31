@@ -46,6 +46,10 @@ def _match_value(value: Any, cond: Any) -> bool:
                 return False
             if op == "$exists" and present != bool(arg):
                 return False
+            if op == "$nin" and present and value in arg:
+                return False
+            if op == "$not" and _match_value(value, arg):
+                return False
         return True
     return value is not _MISSING and value == cond
 

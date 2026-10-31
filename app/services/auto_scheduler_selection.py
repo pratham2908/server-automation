@@ -145,8 +145,11 @@ def videos_committed_today(videos: list[dict], day: date) -> int:
 
 
 def pick_ready_video(videos: list[dict]) -> dict | None:
-    """Oldest ``ready`` video by ``created_at`` (FIFO); ``None`` if none are ready."""
-    ready = [v for v in videos if v.get("status") == "ready"]
+    """Oldest ``ready`` video by ``created_at`` (FIFO); ``None`` if none are ready.
+
+    A video held as another reel's fallback (``fallback_for``) is skipped: it waits to go out only if that reel misses.
+    """
+    ready = [v for v in videos if v.get("status") == "ready" and not v.get("fallback_for")]
     if not ready:
         return None
     return min(ready, key=lambda v: _as_datetime(v.get("created_at")) or _FAR_FUTURE)

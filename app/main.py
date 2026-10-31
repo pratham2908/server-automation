@@ -39,6 +39,7 @@ _post_publisher_task = None
 _threads_publisher_task = None
 _threads_token_task = None
 _comment_dm_task = None
+_fallback_video_task = None
 _comment_ai_reply_task = None
 
 logger = logging.getLogger(__name__)
@@ -282,6 +283,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background Threads publisher and token refresher started")
 
+    # ---- Fallback videos: checks reels hourly, publishes the picked fallback when one misses its bar ----
+    from app.services.fallback_video_cron import run_fallback_video_cron
+
+    global _fallback_video_task
+    _fallback_video_task = create_monitored_task(
+        run_fallback_video_cron(db, instagram_service_manager),
+        feature="Background: Fallback video cron",
+    )
+    logger.info("Background fallback video cron started")
+
     # ---- Comment-to-DM: sends queued DMs, polls for comments the webhook missed ----
     from app.services.comment_dm_worker import run_comment_dm_worker
 
@@ -333,6 +344,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _threads_token_task,
         _comment_dm_task,
         _comment_ai_reply_task,
+        _fallback_video_task,
     ):
         if task and not task.done():
             task.cancel()
@@ -388,6 +400,7 @@ from app.routers import (
     content_intelligence,
     discovery,
     errors,
+    fallback_video,
     growth,
     instagram_dms,
     instagram_insights,
@@ -452,6 +465,7 @@ app.include_router(views_series.router)
 app.include_router(video_properties.router)
 app.include_router(comment_dm.router)
 app.include_router(comment_dm.config_router)
+app.include_router(fallback_video.router)
 app.include_router(meta_webhooks.router)
 
 

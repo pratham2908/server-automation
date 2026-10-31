@@ -78,6 +78,8 @@ async def connect_db(
     # this they filled the database (482 MB by Oct 2026).
     await _db.metrics_snapshots.create_index("timestamp", expireAfterSeconds=METRICS_SNAPSHOT_TTL_SECONDS)
     await _db.videos.create_index("retention.status")
+    # The fallback cron's "what is due" query; sparse, since few videos ever have a rule.
+    await _db.videos.create_index([("fallback_state", 1), ("fallback_due_at", 1)], sparse=True)
     await _db.videos.create_index("performance.analyzed_at")
     # Backs the "already imported?" dedup check when listing a channel app's videos.
     await _db.videos.create_index([("channel_id", 1), ("source_id", 1), ("source_video_id", 1)], sparse=True)
