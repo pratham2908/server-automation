@@ -59,7 +59,7 @@ async def _publish_one_reel(
     try:
         # See youtube_uploader: a missing R2 object is permanent, so Meta's
         # 2207076 'media upload failed' would just repeat. Fail once instead.
-        if not r2_service.file_exists(r2_key):
+        if not await asyncio.to_thread(r2_service.file_exists, r2_key):
             logger.error(
                 "[Instagram] R2 object '%s' missing for video '%s' — marking failed, not retrying",
                 r2_key,

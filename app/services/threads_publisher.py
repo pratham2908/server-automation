@@ -57,7 +57,7 @@ async def publish_one(
     video_id = video_doc["video_id"]
     r2_key = video_doc.get("r2_object_key")
     try:
-        if not r2_key or not r2_service.file_exists(r2_key):
+        if not r2_key or not await asyncio.to_thread(r2_service.file_exists, r2_key):
             # Permanent: retrying can't conjure the file, so fail once.
             raise FileNotFoundError(f"Source file missing in storage for video '{video_id}'")
         video_url = r2_service.generate_presigned_url(r2_key, expires_in=_VIDEO_URL_TTL_SECONDS)

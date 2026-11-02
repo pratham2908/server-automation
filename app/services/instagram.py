@@ -7,6 +7,7 @@ the MongoDB ``channels`` collection and refreshed automatically.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -449,9 +450,7 @@ class InstagramService:
         max_pages = max(1, -(-limit // MIN_MEDIA_PAGE_SIZE)) + 2
 
         for _ in range(max_pages):
-            page, paging, size = self._discover_media_page(
-                own_ig_user_id, target_username, size, after, media_fields
-            )
+            page, paging, size = self._discover_media_page(own_ig_user_id, target_username, size, after, media_fields)
             if not page:
                 break
 
@@ -1445,13 +1444,15 @@ class InstagramService:
         try:
             if self._provider == PROVIDER_INSTAGRAM:
                 # Instagram Login: refresh a long-lived IG token (no app secret needed).
-                resp = requests.get(
+                resp = await asyncio.to_thread(
+                    requests.get,
                     f"{_IG_GRAPH_BASE}/refresh_access_token",
                     params={"grant_type": "ig_refresh_token", "access_token": self._token},
                     timeout=30,
                 )
             else:
-                resp = requests.get(
+                resp = await asyncio.to_thread(
+                    requests.get,
                     f"{_FB_GRAPH_BASE}/oauth/access_token",
                     params={
                         "grant_type": "fb_exchange_token",

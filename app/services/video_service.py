@@ -602,7 +602,7 @@ class VideoService:
             raise ValueError("Video must be in 'todo' status")
         key = f"{channel_id}/{video_id}.mp4"
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-            shutil.copyfileobj(file.file, tmp)
+            await asyncio.to_thread(shutil.copyfileobj, file.file, tmp)
             tpath = tmp.name
         with open(tpath, "rb") as f:
             assert self.r2 is not None
@@ -686,7 +686,7 @@ class VideoService:
                     if not ig:
                         raise ValueError("No Instagram token")
                     assert src_ig is not None
-                    media_url = ig.get_reel_media_url(src_ig)
+                    media_url = await asyncio.to_thread(ig.get_reel_media_url, src_ig)
                     key = await download_instagram_media_to_r2(tid, media_url, self.r2)
 
                 await self.db.videos.update_one(
@@ -925,7 +925,7 @@ class VideoService:
                         ig = await self._get_instagram_service(channel_id)
                         if not ig:
                             raise RuntimeError("No Instagram token")
-                        media_url = ig.get_reel_media_url(instagram_media_id)
+                        media_url = await asyncio.to_thread(ig.get_reel_media_url, instagram_media_id)
                         key = await download_instagram_media_to_r2(tid, media_url, self.r2)
                     else:
                         raise RuntimeError(
@@ -1092,7 +1092,7 @@ class VideoService:
         vid_id = str(uuid.uuid4())
         key = f"{channel_id}/{vid_id}.mp4"
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-            shutil.copyfileobj(file, tmp)
+            await asyncio.to_thread(shutil.copyfileobj, file, tmp)
             tpath = tmp.name
         with open(tpath, "rb") as f:
             assert self.r2 is not None
@@ -1331,7 +1331,7 @@ class VideoService:
 
         # ── 1. Upload file to R2 once ────────────────────────────────────
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-            shutil.copyfileobj(file, tmp)
+            await asyncio.to_thread(shutil.copyfileobj, file, tmp)
             tpath = tmp.name
         with open(tpath, "rb") as f:
             self.r2.upload_video(f, r2_key)
@@ -1922,7 +1922,7 @@ class VideoService:
             insights_map = dict(sweep.insights)
             unread = [r["id"] for r in ig_reels if r["id"] not in insights_map]
             if unread:
-                insights_map.update(ig.get_reel_insights(unread))
+                insights_map.update(await asyncio.to_thread(ig.get_reel_insights, unread))
             totals = channel_totals(sweep.posts, sweep.insights)
             # Skip rate and watch time ride along with the counts, and are dropped with them when the sum is short.
             channel_totals_now = (
@@ -1932,8 +1932,8 @@ class VideoService:
             # The per-reel path still works if Instagram ever refuses the combined
             # request (an unexpected media type, say); it reads only the due reels.
             logger.warning("Combined media sweep refused for '%s' (%s) — reading reels one by one", channel_id, exc)
-            ig_reels = ig.get_reels(channel["instagram_user_id"])
-            insights_map = ig.get_reel_insights([r["id"] for r in ig_reels if due(r)])
+            ig_reels = await asyncio.to_thread(ig.get_reels, channel["instagram_user_id"])
+            insights_map = await asyncio.to_thread(ig.get_reel_insights, [r["id"] for r in ig_reels if due(r)])
         # Instagram sometimes answers views=0 for a reel that has hundreds of thousands. Keep what we
         # had for those reels and skip the channel total, which would dip and then spike on recovery.
         glitched = regressed_reels(insights_map, previous_views)

@@ -109,7 +109,7 @@ async def trigger_growth_snapshot(
         if platform == "youtube":
             yt_service = await youtube_service_manager.get_service(channel_id)
             if yt_service:
-                info = yt_service.get_channel_info(channel.get("youtube_channel_id", ""))
+                info = await asyncio.to_thread(yt_service.get_channel_info, channel.get("youtube_channel_id", ""))
                 subs = info.get("subscriber_count", 0)
                 views = info.get("view_count", 0)
                 metadata = {"video_count": info.get("video_count", 0)}
@@ -117,7 +117,7 @@ async def trigger_growth_snapshot(
         elif platform == "instagram":
             ig_service = await instagram_service_manager.get_service(channel_id)
             if ig_service:
-                info = ig_service.get_account_info(channel.get("instagram_user_id", ""))
+                info = await asyncio.to_thread(ig_service.get_account_info, channel.get("instagram_user_id", ""))
                 subs = info.get("followers_count", 0)
                 views = 0
                 metadata = {"media_count": info.get("media_count", 0)}

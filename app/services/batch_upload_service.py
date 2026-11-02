@@ -361,7 +361,7 @@ async def _process_batch_item(
             {"file_id": file_id},
             {"$set": {"message": f"Downloading {filename}…"}},
         )
-        temp_path = r2.download_video(r2_key)
+        temp_path = await asyncio.to_thread(r2.download_video, r2_key)
 
         # ── 2. Run Gemini analysis on the primary channel's video ───
         primary_cv = next(

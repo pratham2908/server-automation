@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 """Analysis engine – orchestrates the full analysis update flow.
 
 Two-step pipeline:
@@ -104,14 +106,14 @@ async def run_analysis(
     if platform == "youtube" and youtube_service:
         youtube_channel_id = channel_doc.get("youtube_channel_id", "")
         try:
-            channel_info = youtube_service.get_channel_info(youtube_channel_id)
+            channel_info = await asyncio.to_thread(youtube_service.get_channel_info, youtube_channel_id)
             subscriber_count = channel_info.get("subscriber_count", 0)
         except Exception as exc:
             logger.warning("Could not fetch subscriber count: %s", exc)
     elif platform == "instagram" and instagram_service:
         ig_user_id = channel_doc.get("instagram_user_id", "")
         try:
-            ig_info = instagram_service.get_account_info(ig_user_id)
+            ig_info = await asyncio.to_thread(instagram_service.get_account_info, ig_user_id)
             subscriber_count = ig_info.get("followers_count", 0)
         except Exception as exc:
             logger.warning("Could not fetch Instagram followers count: %s", exc)
@@ -174,7 +176,7 @@ async def run_analysis(
                 len(yt_ids),
                 extra={"color": "CYAN"},
             )
-            yt_stats = youtube_service.get_video_stats(yt_ids)
+            yt_stats = await asyncio.to_thread(youtube_service.get_video_stats, yt_ids)
     elif platform == "instagram" and instagram_service:
         ig_ids = [v["instagram_media_id"] for v in new_videos if v.get("instagram_media_id")]
         if ig_ids:
@@ -183,7 +185,7 @@ async def run_analysis(
                 len(ig_ids),
                 extra={"color": "CYAN"},
             )
-            ig_insights = instagram_service.get_reel_insights(ig_ids)
+            ig_insights = await asyncio.to_thread(instagram_service.get_reel_insights, ig_ids)
 
     per_video_count = 0
     for v in new_videos:
@@ -243,7 +245,7 @@ async def run_analysis(
 
         curve = {}
         if platform == "youtube" and youtube_service and v.get("youtube_video_id"):
-            curve = youtube_service.get_audience_retention_curve(v["youtube_video_id"])
+            curve = await asyncio.to_thread(youtube_service.get_audience_retention_curve, v["youtube_video_id"])
 
         video_data_for_gemini = {
             "title": v.get("title", ""),

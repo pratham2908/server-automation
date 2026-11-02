@@ -255,7 +255,7 @@ async def create_channel(
         )
 
     try:
-        yt_data = yt.get_channel_info(body.youtube_channel_id)
+        yt_data = await asyncio.to_thread(yt.get_channel_info, body.youtube_channel_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -326,7 +326,7 @@ async def _create_instagram_channel(
     ig_svc = InstagramService(access_token=body.access_token, provider=provider)
 
     try:
-        ig_data = ig_svc.get_account_info(body.instagram_user_id)
+        ig_data = await asyncio.to_thread(ig_svc.get_account_info, body.instagram_user_id)
     except Exception as e:
         # The two providers fail identically here (401) for opposite reasons, so
         # say which one was tried — the fix is almost always the other one.
@@ -497,7 +497,7 @@ async def refresh_channel(
             detail=f"No YouTube token for channel '{channel_id}'. Store tokens via POST /channels/{channel_id}/youtube-token",
         )
     try:
-        yt_data = yt.get_channel_info(doc["youtube_channel_id"])
+        yt_data = await asyncio.to_thread(yt.get_channel_info, doc["youtube_channel_id"])
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -528,7 +528,7 @@ async def _refresh_instagram_channel(
         )
 
     try:
-        ig_data = ig_svc.get_account_info(ig_user_id)
+        ig_data = await asyncio.to_thread(ig_svc.get_account_info, ig_user_id)
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
 
@@ -812,7 +812,7 @@ async def add_competitor(
         yt = await manager.get_service(channel_id)
         if yt:
             try:
-                info = yt.get_channel_info(body.youtube_channel_id)
+                info = await asyncio.to_thread(yt.get_channel_info, body.youtube_channel_id)
                 name = name or info.get("name")
                 thumbnail = thumbnail or info.get("thumbnail_url")
                 sub_count = info.get("subscriber_count", 0)
@@ -826,7 +826,7 @@ async def add_competitor(
         own_ig_id = channel.get("instagram_user_id")
         if ig and own_ig_id:
             try:
-                info = ig.discover_business_account(own_ig_id, body.instagram_username)
+                info = await asyncio.to_thread(ig.discover_business_account, own_ig_id, body.instagram_username)
                 name = name or info.get("name")
                 thumbnail = thumbnail or info.get("profile_picture_url")
                 sub_count = info.get("followers_count", 0)
