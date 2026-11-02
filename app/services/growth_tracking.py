@@ -112,34 +112,20 @@ class GrowthTrackingService:
     async def calculate_velocity(self, channel_id: str) -> dict[str, Any]:
         """Calculate growth velocity (7d and 30d averages)."""
         # Get snapshots for last 31 days to have deltas
-        snapshots = await self.get_history(channel_id, limit=31)
-        if len(snapshots) < 2:
-            return {
-                "daily_subs": 0,
-                "daily_views": 0,
-                "period_7d": {"subs": 0, "views": 0},
-                "period_30d": {"subs": 0, "views": 0},
-            }
+        return velocity_from(await self.get_history(channel_id, limit=31))
 
-        def get_delta(days: int):
-            if len(snapshots) < days + 1:
-                period_snaps = snapshots
-            else:
-                period_snaps = snapshots[-(days + 1) :]
+    async def channel_overview(self, channel_id: str, limit: int) -> dict[str, Any]:
+        """History, velocity and milestones for one channel from a single read of its snapshots.
 
-            start = period_snaps[0]
-            end = period_snaps[-1]
-
-            days_elapsed = (end["timestamp"] - start["timestamp"]).days or 1
-
-            return {
-                "subs_total": end["subscribers"] - start["subscribers"],
-                "views_total": end["views"] - start["views"],
-                "subs_avg": round((end["subscribers"] - start["subscribers"]) / days_elapsed, 2),
-                "views_avg": round((end["views"] - start["views"]) / days_elapsed, 2),
-            }
-
-        return {"period_7d": get_delta(7), "period_30d": get_delta(30)}
+        The three used to be separate requests, and velocity read the same history a second time.
+        """
+        snapshots = await self.get_history(channel_id, limit=max(limit, 31))
+        milestones = await self.get_milestones(channel_id)
+        return {
+            "history": snapshots[-limit:],
+            "velocity": velocity_from(snapshots[-31:]),
+            "milestones": sorted(milestones),
+        }
 
     async def get_milestones(self, channel_id: str) -> list[int]:
         """Get list of milestones hit by the channel."""
@@ -147,6 +133,37 @@ class GrowthTrackingService:
         from typing import cast
 
         return cast(list[int], (channel or {}).get("milestones", []))
+
+
+def velocity_from(snapshots: list[dict]) -> dict[str, Any]:
+    """7d and 30d growth from chronological snapshots (the newest 31 are enough)."""
+    if len(snapshots) < 2:
+        return {
+            "daily_subs": 0,
+            "daily_views": 0,
+            "period_7d": {"subs": 0, "views": 0},
+            "period_30d": {"subs": 0, "views": 0},
+        }
+
+    def get_delta(days: int):
+        if len(snapshots) < days + 1:
+            period_snaps = snapshots
+        else:
+            period_snaps = snapshots[-(days + 1) :]
+
+        start = period_snaps[0]
+        end = period_snaps[-1]
+
+        days_elapsed = (end["timestamp"] - start["timestamp"]).days or 1
+
+        return {
+            "subs_total": end["subscribers"] - start["subscribers"],
+            "views_total": end["views"] - start["views"],
+            "subs_avg": round((end["subscribers"] - start["subscribers"]) / days_elapsed, 2),
+            "views_avg": round((end["views"] - start["views"]) / days_elapsed, 2),
+        }
+
+    return {"period_7d": get_delta(7), "period_30d": get_delta(30)}
 
 
 def _day_end(snapshot_date: str) -> datetime:

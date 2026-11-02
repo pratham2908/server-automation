@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,6 +9,34 @@ from app.dependencies import verify_api_key
 from app.services.growth_tracking import GrowthTrackingService
 
 router = APIRouter(prefix="/api/v1/growth", tags=["growth"])
+
+
+MAX_OVERVIEW_CHANNELS = 50
+
+
+def _json_snapshot(snap: dict[str, Any]) -> dict[str, Any]:
+    """A stored snapshot made JSON-safe (id as a string, timestamp as ISO text)."""
+    if "_id" in snap:
+        snap["id"] = str(snap.pop("_id"))
+    if "timestamp" in snap:
+        snap["timestamp"] = snap["timestamp"].isoformat()
+    return snap
+
+
+@router.get("/overview", response_model=dict[str, dict[str, Any]])
+async def get_growth_overview(
+    channel_ids: str = Query(..., description="Comma-separated channel ids"),
+    limit: int = Query(30, ge=1, le=365),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    api_key: str = Depends(verify_api_key),
+):
+    """History, velocity and milestones for several channels in one request, keyed by channel id."""
+    ids = list(dict.fromkeys(c for c in channel_ids.split(",") if c))[:MAX_OVERVIEW_CHANNELS]
+    growth_service = GrowthTrackingService(db)
+    overviews = await asyncio.gather(*(growth_service.channel_overview(c, limit) for c in ids))
+    for overview in overviews:
+        overview["history"] = [_json_snapshot(snap) for snap in overview["history"]]
+    return dict(zip(ids, overviews, strict=True))
 
 
 @router.get("/{channel_id}/history", response_model=list[dict[str, Any]])
