@@ -136,8 +136,18 @@ async def list_channels(
 ):
     """Return all registered channels (tokens excluded) belonging to the current profile."""
     channels = await db.channels.find({"profile_id": current_profile.id}, secret_projection()).to_list(length=None)
+    # Content params live in their own collection. Attaching them here saves the UI one request per
+    # channel (it used to ask for each channel's params separately on every page load).
+    params_by_channel: dict[str, list[dict[str, Any]]] = {}
+    async for param in db.content_params.find(
+        {"channel_id": {"$in": [c["channel_id"] for c in channels if c.get("channel_id")]}}
+    ):
+        param.pop("_id", None)
+        params_by_channel.setdefault(param["channel_id"], []).append(param)
     for c in channels:
         c["_id"] = str(c["_id"])
+        if not c.get("content_schema"):
+            c["content_schema"] = params_by_channel.get(c.get("channel_id", ""), [])
     return channels
 
 
