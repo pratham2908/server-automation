@@ -55,7 +55,9 @@ def _match_value(value: Any, cond: Any) -> bool:
 
 
 def matches(doc: dict[str, Any], query: dict[str, Any]) -> bool:
-    return all(_match_value(_get(doc, k), v) for k, v in query.items())
+    return all(
+        any(matches(doc, q) for q in v) if k == "$or" else _match_value(_get(doc, k), v) for k, v in query.items()
+    )
 
 
 def _set(doc: dict[str, Any], dotted: str, value: Any) -> None:

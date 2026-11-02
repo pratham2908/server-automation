@@ -396,6 +396,7 @@ from app.routers import (
     comment_dm,
     comment_inbox,
     comment_replies,
+    comment_reply_metrics,
     competitor_feed,
     content_intelligence,
     discovery,
@@ -444,6 +445,7 @@ app.include_router(analysis.router)
 app.include_router(comment_analysis.router)
 app.include_router(comment_analysis.config_router)
 app.include_router(comment_replies.router)
+app.include_router(comment_reply_metrics.router)
 app.include_router(comment_replies.config_router)
 app.include_router(comment_inbox.router)
 app.include_router(preview_analysis.router)
