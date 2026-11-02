@@ -7,6 +7,7 @@ Also provides a helper for computing predicted-vs-actual deviation.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from datetime import datetime
@@ -257,7 +258,7 @@ async def run_retention_analysis(
                 "Downloading video '%s' from R2 for retention analysis...",
                 video_title[:50],
             )
-            temp_path = r2_service.download_video(r2_key)
+            temp_path = await asyncio.to_thread(r2_service.download_video, r2_key)
         else:
             logger.info("Using local video path for retention analysis: %s", temp_path)
 

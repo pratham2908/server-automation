@@ -280,7 +280,7 @@ async def storage_purge_estimate(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
     prefix = "" if all_channels else f"{channel_id}/"
     protected = await _active_r2_keys(service)
-    count, est_bytes = service.r2.count_purgeable(prefix, days_old, protected_keys=protected)
+    count, est_bytes = await asyncio.to_thread(service.r2.count_purgeable, prefix, days_old, protected_keys=protected)
     return {
         "ok": True,
         "count": count,
@@ -300,7 +300,9 @@ async def storage_purge(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
     prefix = "" if all_channels else f"{channel_id}/"
     protected = await _active_r2_keys(service)
-    purged, errs = service.r2.purge_prefix_older_than(prefix, days_old, protected_keys=protected)
+    purged, errs = await asyncio.to_thread(
+        service.r2.purge_prefix_older_than, prefix, days_old, protected_keys=protected
+    )
     return {"ok": True, "purged_count": purged, "errors": errs, "days_old": days_old}
 
 

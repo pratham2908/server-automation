@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 """Comment reply engine -- fetches unreplied positive comments and auto-replies.
 
 Entry-point: ``run_comment_reply_cycle(channel_id, ...)``
@@ -137,9 +139,9 @@ async def run_comment_reply_cycle(
 
         try:
             if platform == "youtube" and yt_svc:
-                raw_comments = yt_svc.get_video_comments(platform_vid_id, max_comments=200)
+                raw_comments = await asyncio.to_thread(yt_svc.get_video_comments, platform_vid_id, max_comments=200)
             elif platform == "instagram" and ig_svc:
-                raw_comments = ig_svc.get_media_comments(platform_vid_id)
+                raw_comments = await asyncio.to_thread(ig_svc.get_media_comments, platform_vid_id)
             else:
                 continue
         except Exception as exc:
@@ -285,9 +287,9 @@ async def run_comment_reply_cycle(
 
             try:
                 if platform == "youtube" and yt_svc:
-                    reply_id = yt_svc.reply_to_comment(c["comment_id"], reply_text)
+                    reply_id = await asyncio.to_thread(yt_svc.reply_to_comment, c["comment_id"], reply_text)
                 elif platform == "instagram" and ig_reply_svc:
-                    reply_id = ig_reply_svc.reply_to_comment(c["comment_id"], reply_text)
+                    reply_id = await asyncio.to_thread(ig_reply_svc.reply_to_comment, c["comment_id"], reply_text)
                 else:
                     continue
             except Exception as exc:

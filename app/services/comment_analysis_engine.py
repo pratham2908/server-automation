@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 """Comment analysis engine -- orchestrates comment fetching, Gemini analysis,
 and MongoDB persistence for the automated sentiment/demand extraction system.
 
@@ -104,24 +106,27 @@ async def run_comment_analysis(
     raw_comments: list[dict[str, Any]] = []
     if platform == "youtube" and youtube_service:
         if is_incremental and cutoff_timestamp:
-            raw_comments = youtube_service.get_video_comments_since(
+            raw_comments = await asyncio.to_thread(
+                youtube_service.get_video_comments_since,
                 platform_video_id,
                 cutoff_timestamp,
                 max_comments=_MAX_COMMENTS_PER_VIDEO,
             )
         else:
-            raw_comments = youtube_service.get_video_comments(
+            raw_comments = await asyncio.to_thread(
+                youtube_service.get_video_comments,
                 platform_video_id,
                 max_comments=_MAX_COMMENTS_PER_VIDEO,
             )
     elif platform == "instagram" and instagram_service:
         if is_incremental and cutoff_timestamp:
-            raw_comments = instagram_service.get_media_comments_since(
+            raw_comments = await asyncio.to_thread(
+                instagram_service.get_media_comments_since,
                 platform_video_id,
                 cutoff_timestamp,
             )
         else:
-            raw_comments = instagram_service.get_media_comments(platform_video_id)
+            raw_comments = await asyncio.to_thread(instagram_service.get_media_comments, platform_video_id)
 
     if not raw_comments:
         if existing and current_comment_count != existing.get("last_known_comment_count"):
@@ -285,7 +290,7 @@ async def run_cron_cycle(
                     continue
                 comp_name = comp.get("name") or comp.get("handle") or comp_yt_id
                 try:
-                    latest = youtube_service.get_channel_latest_videos(comp_yt_id)
+                    latest = await asyncio.to_thread(youtube_service.get_channel_latest_videos, comp_yt_id)
                     for v in latest:
                         videos_to_process.append(
                             {

@@ -70,7 +70,7 @@ async def _upload_one_video(
         # re-queues itself afterwards) never brings the file back.
         # file_exists() returns False only on a definitive 404; transient
         # R2 errors raise and fall through to the normal retry path.
-        if not r2_service.file_exists(r2_key):
+        if not await asyncio.to_thread(r2_service.file_exists, r2_key):
             logger.error(
                 "[YouTube] R2 object '%s' missing for video '%s' — marking failed, not retrying",
                 r2_key,
@@ -88,7 +88,7 @@ async def _upload_one_video(
             )
             return False
 
-        tmp_path = r2_service.download_video(r2_key)
+        tmp_path = await asyncio.to_thread(r2_service.download_video, r2_key)
 
         yt_id = youtube_service.upload_video(
             file_path=tmp_path,

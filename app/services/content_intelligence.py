@@ -7,6 +7,7 @@ insights to surface what's working and what needs to change.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -51,12 +52,12 @@ async def _fetch_competitor_video_metadata(
                 if not service:
                     continue
 
-                raw_vids = service.get_channel_latest_videos(yt_id, max_results=50)
+                raw_vids = await asyncio.to_thread(service.get_channel_latest_videos, yt_id, max_results=50)
                 video_ids = [v["video_id"] for v in raw_vids]
                 if not video_ids:
                     continue
 
-                stats_map = service.get_video_stats(video_ids)
+                stats_map = await asyncio.to_thread(service.get_video_stats, video_ids)
 
                 # Fetch snippet details (title, description, tags) in batches
                 snippet_map: dict[str, dict] = {}
@@ -104,7 +105,9 @@ async def _fetch_competitor_video_metadata(
                 if not own_ig_id:
                     continue
 
-                raw_reels = service.discover_competitor_media(own_ig_id, ig_username, max_results=50)
+                raw_reels = await asyncio.to_thread(
+                    service.discover_competitor_media, own_ig_id, ig_username, max_results=50
+                )
                 for rr in raw_reels:
                     caption = rr.get("caption", "") or ""
                     all_videos.append(

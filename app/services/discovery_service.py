@@ -122,11 +122,11 @@ class DiscoveryService:
                 if not yt_service:
                     return []
 
-                raw_vids = yt_service.get_channel_latest_videos(yt_id, max_results=50)
+                raw_vids = await asyncio.to_thread(yt_service.get_channel_latest_videos, yt_id, max_results=50)
 
                 # Fetch more stats (views/likes) for these videos to find the "proven" ones
                 video_ids = [v["video_id"] for v in raw_vids]
-                stats_map = yt_service.get_video_stats(video_ids)
+                stats_map = await asyncio.to_thread(yt_service.get_video_stats, video_ids)
 
                 for rv in raw_vids:
                     vid_stats = stats_map.get(rv["video_id"], {})
@@ -158,7 +158,9 @@ class DiscoveryService:
                 if not own_ig_id:
                     return []
 
-                raw_reels = ig_service.discover_competitor_media(own_ig_id, ig_username, max_results=50)
+                raw_reels = await asyncio.to_thread(
+                    ig_service.discover_competitor_media, own_ig_id, ig_username, max_results=50
+                )
                 for rr in raw_reels:
                     videos.append(
                         CompetitorVideoRef(
