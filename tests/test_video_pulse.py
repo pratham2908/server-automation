@@ -15,3 +15,12 @@ def test_unverified_counts_a_missing_verification_status() -> None:
 
 def test_attention_ignores_archived_videos() -> None:
     assert pulse_filters("c")["attention"]["status"] == {"$ne": "archived"}
+
+
+def test_queued_instagram_reels_count_as_scheduled():
+    from tests.mongo_fakes import matches
+
+    scheduled = pulse_filters("c")["scheduled"]
+    assert matches({"channel_id": "c", "status": "queued"}, scheduled)
+    assert matches({"channel_id": "c", "status": "scheduled"}, scheduled)
+    assert not matches({"channel_id": "c", "status": "ready"}, scheduled)
