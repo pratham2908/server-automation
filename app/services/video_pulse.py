@@ -16,7 +16,8 @@ PULSE_KEYS = ("scheduled", "ready", "attention", "unverified")
 def pulse_filters(channel_id: str) -> dict[str, dict[str, Any]]:
     live = {"channel_id": channel_id, "status": {"$ne": "archived"}}
     return {
-        "scheduled": {"channel_id": channel_id, "status": "scheduled"},
+        # Instagram and Threads reels wait as "queued" for the server's publisher; YouTube's as "scheduled".
+        "scheduled": {"channel_id": channel_id, "status": {"$in": ["scheduled", "queued"]}},
         "ready": {"channel_id": channel_id, "status": "ready"},
         # A failed publish, or a post that vanished from the platform.
         "attention": {
