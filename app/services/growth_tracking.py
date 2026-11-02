@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
-from app.timezone import now_ist
+from app.timezone import IST, assume_utc, now_ist
 
 logger = get_logger(__name__)
 
@@ -89,12 +91,23 @@ class GrowthTrackingService:
                 logger.success(f"🏆 Milestone Hit! Channel {channel_id} reached {m} subscribers on {platform}")
 
     async def get_history(self, channel_id: str, limit: int = 30) -> list[dict]:
-        """Fetch historical snapshots for a channel."""
+        """Fetch historical snapshots for a channel, oldest first, with view totals filled in where the platform has none."""
         cursor = self.db.growth_snapshots.find({"channel_id": channel_id}).sort("snapshot_date", -1).limit(limit)
 
         history = await cursor.to_list(length=limit)
         # Return in chronological order
-        return history[::-1]
+        history = history[::-1]
+        if any(not snap.get("views") for snap in history):
+            since = _day_end(history[0]["snapshot_date"]) - timedelta(days=2)
+            readings = (
+                await self.db.channel_view_snapshots.find(
+                    {"channel_id": channel_id, "at": {"$gte": since.replace(tzinfo=None)}}, {"at": 1, "views": 1}
+                )
+                .sort("at", 1)
+                .to_list(length=None)
+            )
+            fill_view_totals(history, readings)
+        return history
 
     async def calculate_velocity(self, channel_id: str) -> dict[str, Any]:
         """Calculate growth velocity (7d and 30d averages)."""
@@ -134,3 +147,37 @@ class GrowthTrackingService:
         from typing import cast
 
         return cast(list[int], (channel or {}).get("milestones", []))
+
+
+def _day_end(snapshot_date: str) -> datetime:
+    """The end of an IST calendar day, as an aware datetime."""
+    return datetime.strptime(snapshot_date, "%Y-%m-%d").replace(tzinfo=IST) + timedelta(days=1)
+
+
+def fill_view_totals(history: list[dict], readings: Sequence[Mapping[str, Any]]) -> list[dict]:
+    """Fill in what an Instagram (or Threads) daily snapshot can't hold by itself.
+
+    Neither platform reports a lifetime account view total, so their snapshots
+    store 0 views. Every sync, though, records the channel's summed reel views in
+    ``channel_view_snapshots``; a day's total is the last of those readings before
+    the day ended. A day before the first reading keeps its 0. The post count is
+    stored as ``media_count`` on Instagram, so it is copied to ``video_count``,
+    the key the growth chart reads. Mutates and returns *history*.
+    """
+    points = sorted(
+        ((assume_utc(r["at"]), r["views"]) for r in readings if r.get("views") is not None and r.get("at")),
+        key=lambda p: p[0],
+    )
+    for snap in history:
+        if not isinstance(snap.get("metadata"), dict):
+            snap["metadata"] = {}
+        meta = snap["metadata"]
+        if "video_count" not in meta and "media_count" in meta:
+            meta["video_count"] = meta["media_count"]
+        if snap.get("views") or not snap.get("snapshot_date"):
+            continue
+        end = _day_end(snap["snapshot_date"])
+        before = [views for at, views in points if at < end]
+        if before:
+            snap["views"] = int(before[-1])
+    return history
