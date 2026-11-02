@@ -1,5 +1,6 @@
 """Videos router – refactored to use VideoService."""
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ from app.models.post import PostDoc
 from app.services.errors import get_error_service
 from app.services.post_rules import protected_slide_keys
 from app.services.trial_graduation import TrialCheck
+from app.services.video_pulse import pulse_filters
 from app.services.video_service import PLAYBACK_URL_TTL_SECONDS, VideoService
 from app.timezone import now_ist
 
@@ -161,6 +163,9 @@ async def list_videos(
     status_filter: str | None = None,
     verification_status: str | None = None,
     suggest_n: int | None = None,
+    include_sync_status: bool = Query(
+        False, description="Run the live platform check (slow); off returns the last known one"
+    ),
     service: VideoService = Depends(get_video_service),
 ):
     """Return videos for *channel_id*."""
@@ -169,7 +174,16 @@ async def list_videos(
         status_filter=status_filter,
         verification_status=verification_status,
         suggest_n=suggest_n,
+        include_sync_status=include_sync_status,
     )
+
+
+@router.get("/pulse")
+async def videos_pulse(channel_id: str, service: VideoService = Depends(get_video_service)) -> dict[str, int]:
+    """Counts of scheduled / ready / needs-attention / unverified videos, without sending the videos."""
+    filters = pulse_filters(channel_id)
+    counts = await asyncio.gather(*(service.db.videos.count_documents(f) for f in filters.values()))
+    return dict(zip(filters, counts, strict=True))
 
 
 @router.get("/storage/stats")
@@ -182,7 +196,7 @@ async def storage_stats(
     if not service.r2:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
     prefix = "" if all_channels else f"{channel_id}/"
-    objs = service.r2.list_objects_with_prefix(prefix)
+    objs = await asyncio.to_thread(service.r2.list_objects_with_prefix, prefix)
     total_b = sum(int(o.get("size", 0)) for o in objs)
     return {
         "ok": True,
@@ -202,7 +216,7 @@ async def storage_files(
     if not service.r2:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="R2 not initialised")
     prefix = "" if all_channels else f"{channel_id}/"
-    raw = service.r2.list_objects_with_prefix(prefix)
+    raw = await asyncio.to_thread(service.r2.list_objects_with_prefix, prefix)
     key_to_title: dict[str, str] = {}
     key_to_status: dict[str, str] = {}
     db_filter: dict[str, Any] = {"r2_object_key": {"$exists": True, "$ne": None}}

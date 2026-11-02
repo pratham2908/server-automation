@@ -1,5 +1,7 @@
 """Application settings loaded from environment variables via pydantic-settings."""
 
+from functools import lru_cache
+
 from pydantic_settings import BaseSettings
 
 
@@ -82,6 +84,8 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Factory cached at module level so the `.env` file is read once."""
+    """Built once: every request's auth check calls this, and building Settings re-reads `.env` and
+    walks every field's annotations, which cost milliseconds of event-loop time per call."""
     return Settings()  # type: ignore[call-arg]

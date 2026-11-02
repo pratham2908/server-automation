@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import uuid
 from datetime import datetime
 from typing import Any
@@ -57,6 +58,11 @@ from app.services.youtube_snapshots import record_youtube_snapshots
 from app.timezone import IST, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
+
+# A channel's "what is new on the platform" check costs a live Instagram/YouTube call and only changes
+# when someone posts or syncs, so a recent answer is reused instead of asking again.
+SYNC_STATUS_TTL_SECONDS = 120
+_sync_status_cache: dict[str, tuple[float, dict]] = {}
 
 # Long enough to watch and scrub a short; short enough that a copied link soon dies.
 PLAYBACK_URL_TTL_SECONDS = 3600
@@ -151,7 +157,23 @@ class VideoService:
                 result[vid_id] = {"live": is_live, "published_at": published_at_dt}
         return result
 
-    async def get_sync_status(self, channel_id: str) -> dict:
+    @staticmethod
+    def cached_sync_status(channel_id: str) -> dict:
+        """The last sync status computed for the channel, without any platform call."""
+        hit = _sync_status_cache.get(channel_id)
+        return hit[1] if hit else {"available": False, "reason": "Not checked yet"}
+
+    async def get_sync_status(self, channel_id: str, *, max_age: float = SYNC_STATUS_TTL_SECONDS) -> dict:
+        hit = _sync_status_cache.get(channel_id)
+        if hit and time.monotonic() - hit[0] < max_age:
+            return hit[1]
+        status = await self._compute_sync_status(channel_id)
+        # A failed check is not kept, so the next request retries instead of replaying the failure.
+        if status.get("available"):
+            _sync_status_cache[channel_id] = (time.monotonic(), status)
+        return status
+
+    async def _compute_sync_status(self, channel_id: str) -> dict:
         channel = await self.db.channels.find_one({"channel_id": channel_id})
         if not channel:
             return {"available": False, "reason": "Channel not found"}
@@ -164,7 +186,9 @@ class VideoService:
         if not yt:
             return {"available": False, "reason": "No YouTube token"}
         try:
-            yt_video_ids = set(self._fetch_youtube_video_ids(yt, channel["youtube_channel_id"]))
+            yt_video_ids = set(
+                await asyncio.to_thread(self._fetch_youtube_video_ids, yt, channel["youtube_channel_id"])
+            )
         except Exception:
             return {"available": False, "reason": "Failed to reach YouTube API"}
         db_yt_ids = {
@@ -183,7 +207,9 @@ class VideoService:
         pending_reconciliation = 0
         if scheduled_docs:
             try:
-                live_status = self._check_youtube_live_status(yt, [d["youtube_video_id"] for d in scheduled_docs])
+                live_status = await asyncio.to_thread(
+                    self._check_youtube_live_status, yt, [d["youtube_video_id"] for d in scheduled_docs]
+                )
                 pending_reconciliation = sum(1 for info in live_status.values() if info["live"])
             except Exception as exc:
                 # pending_reconciliation stays 0, so the UI reports "nothing to
@@ -210,7 +236,7 @@ class VideoService:
         if not ig_user_id:
             return {"available": False, "reason": "No instagram_user_id"}
         try:
-            reels = ig_svc.get_reels(ig_user_id)
+            reels = await asyncio.to_thread(ig_svc.get_reels, ig_user_id)
             ig_media_ids = {r["id"] for r in reels}
         except Exception:
             return {"available": False, "reason": "Failed to reach Instagram API"}
@@ -237,6 +263,7 @@ class VideoService:
         status_filter: str | None = None,
         verification_status: str | None = None,
         suggest_n: int | None = None,
+        include_sync_status: bool = False,
     ) -> dict[str, Any]:
         query: dict = {"channel_id": channel_id}
         if status_filter == "archived":
@@ -276,7 +303,11 @@ class VideoService:
             for key in ("scheduled_at", "published_at", "created_at", "updated_at"):
                 if v.get(key) is not None:
                     v[key] = to_ist_iso(v[key])
-        sync_status = await self.get_sync_status(channel_id)
+        # Only the Videos tab shows this, and computing it is a live Instagram/YouTube call, so every
+        # other caller gets the last known value instead of waiting on the platform.
+        sync_status = (
+            await self.get_sync_status(channel_id) if include_sync_status else self.cached_sync_status(channel_id)
+        )
         return {"videos": videos, "sync_status": sync_status}
 
     async def update_video_status(self, channel_id: str, video_id: str, new_status: str) -> dict[str, Any]:
@@ -1684,6 +1715,8 @@ class VideoService:
         if not channel:
             raise ValueError("Channel not found")
         platform = get_channel_platform(channel)
+        # What the sync is about to import changes the answer, so the next status check must ask again.
+        _sync_status_cache.pop(channel_id, None)
         if platform == "youtube":
             result = await self._sync_youtube_videos(channel_id, channel, instructions, incremental)
         elif platform == "instagram":

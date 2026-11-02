@@ -11,6 +11,15 @@ from app.services.metrics import metrics_service
 logger = get_logger("http")
 
 
+# Headers that carry a credential. The request log is readable by anyone with journalctl access and is
+# shown in the UI, so a bearer token or API key written there is as good as handed out.
+_SECRET_HEADERS = frozenset({"authorization", "x-api-key", "cookie", "x-hub-signature-256"})
+
+
+def _loggable_headers(request: Request) -> dict[str, str]:
+    return {k: "[redacted]" if k.lower() in _SECRET_HEADERS else v for k, v in request.headers.items()}
+
+
 def _route_template(request: Request) -> str | None:
     """The matched route's template (``/channels/{channel_id}/…``), or None when no route matched."""
     route = request.scope.get("route")
@@ -60,8 +69,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 metrics_service.record_request(method, path, status_code, duration, route=_route_template(request))
             return response
 
-        # Capture all headers as-is
-        headers = dict(request.headers)
+        headers = _loggable_headers(request)
 
         try:
             response = await call_next(request)
