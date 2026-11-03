@@ -178,6 +178,10 @@ async def connect_db(
     await _db.dm_messages.create_index("message_id", unique=True)
     await _db.dm_messages.create_index([("channel_id", 1), ("peer_id", 1), ("created_at", 1)])
     await _db.dm_conversations.create_index([("channel_id", 1), ("peer_id", 1)], unique=True)
+    # Followers from Instagram's export: one row per handle per channel, a snapshot per import.
+    await _db.followers.create_index([("channel_id", 1), ("username", 1)], unique=True)
+    await _db.follower_snapshots.create_index([("channel_id", 1), ("taken_at", -1)])
+    await _db.follower_events.create_index([("channel_id", 1), ("snapshot_at", -1)])
     await _db.comment_dm_video_rules.create_index([("channel_id", 1), ("video_id", 1)], unique=True)
     # AI cost observability — recent-first feed plus per-model/per-task rollups.
     await _db.ai_call_logs.create_index([("timestamp", -1)])

@@ -425,6 +425,7 @@ from app.routers import (
     discovery,
     errors,
     fallback_video,
+    followers,
     growth,
     instagram_dms,
     instagram_insights,
@@ -492,6 +493,7 @@ app.include_router(comment_dm.router)
 app.include_router(comment_dm.config_router)
 app.include_router(fallback_video.router)
 app.include_router(commenters.router)
+app.include_router(followers.router)
 app.include_router(meta_webhooks.router)
 
 

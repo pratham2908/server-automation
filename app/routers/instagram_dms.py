@@ -21,6 +21,7 @@ from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services import dm_store
 from app.services.dm_stats import WINDOWS, awaiting_reply, dm_stats, flow, started_by
+from app.services.follower_export import follower_handles
 from app.services.instagram import InstagramService, graph_error_message
 from app.services.instagram_dm_inbox import DmConversationOut, DmMessageOut, reply_window_ends_at
 from app.services.instagram_tokens import PROVIDER_INSTAGRAM
@@ -135,6 +136,7 @@ def _iso(value: Any) -> str | None:
 StartedFilter = Literal["them", "us", "comment_dm", "unknown"]
 FlowFilter = Literal["two_way", "only_them", "only_us"]
 AwaitingFilter = Literal["yes", "no"]
+FollowsFilter = Literal["yes", "no"]
 
 
 @router.get("", response_model=ConversationsOut)
@@ -145,6 +147,7 @@ async def list_dms(
     started: StartedFilter | None = Query(None, description="Who sent the first message"),
     flow_is: FlowFilter | None = Query(None, alias="flow", description="Both sides wrote, or only one"),
     awaiting: AwaitingFilter | None = Query(None, description="yes: their message is the last word"),
+    follows: FollowsFilter | None = Query(None, description="yes: they follow us, per the last followers export"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> ConversationsOut:
     """Stored conversations, most recently active first, each with who started it, which way it goes and
@@ -154,6 +157,7 @@ async def list_dms(
     conversations = await db.dm_conversations.find({"channel_id": channel_id}).to_list(length=None)
     messages = await db.dm_messages.find({"channel_id": channel_id, "deleted": {"$ne": True}}).to_list(length=None)
     comment_dm_ids = await _comment_dm_ids(db, channel_id)
+    handles = await follower_handles(db, channel_id)
     threads: dict[str, list[dict[str, Any]]] = {}
     for m in sorted(messages, key=lambda r: assume_utc(r["created_at"])):
         threads.setdefault(m["peer_id"], []).append(m)
@@ -177,6 +181,7 @@ async def list_dms(
                     message_count=len(thread),
                     flow=flow(thread),
                     awaiting_reply=awaiting_reply(thread),
+                    follows_us=None if handles is None else str(name or "").lower() in handles,
                 ),
             )
         )
@@ -187,9 +192,14 @@ async def list_dms(
             return c.started_by or "unknown"
         if dimension == "flow":
             return c.flow or ""
+        if dimension == "follows":
+            return "yes" if c.follows_us else "no"
         return "yes" if c.awaiting_reply else "no"
 
-    chosen = {"started": started, "flow": flow_is, "awaiting": awaiting}
+    chosen: dict[str, str | None] = {"started": started, "flow": flow_is, "awaiting": awaiting}
+    # Only offered once a followers export exists; before that nobody is known to follow.
+    if handles is not None:
+        chosen["follows"] = follows
 
     def passes(c: DmConversationOut, skip: str | None = None) -> bool:
         return all(value is None or key(c, dim) == value for dim, value in chosen.items() if dim != skip)
