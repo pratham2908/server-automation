@@ -16,7 +16,7 @@ from googleapiclient.http import MediaFileUpload
 from app.database import get_youtube_oauth_config
 from app.logger import get_logger
 from app.services.metrics import metrics_service
-from app.services.youtube_schedule import apply_publish_at, check_reschedulable
+from app.services.youtube_schedule import apply_publish_at, apply_snippet_changes, check_reschedulable
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -826,6 +826,44 @@ class YouTubeService:
         applied = cast(str, (response.get("status") or {}).get("publishAt", publish_at))
         logger.info("Rescheduled YouTube video %s to %s", youtube_video_id, applied)
         return applied
+
+    def update_scheduled_video(
+        self,
+        youtube_video_id: str,
+        *,
+        publish_at: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Change the time and/or the title, description and tags of an uploaded, still-private video.
+
+        One ``videos.update`` carries every change, so they land together or not at all. The existing
+        snippet and status are read and sent back whole with only the requested fields changed, because
+        ``videos.update`` replaces the part it is given. A new time is refused unless the video is still
+        private; a video that has already published is never altered.
+        """
+        current = self._execute(self._youtube.videos().list(part="snippet,status", id=youtube_video_id))
+        items = current.get("items") or []
+        if not items:
+            raise ValueError(f"YouTube has no video {youtube_video_id}")
+
+        body: dict[str, Any] = {"id": youtube_video_id}
+        if publish_at is not None:
+            status = dict(items[0].get("status") or {})
+            check_reschedulable(status)
+            body["status"] = apply_publish_at(status, publish_at)
+        if any(value is not None for value in (title, description, tags)):
+            body["snippet"] = apply_snippet_changes(
+                items[0].get("snippet") or {}, title=title, description=description, tags=tags
+            )
+        parts = [part for part in ("snippet", "status") if part in body]
+        if not parts:
+            raise ValueError("Nothing to change on YouTube")
+
+        response = self._execute(self._youtube.videos().update(part=",".join(parts), body=body))
+        logger.info("Updated scheduled YouTube video %s (%s)", youtube_video_id, ",".join(parts))
+        return {"publish_at": (response.get("status") or {}).get("publishAt", publish_at)}
 
     def delete_video(self, youtube_video_id: str) -> None:
         """Delete a video from the channel's YouTube account.
