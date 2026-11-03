@@ -444,6 +444,8 @@ class TestPoll:
         comment = {"id": "c5", "text": "nice", "username": "ravi", "from": {"id": "u5"}}
         reader.comments["111111"] = [{**comment, "timestamp": "2026-10-25T06:29:00+0000"}]
         assert await poll_channel(db, FakeManager(reader), db.channels.docs[0], NOW) == 1
+        [logged] = db.comment_log.docs
+        assert (logged["author"], logged["source"], logged["is_reply"]) == ("ravi", "poll", False)
 
     async def test_an_instagram_login_reader_is_not_polled(self):
         db = _db_with_rule(_rule(), default=False)
@@ -491,6 +493,10 @@ def test_a_signed_comment_is_queued_and_an_unsigned_one_refused(webhook_client):
     response = client.post("/api/v1/webhooks/instagram", content=body, headers=_signed(body))
     assert response.status_code == 200 and response.json() == {"comments": 1, "queued": 1}
     assert db.comment_dm_events.docs[0]["source"] == "webhook"
+    # Every comment lands in the commenter log too, once, however often Meta delivers it.
+    client.post("/api/v1/webhooks/instagram", content=body, headers=_signed(body))
+    [logged] = db.comment_log.docs
+    assert (logged["comment_id"], logged["author"], logged["from_id"], logged["own"]) == ("c9", "ravi", "u9", False)
 
 
 # --- dashboard routes ------------------------------------------------------------------------

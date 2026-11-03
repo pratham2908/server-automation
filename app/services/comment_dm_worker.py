@@ -18,6 +18,7 @@ import requests
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.services import comment_log
 from app.services.comment_dm import (
     HOURLY_CAP,
     PRIVATE_REPLY_WINDOW,
@@ -187,7 +188,9 @@ async def poll_channel(db: AsyncIOMotorDatabase, manager: Any, channel: dict[str
             logger.warning("[CommentDM] Reading comments on %s failed: %s", media_id, graph_error_message(exc))
             continue
         for item in items:
-            outcome = await enqueue(db, channel, _event_from_graph(item, media_id), source="poll", now=now, rng=rng)
+            event = _event_from_graph(item, media_id)
+            await comment_log.record_safely(db, channel, event, source=comment_log.SOURCE_POLL, now=now)
+            outcome = await enqueue(db, channel, event, source="poll", now=now, rng=rng)
             queued += outcome == QUEUED
     return queued
 

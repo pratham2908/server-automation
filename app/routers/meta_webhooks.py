@@ -16,7 +16,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
 from app.logger import get_logger
-from app.services import comment_ai_reply_store, meta_webhook_config
+from app.services import comment_ai_reply_store, comment_log, meta_webhook_config
 from app.services.comment_dm import parse_comment_webhook, verify_signature
 from app.services.comment_dm_store import QUEUED, channel_for_webhook, enqueue
 from app.timezone import now_ist
@@ -63,6 +63,7 @@ async def receive(request: Request, db: AsyncIOMotorDatabase = Depends(get_db)) 
         if channel is None:
             logger.info("[CommentDM] Webhook comment %s on unknown media %s", event.comment_id, event.media_id)
             continue
+        await comment_log.record_safely(db, channel, event, source=comment_log.SOURCE_WEBHOOK, now=now)
         outcome = await enqueue(db, channel, event, source="webhook", now=now, rng=rng)
         logger.info(
             "[CommentDM] Webhook comment %s by @%s on %s (%s): %s",

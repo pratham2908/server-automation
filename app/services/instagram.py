@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -96,6 +97,16 @@ def _base_for(provider: str) -> str:
 
 
 # What the sync reads about each post from /media, with or without its insights.
+# A paging ``next`` link is absolute and can name a newer Graph version than ours (v25 vs v23), so the
+# whole host-and-version prefix goes, not just our own base.
+_GRAPH_PREFIX = re.compile(r"^https://graph\.(?:instagram|facebook)\.com/v\d+(?:\.\d+)?/")
+
+
+def next_endpoint(next_url: str | None) -> str | None:
+    """The endpoint ``_get`` wants for a paging ``next`` link, or None at the last page."""
+    return _GRAPH_PREFIX.sub("", next_url) if next_url else None
+
+
 _MEDIA_LISTING_FIELDS = (
     "id,caption,media_type,media_url,thumbnail_url,timestamp,permalink,like_count,comments_count,is_shared_to_feed"
 )
@@ -539,11 +550,8 @@ class InstagramService:
             paging = body.get("paging", {})
             next_url = paging.get("next")
             if next_url:
-                # The 'next' URL is absolute and contains all tokens,
-                # but our _get helper prepends _GRAPH_BASE.
-                # So we strip the base if it's there, or just use requests.get directly for paging.
                 params = {}
-                url = next_url.replace(f"{self._base}/", "")
+                url = next_endpoint(next_url)
             else:
                 url = None
 
@@ -596,21 +604,29 @@ class InstagramService:
             next_url = paging.get("next")
             if next_url:
                 params = {}
-                url = next_url.replace(f"{self._base}/", "")
+                url = next_endpoint(next_url)
             else:
                 url = None
 
         return comments
 
-    _THREAD_FIELDS = "id,text,timestamp,like_count,username,replies.limit(50){id,text,timestamp,like_count,username}"
+    # ``username`` comes back empty for everyone but the account itself; ``from`` names every commenter.
+    _THREAD_FIELDS = (
+        "id,text,timestamp,like_count,username,from,parent_id,"
+        "replies.limit(50){id,text,timestamp,like_count,username,from}"
+    )
 
     @staticmethod
     def _thread_message(item: dict[str, Any]) -> dict[str, Any]:
+        sender = item.get("from") or {}
         return {
             "comment_id": item.get("id", ""),
             "text": item.get("text", ""),
             "like_count": int(item.get("like_count", 0)),
-            "author": item.get("username", ""),
+            "author": item.get("username") or sender.get("username") or "",
+            "author_id": str(sender.get("id") or ""),
+            # The /comments listing also returns replies as if top-level; this says which they are.
+            "parent_id": str(item.get("parent_id") or ""),
             "published_at": item.get("timestamp", ""),
         }
 
@@ -636,12 +652,33 @@ class InstagramService:
             threads.extend(self._thread_from_node(item, media_id) for item in body.get("data", []))
             next_url = body.get("paging", {}).get("next")
             params = {}
-            url = next_url.replace(f"{self._base}/", "") if next_url else None
-        return threads[:max_threads]
+            url = next_endpoint(next_url)
+        threads = threads[:max_threads]
+        self._fill_reply_authors(threads)
+        return threads
 
     def get_thread(self, comment_id: str, media_id: str = "") -> dict[str, Any]:
         """One thread by its top-level comment id, with every reply Instagram returns."""
-        return self._thread_from_node(self._get(comment_id, {"fields": self._THREAD_FIELDS}), media_id)
+        thread = self._thread_from_node(self._get(comment_id, {"fields": self._THREAD_FIELDS}), media_id)
+        self._fill_reply_authors([thread])
+        return thread
+
+    # Graph's multi-id read takes at most 50 ids per call.
+    _IDS_PER_CALL = 50
+
+    def _fill_reply_authors(self, threads: list[dict[str, Any]]) -> None:
+        """Name the repliers. Replies nested under a comment come back as id and text only, even with
+        ``from`` asked for; read by id they carry it, so the nameless ones are looked up 50 per call."""
+        nameless = {r["comment_id"]: r for t in threads for r in t["replies"] if not r["author"] and r["comment_id"]}
+        ids = list(nameless)
+        for start in range(0, len(ids), self._IDS_PER_CALL):
+            chunk = ids[start : start + self._IDS_PER_CALL]
+            body = self._get("", {"ids": ",".join(chunk), "fields": "id,username,from"})
+            for cid, node in body.items():
+                if cid in nameless and isinstance(node, dict):
+                    named = self._thread_message(node)
+                    nameless[cid]["author"] = named["author"]
+                    nameless[cid]["author_id"] = named["author_id"]
 
     def get_media_comments_since(
         self,
@@ -775,6 +812,24 @@ class InstagramService:
         """
         return bool(self._post("me/subscribed_apps", {"subscribed_fields": ",".join(fields)}).get("success"))
 
+    def list_comment_counts(self, ig_user_id: str) -> list[dict[str, Any]]:
+        """Every post on the profile as ``{id, comments_count, timestamp}``, one call per 100 posts.
+
+        Cheap enough to run often: it is how a comment sync finds the posts whose count moved.
+        """
+        url: str | None = f"{self._user_node(ig_user_id)}/media"
+        params: dict = {"fields": "id,comments_count,timestamp", "limit": "100"}
+        posts: dict[str, dict[str, Any]] = {}
+        while url:
+            body = self._get(url, params=params)
+            for item in body.get("data", []):
+                posts.setdefault(str(item.get("id", "")), item)
+            next_url = (body.get("paging") or {}).get("next")
+            params = {}
+            url = next_endpoint(next_url)
+        posts.pop("", None)
+        return list(posts.values())
+
     def get_media_sweep(self, ig_user_id: str) -> MediaSweep:
         """Every post on the profile with its insights, one call per 100 posts.
 
@@ -802,7 +857,7 @@ class InstagramService:
                     posts.append(item)
             next_url = (body.get("paging") or {}).get("next")
             params = {}
-            url = next_url.replace(f"{self._base}/", "") if next_url else None
+            url = next_endpoint(next_url)
 
         insights = {
             p["id"]: self._parse_float_insights(p["insights"]) for p in posts if (p.get("insights") or {}).get("data")
