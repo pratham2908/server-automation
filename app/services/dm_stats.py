@@ -43,6 +43,24 @@ def started_by(conversation: dict[str, Any], messages: list[dict[str, Any]], com
     return STARTED_COMMENT_DM if first["message_id"] in comment_dm_ids else STARTED_US
 
 
+FLOW_TWO_WAY = "two_way"
+FLOW_ONLY_THEM = "only_them"
+FLOW_ONLY_US = "only_us"
+
+
+def flow(messages: list[dict[str, Any]]) -> str:
+    """Whether both sides have written, or only one has."""
+    sides = {bool(m["from_me"]) for m in messages}
+    if sides == {True, False}:
+        return FLOW_TWO_WAY
+    return FLOW_ONLY_US if sides == {True} else FLOW_ONLY_THEM
+
+
+def awaiting_reply(messages: list[dict[str, Any]]) -> bool:
+    """Their message is the last word."""
+    return bool(messages) and not messages[-1]["from_me"]
+
+
 def _first_reply_minutes(messages: list[dict[str, Any]]) -> float | None:
     """Minutes from their first message to our first message after it."""
     theirs = next((m for m in messages if not m["from_me"]), None)
@@ -74,6 +92,7 @@ def dm_stats(
         return start is None or when >= start
 
     started: dict[str, int] = defaultdict(int)
+    flows: dict[str, int] = defaultdict(int)
     new_started: dict[str, int] = defaultdict(int)
     active = messaged_us = from_commenters = awaiting = awaiting_open = 0
     we_replied = them_started = comment_dm_started = comment_dm_answered = 0
@@ -94,6 +113,7 @@ def dm_stats(
         if not window_msgs:
             continue
         active += 1
+        flows[flow(thread)] += 1
         if any(not m["from_me"] for m in window_msgs):
             messaged_us += 1
             from_commenters += conv["peer_id"] in commenter_ids
@@ -145,6 +165,8 @@ def dm_stats(
             "comment_dm_reply_rate": rate(comment_dm_answered, comment_dm_started),
             "from_commenters": from_commenters,
         },
+        # Conversations active in the window, by whether both sides have written.
+        "flow": {key: flows[key] for key in (FLOW_TWO_WAY, FLOW_ONLY_THEM, FLOW_ONLY_US)},
         # Every stored conversation, whatever the window: who started each.
         "started_all_time": {
             key: started[key] for key in (STARTED_THEM, STARTED_US, STARTED_COMMENT_DM, STARTED_UNKNOWN)

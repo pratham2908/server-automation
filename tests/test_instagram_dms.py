@@ -314,3 +314,48 @@ def test_a_malformed_send_never_reaches_instagram(monkeypatch: pytest.MonkeyPatc
     service = _Service()
     result = _wire(monkeypatch, service).post("/api/v1/channels/ch/instagram/dms/send", headers=_headers(), json=body)
     assert result.status_code == 422 and service.calls == []
+
+
+def test_conversations_filter_by_who_started_which_way_and_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _seeded_db()  # THEM: they wrote, we answered -> them / two_way / not waiting
+    at = datetime(2026, 10, 29, 8, 0, tzinfo=UTC)
+    db.dm_conversations.docs += [
+        {"channel_id": "ch", "peer_id": "5555555", "peer_username": "fan", "history": "complete"},
+        {"channel_id": "ch", "peer_id": "6666666", "peer_username": "club", "history": "complete"},
+    ]
+    db.dm_messages.docs += [
+        {
+            "message_id": "f1",
+            "channel_id": "ch",
+            "peer_id": "5555555",
+            "from_me": False,
+            "text": "hi",
+            "created_at": at,
+        },
+        {
+            "message_id": "o1",
+            "channel_id": "ch",
+            "peer_id": "6666666",
+            "from_me": True,
+            "text": "hello",
+            "created_at": at,
+        },
+    ]
+    client = _wire(monkeypatch, _Service(), db)
+
+    def ids(**params: str) -> tuple[list[str], dict]:
+        body = client.get("/api/v1/channels/ch/instagram/dms", params=params, headers=_headers()).json()
+        return [c["id"] for c in body["conversations"]], body
+
+    everything, body = ids()
+    assert len(everything) == 3 and body["all_total"] == 3
+    assert body["facets"]["flow"] == {"two_way": 1, "only_them": 1, "only_us": 1}
+    assert body["facets"]["started"] == {"them": 2, "us": 1}
+    assert body["facets"]["awaiting"] == {"no": 2, "yes": 1}
+    assert ids(flow="only_them")[0] == ["5555555"]
+    assert ids(started="them", flow="two_way")[0] == [THEM]
+    only_us, body = ids(started="us")
+    assert only_us == ["6666666"] and body["total"] == 1
+    # Counts for one filter follow the others that are chosen.
+    assert body["facets"]["flow"] == {"only_us": 1} and body["facets"]["started"] == {"them": 2, "us": 1}
+    assert ids(awaiting="yes")[0] == ["5555555"]

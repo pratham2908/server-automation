@@ -38,6 +38,10 @@ class DmConversationOut(BaseModel):
     # them / us / comment_dm, or unknown when Instagram hid the start of an older conversation.
     started_by: str | None = None
     message_count: int | None = None
+    # two_way when both sides have written, else only_them / only_us.
+    flow: str | None = None
+    # Their message is the last word.
+    awaiting_reply: bool | None = None
 
 
 def _data(value: Any) -> list[Mapping[str, Any]]:
