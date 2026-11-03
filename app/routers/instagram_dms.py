@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services import dm_store
-from app.services.dm_stats import WINDOWS, dm_stats, started_by
+from app.services.dm_stats import WINDOWS, awaiting_reply, dm_stats, flow, started_by
 from app.services.instagram import InstagramService, graph_error_message
 from app.services.instagram_dm_inbox import DmConversationOut, DmMessageOut, reply_window_ends_at
 from app.services.instagram_tokens import PROVIDER_INSTAGRAM
@@ -43,7 +43,11 @@ class ConversationsOut(BaseModel):
     conversations: list[DmConversationOut]
     # Pass back as ``after`` for the next page; None on the last one.
     next_cursor: str | None = None
+    # Conversations matching the filters; ``all_total`` counts every stored one.
     total: int = 0
+    all_total: int = 0
+    # For each filter, how many conversations each choice would show given the other filters chosen.
+    facets: dict[str, dict[str, int]] = Field(default_factory=dict)
     # When the stored DMs were last checked against Instagram; None before the first catch-up.
     synced_at: str | None = None
 
@@ -128,14 +132,23 @@ def _iso(value: Any) -> str | None:
     return assume_utc(value).astimezone(IST).isoformat() if isinstance(value, datetime) else None
 
 
+StartedFilter = Literal["them", "us", "comment_dm", "unknown"]
+FlowFilter = Literal["two_way", "only_them", "only_us"]
+AwaitingFilter = Literal["yes", "no"]
+
+
 @router.get("", response_model=ConversationsOut)
 async def list_dms(
     channel_id: str,
     limit: int = Query(20, ge=1, le=100),
     after: str | None = Query(None, pattern=r"^[0-9]{1,6}$", description="Cursor from the previous page"),
+    started: StartedFilter | None = Query(None, description="Who sent the first message"),
+    flow_is: FlowFilter | None = Query(None, alias="flow", description="Both sides wrote, or only one"),
+    awaiting: AwaitingFilter | None = Query(None, description="yes: their message is the last word"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> ConversationsOut:
-    """Stored conversations, most recently active first, each with its newest message and who started it."""
+    """Stored conversations, most recently active first, each with who started it, which way it goes and
+    whether it waits on us; filterable on all three, with counts for each choice."""
     channel = await _channel(db, channel_id)
     own_username = str(channel.get("instagram_username") or "") or None
     conversations = await db.dm_conversations.find({"channel_id": channel_id}).to_list(length=None)
@@ -144,14 +157,14 @@ async def list_dms(
     threads: dict[str, list[dict[str, Any]]] = {}
     for m in sorted(messages, key=lambda r: assume_utc(r["created_at"])):
         threads.setdefault(m["peer_id"], []).append(m)
-    shown = []
+    every = []
     for conv in conversations:
         thread = threads.get(conv["peer_id"], [])
         if not thread:
             continue
         name = conv.get("peer_username")
         last = thread[-1]
-        shown.append(
+        every.append(
             (
                 assume_utc(last["created_at"]),
                 DmConversationOut(
@@ -162,17 +175,41 @@ async def list_dms(
                     last_message=_message_out(last, own_username, name),
                     started_by=started_by(conv, thread, comment_dm_ids),
                     message_count=len(thread),
+                    flow=flow(thread),
+                    awaiting_reply=awaiting_reply(thread),
                 ),
             )
         )
-    shown.sort(key=lambda pair: pair[0], reverse=True)
+    every.sort(key=lambda pair: pair[0], reverse=True)
+
+    def key(c: DmConversationOut, dimension: str) -> str:
+        if dimension == "started":
+            return c.started_by or "unknown"
+        if dimension == "flow":
+            return c.flow or ""
+        return "yes" if c.awaiting_reply else "no"
+
+    chosen = {"started": started, "flow": flow_is, "awaiting": awaiting}
+
+    def passes(c: DmConversationOut, skip: str | None = None) -> bool:
+        return all(value is None or key(c, dim) == value for dim, value in chosen.items() if dim != skip)
+
+    facets: dict[str, dict[str, int]] = {}
+    for dim in chosen:
+        counts: dict[str, int] = {}
+        for _, c in every:
+            if passes(c, skip=dim):
+                counts[key(c, dim)] = counts.get(key(c, dim), 0) + 1
+        facets[dim] = counts
+    shown = [c for _, c in every if passes(c)]
     offset = int(after or 0)
-    page = [c for _, c in shown[offset : offset + limit]]
     return ConversationsOut(
         channel_id=channel_id,
-        conversations=page,
+        conversations=shown[offset : offset + limit],
         next_cursor=str(offset + limit) if offset + limit < len(shown) else None,
         total=len(shown),
+        all_total=len(every),
+        facets=facets,
         synced_at=_iso(channel.get(dm_store.SYNCED_FIELD)),
     )
 

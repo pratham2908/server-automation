@@ -237,6 +237,7 @@ def test_numbers():
         "from_commenters": 1,
     }
     assert stats["started_all_time"] == {"them": 2, "us": 1, "comment_dm": 1, "unknown": 1}
+    assert stats["flow"] == {"two_way": 2, "only_them": 1, "only_us": 1}
     # b's last word was theirs too: waiting on us are b, d and e; b and d still inside 24 h.
     assert (stats["awaiting_reply"], stats["awaiting_reply_open"]) == (3, 2)
     assert len(stats["series"]) == 7 and sum(d["started_by_them"] for d in stats["series"]) == 1
