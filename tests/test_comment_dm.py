@@ -596,3 +596,19 @@ def test_scheduled_video_rules_through_the_routes(api_client):
     [video] = client.get(base).json()["videos"]
     assert video["title"] == "Next" and video["status"] == "queued" and video["media_id"] is None
     assert client.delete(f"{base}/videos/c304efc5-e51a").json() == {"deleted": True}
+
+
+def test_a_dm_on_the_webhook_is_kept_for_the_inbox(webhook_client):
+    client, db = webhook_client
+    at = int(datetime.now(IST).timestamp() * 1000)
+    item = {
+        "sender": {"id": "555"},
+        "recipient": {"id": "1784"},
+        "timestamp": at,
+        "message": {"mid": "mid.9", "text": "hey"},
+    }
+    body = json.dumps({"object": "instagram", "entry": [{"id": "1784", "time": at, "messaging": [item]}]}).encode()
+    response = client.post("/api/v1/webhooks/instagram", content=body, headers=_signed(body))
+    assert response.status_code == 200 and response.json() == {"comments": 0, "queued": 0}
+    [kept] = db.dm_messages.docs
+    assert (kept["message_id"], kept["peer_id"], kept["from_me"], kept["text"]) == ("mid.9", "555", False, "hey")

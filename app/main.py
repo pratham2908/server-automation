@@ -41,6 +41,7 @@ _threads_token_task = None
 _comment_dm_task = None
 _fallback_video_task = None
 _comment_log_task = None
+_dm_catch_up_task = None
 _comment_ai_reply_task = None
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         feature="Background: Comment log sync",
     )
 
+    # ---- DM store: backfills every Instagram inbox, then re-reads only conversations that changed ----
+    from app.services.dm_store import run_dm_catch_up
+
+    global _dm_catch_up_task
+    _dm_catch_up_task = create_monitored_task(
+        run_dm_catch_up(db, instagram_service_manager),
+        feature="Background: DM catch-up",
+    )
+
     # ---- Comment-to-DM: sends queued DMs, polls for comments the webhook missed ----
     from app.services.comment_dm_worker import run_comment_dm_worker
 
@@ -356,6 +366,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _comment_ai_reply_task,
         _fallback_video_task,
         _comment_log_task,
+        _dm_catch_up_task,
     ):
         if task and not task.done():
             task.cancel()
