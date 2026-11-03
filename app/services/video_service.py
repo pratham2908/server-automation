@@ -53,7 +53,7 @@ from app.services.trial_graduation import TrialCheck, edit_running_check, trial_
 from app.services.view_series import channel_totals
 from app.services.youtube import YouTubeService
 from app.services.youtube_analytics_sync import refresh_youtube_analytics
-from app.services.youtube_schedule import error_reason, publish_at_for
+from app.services.youtube_schedule import check_snippet_limits, error_reason, merged_tags, publish_at_for
 from app.services.youtube_snapshots import record_youtube_snapshots
 from app.timezone import IST, now_ist, to_ist_iso
 
@@ -1686,6 +1686,113 @@ class VideoService:
             "youtube_publish_at": applied,
         }
 
+    async def update_pending_video(
+        self,
+        channel_id: str,
+        video_id: str,
+        *,
+        scheduled_at: datetime | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        tag_mode: str | None = "replace",
+        category: str | None = None,
+        thumbnail_url: str | None = None,
+        first_comment: str | None = None,
+        trial_graduation: str | None = None,
+        trial_check: TrialCheck | None = None,
+        location_id: str | None = None,
+        location_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Change any of a queued or scheduled video's details in one call; whatever is left out stays as it is.
+
+        A queued video is held in our own queue, so this only touches our records. A scheduled YouTube
+        video has already been uploaded and YouTube holds its time, title, description and tags, so those
+        are changed there first, in one call, and our record follows only once YouTube has accepted them:
+        if YouTube refuses, nothing here has moved and what we show still matches what will go live.
+        """
+        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
+        if not video:
+            raise ValueError("Video not found")
+        status = video.get("status")
+        if status not in ("queued", "scheduled"):
+            raise ValueError("Only a queued or scheduled video can be updated here")
+        channel = await self.db.channels.find_one({"channel_id": channel_id})
+        platform = get_channel_platform(channel) if channel else "youtube"
+
+        new_tags = merged_tags(video.get("tags"), tags, tag_mode) if tags is not None else None
+        check_snippet_limits(title, description, new_tags)
+        comment = validate_comment(first_comment, platform)
+        upd: dict[str, Any] = {
+            **trial_fields(trial_graduation, trial_check, video.get("trial_graduation"), platform),
+            **location_fields(location_id, location_name, platform),
+        }
+        for key, value in (
+            ("title", title),
+            ("description", description),
+            ("category", category),
+            ("thumbnail_url", thumbnail_url),
+        ):
+            if value is not None:
+                upd[key] = value
+        if new_tags is not None:
+            upd["tags"] = new_tags
+        if first_comment is not None:
+            upd.update(pending_fields(comment))
+        if scheduled_at is not None:
+            upd["scheduled_at"] = scheduled_at
+        if not upd:
+            raise ValueError("Nothing to update: send at least one field to change")
+
+        result: dict[str, Any] = {"ok": True}
+        if status == "scheduled":
+            result.update(
+                await self._update_on_youtube(channel_id, video, platform, scheduled_at, title, description, new_tags)
+            )
+        upd["updated_at"] = now_ist()
+        await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
+        if status == "queued" and scheduled_at is not None:
+            await self.db.schedule_queue.update_one(
+                {"channel_id": channel_id, "video_id": video_id}, {"$set": {"scheduled_at": scheduled_at}}
+            )
+        result["scheduled_at"] = to_ist_iso(upd.get("scheduled_at") or video.get("scheduled_at"))
+        return result
+
+    async def _update_on_youtube(
+        self,
+        channel_id: str,
+        video: dict[str, Any],
+        platform: str,
+        scheduled_at: datetime | None,
+        title: str | None,
+        description: str | None,
+        tags: list[str] | None,
+    ) -> dict[str, Any]:
+        """Push a scheduled video's time and snippet fields to YouTube; returns what YouTube now holds."""
+        if platform != "youtube":
+            raise ValueError("Only YouTube videos can be updated once scheduled; Instagram posts are held in our queue")
+        youtube_video_id = video.get("youtube_video_id")
+        if not youtube_video_id:
+            raise ValueError("This video has not been uploaded to YouTube yet")
+        publish_at = publish_at_for(scheduled_at, now_ist()) if scheduled_at is not None else None
+        if publish_at is None and title is None and description is None and tags is None:
+            return {}  # only our own fields (category, comment) changed; YouTube holds none of them
+        yt = await self._get_youtube_service(channel_id)
+        if not yt:
+            raise ChannelNotConnectedError(f"Channel '{channel_id}' has no valid YouTube token")
+        try:
+            applied = await asyncio.to_thread(
+                yt.update_scheduled_video,
+                youtube_video_id,
+                publish_at=publish_at,
+                title=title,
+                description=description,
+                tags=tags,
+            )
+        except HttpError as exc:
+            raise ValueError(f"YouTube refused the change: {error_reason(exc)}") from exc
+        return {"youtube_publish_at": applied["publish_at"]} if publish_at is not None else {}
+
     async def update_video_metadata(self, channel_id: str, video_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
@@ -1695,10 +1802,7 @@ class VideoService:
             if metadata.get(key) is not None:
                 upd[key] = metadata[key]
         if metadata.get("tags") is not None:
-            if metadata.get("tag_mode") == "append":
-                upd["tags"] = list(set((video.get("tags") or []) + metadata["tags"]))
-            else:
-                upd["tags"] = metadata["tags"]
+            upd["tags"] = merged_tags(video.get("tags"), metadata["tags"], metadata.get("tag_mode"))
         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
         return {"ok": True}
 

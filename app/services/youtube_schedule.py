@@ -1,4 +1,4 @@
-"""Rules for moving a scheduled YouTube video to a new time.
+"""Rules for changing a scheduled YouTube video: its time, and the title, description and tags it will go live with.
 
 A scheduled upload is a **private** video carrying a ``publishAt``; YouTube
 flips it public when that moment arrives. Rescheduling is therefore a change to
@@ -67,3 +67,51 @@ def error_reason(exc: Exception) -> str:
     """
     reason = getattr(exc, "reason", None)
     return str(reason or exc)[:300]
+
+
+# What YouTube lets a title, description and tag list be. A request over a limit is refused by us with
+# a plain reason instead of coming back from Google as a bare 400 after the other change already landed.
+MAX_TITLE = 100
+MAX_DESCRIPTION_BYTES = 5000
+MAX_TAGS_CHARS = 500
+
+# The parts of a snippet that can be written back. ``videos.update`` replaces the snippet, so these are
+# carried through unchanged; the rest of what ``videos.list`` returns (thumbnails, publishedAt, channel) is
+# read-only and is left out rather than echoed to an endpoint that does not accept it.
+_WRITABLE_SNIPPET = ("title", "description", "tags", "categoryId", "defaultLanguage", "defaultAudioLanguage")
+
+
+def merged_tags(existing: list[str] | None, new: list[str], mode: str | None) -> list[str]:
+    """The tag list after an edit: ``append`` adds to the existing ones, anything else replaces them.
+
+    Order is kept and duplicates dropped (YouTube shows tags in the order given).
+    """
+    combined = [*(existing or []), *new] if mode == "append" else list(new)
+    return list(dict.fromkeys(combined))
+
+
+def check_snippet_limits(title: str | None, description: str | None, tags: list[str] | None) -> None:
+    """``ValueError`` if a title, description or tag list is one YouTube would refuse."""
+    if title is not None:
+        if not title.strip():
+            raise ValueError("The title cannot be empty")
+        if len(title) > MAX_TITLE:
+            raise ValueError(f"A YouTube title is at most {MAX_TITLE} characters; this one is {len(title)}")
+    if description is not None and len(description.encode("utf-8")) > MAX_DESCRIPTION_BYTES:
+        raise ValueError(f"A YouTube description is at most {MAX_DESCRIPTION_BYTES} bytes")
+    if tags is not None and sum(len(tag) for tag in tags) > MAX_TAGS_CHARS:
+        raise ValueError(f"YouTube tags add up to at most {MAX_TAGS_CHARS} characters")
+
+
+def apply_snippet_changes(
+    snippet: dict[str, Any], *, title: str | None = None, description: str | None = None, tags: list[str] | None = None
+) -> dict[str, Any]:
+    """The writable part of ``snippet`` with the given fields changed and everything else kept."""
+    updated = {key: snippet[key] for key in _WRITABLE_SNIPPET if key in snippet}
+    if title is not None:
+        updated["title"] = title
+    if description is not None:
+        updated["description"] = description
+    if tags is not None:
+        updated["tags"] = tags
+    return updated

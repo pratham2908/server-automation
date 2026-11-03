@@ -701,6 +701,51 @@ async def reschedule_video(
         raise e
 
 
+class VideoUpdateRequest(BaseModel):
+    """Everything about a queued or scheduled video that can be changed. Send only what changes."""
+
+    scheduled_at: datetime | None = Field(None, description="The new publish time")
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    tag_mode: str | None = Field("replace", description='"replace" (default) or "append"')
+    category: str | None = Field(None, description="Our own content category")
+    thumbnail_url: str | None = None
+    first_comment: str | None = Field(None, description="Empty string clears it; omit to leave it")
+    trial_graduation: str | None = Field(None, description="Instagram only; empty string turns it off")
+    trial_check: TrialCheck | None = None
+    location_id: str | None = Field(None, description="Instagram only; empty string clears it")
+    location_name: str | None = None
+
+
+@router.patch("/{video_id}")
+async def update_video(
+    channel_id: str,
+    video_id: str,
+    body: VideoUpdateRequest,
+    service: VideoService = Depends(get_video_service),
+):
+    """Edit a queued or scheduled video in place: time, title, description, tags, comment, location, trial.
+
+    One request replaces delete-and-recreate (which re-uploads the file) and the separate reschedule and
+    metadata calls. Fields left out are untouched. For a scheduled YouTube video the change is made on
+    YouTube first, in a single call, and our record only follows once YouTube accepts it.
+    """
+    try:
+        return await service.update_pending_video(channel_id, video_id, **body.model_dump(exclude_none=True))
+    except Exception as e:
+        if isinstance(e, ValueError):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+        error_service = get_error_service(service.db)
+        await error_service.log_error(
+            feature="Video Update",
+            message=str(e),
+            exception=e,
+            context={"channel_id": channel_id, "video_id": video_id},
+        )
+        raise e
+
+
 @router.patch("/{video_id}/metadata")
 async def update_video_metadata(
     channel_id: str,

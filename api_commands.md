@@ -705,6 +705,38 @@ Each category has a unique `id` (UUID string) used for all update/delete operati
 }
 ```
 
+### Update a Queued or Scheduled Video
+
+- **Endpoint**: `/api/v1/channels/{channel_id}/videos/{video_id}`
+- **Method**: `PATCH`
+
+Edit a video that is waiting to go out, in one call, instead of deleting it and scheduling it again (which re-uploads the file). **Send only the fields that change**; anything left out stays as it is.
+
+```json
+{
+  "scheduled_at": "2026-03-12T18:30:00+05:30",
+  "title": "New title",
+  "description": "New description",
+  "tags": ["one", "two"],
+  "tag_mode": "append",
+  "category": "Tutorials",
+  "thumbnail_url": "https://...",
+  "first_comment": "Pinned thought",
+  "trial_graduation": "MANUAL",
+  "trial_check": { "...": "..." },
+  "location_id": "123456789",
+  "location_name": "Jaipur"
+}
+```
+
+- `tag_mode`: `"replace"` (default) or `"append"`. `first_comment`, `trial_graduation` and `location_id` take `""` to clear; omit to leave. The last three are Instagram only.
+- **Which videos**: `status` must be `queued` or `scheduled`; anything else (todo, ready, published, failed) is refused with a 400.
+- **Queued** (our queue; all Instagram posts and any YouTube video not yet uploaded): only our records change, and the queue entry follows the new time.
+- **Scheduled on YouTube** (already uploaded, private, with `publishAt`): the new time, title, description and tags are changed **on YouTube first, in a single call**, and our record follows only once YouTube accepts. If YouTube refuses, nothing here changes. `category`, `thumbnail_url` and `first_comment` are our own fields and never go to YouTube.
+- Limits checked before anything is sent: title 1-100 characters, description at most 5000 bytes, tags at most 500 characters in total. The new time must be at least a minute ahead.
+- **Response**: `{ "ok": true, "scheduled_at": "...", "youtube_publish_at": "..." }` (`youtube_publish_at` only when a YouTube time was changed).
+- `PATCH .../reschedule` and `PATCH .../metadata` still work; this endpoint covers both and adds the YouTube title/description/tags sync that `metadata` never had.
+
 ### Sync Videos from Platform
 
 - **Endpoint**: `/api/v1/channels/{channel_id}/videos/sync`
