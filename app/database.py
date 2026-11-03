@@ -169,6 +169,11 @@ async def connect_db(
     await _db.comment_dm_events.create_index([("channel_id", 1), ("media_id", 1), ("person", 1)])
     await _db.comment_dm_events.create_index([("channel_id", 1), ("status", 1), ("sent_at", 1)])
     await _db.comment_dm_rules.create_index([("channel_id", 1), ("media_id", 1)], unique=True)
+    # Comment log: one row per comment however it arrived; commenter stats read it by channel and author.
+    await _db.comment_log.create_index("comment_id", unique=True)
+    await _db.comment_log.create_index([("channel_id", 1), ("commented_at", -1)])
+    await _db.comment_log.create_index([("channel_id", 1), ("author", 1)])
+    await _db.comment_log_media.create_index([("channel_id", 1), ("media_id", 1)], unique=True)
     await _db.comment_dm_video_rules.create_index([("channel_id", 1), ("video_id", 1)], unique=True)
     # AI cost observability — recent-first feed plus per-model/per-task rollups.
     await _db.ai_call_logs.create_index([("timestamp", -1)])
