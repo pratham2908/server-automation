@@ -42,6 +42,8 @@ class DmConversationOut(BaseModel):
     flow: str | None = None
     # Their message is the last word.
     awaiting_reply: bool | None = None
+    # From the last followers export; None until one has been imported.
+    follows_us: bool | None = None
 
 
 def _data(value: Any) -> list[Mapping[str, Any]]:

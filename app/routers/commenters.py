@@ -12,6 +12,7 @@ from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services import comment_log
 from app.services.commenter_stats import WINDOWS, account_detail, commenter_stats
+from app.services.follower_export import follower_handles
 from app.timezone import IST, assume_utc, now_ist
 
 router = APIRouter(
@@ -58,11 +59,12 @@ async def commenters(
     commenters, and a daily series. Worked out from the comment log on every call, so it's live."""
     channel = await _channel(db, channel_id)
     rows = await db.comment_log.find({"channel_id": channel_id, **_VIEWERS}, _ROW_FIELDS).to_list(length=None)
-    return {
-        "window": window,
-        "synced_at": _synced_at(channel),
-        **commenter_stats(rows, now_ist(), WINDOWS[window]),
-    }
+    stats = commenter_stats(rows, now_ist(), WINDOWS[window])
+    # From the last followers export; None on every row until one has been imported.
+    handles = await follower_handles(db, channel_id)
+    for account in stats["top"]:
+        account["follows_us"] = None if handles is None else account["author"] in handles
+    return {"window": window, "synced_at": _synced_at(channel), "followers_imported": handles is not None, **stats}
 
 
 @router.get("/accounts/{author}")
