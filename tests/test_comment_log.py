@@ -77,6 +77,19 @@ class TestRecord:
 
 
 class TestRowsFromThreads:
+    def test_a_reply_listed_as_top_level_too_counts_once_as_a_reply(self):
+        threads = [
+            {"top": _msg("r1", "anjali"), "replies": []},
+            {"top": _msg("t1", "ravi"), "replies": [_msg("r1", "anjali")]},
+            {"top": {**_msg("r2", "neha"), "parent_id": "t9"}, "replies": []},
+        ]
+        rows = comment_log.rows_from_threads(CHANNEL, "m1", threads, NOW)
+        assert [(r["comment_id"], r["is_reply"], r["parent_id"]) for r in rows] == [
+            ("t1", False, None),
+            ("r1", True, "t1"),
+            ("r2", True, "t9"),
+        ]
+
     def test_replies_point_at_their_thread_and_own_replies_are_flagged(self):
         threads = [{"top": _msg("t1", "ravi"), "replies": [_msg("r1", "zara.kapoor"), _msg("r2", "anjali")]}]
         rows = comment_log.rows_from_threads(CHANNEL, "m1", threads, NOW)

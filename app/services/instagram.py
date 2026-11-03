@@ -612,7 +612,8 @@ class InstagramService:
 
     # ``username`` comes back empty for everyone but the account itself; ``from`` names every commenter.
     _THREAD_FIELDS = (
-        "id,text,timestamp,like_count,username,from,replies.limit(50){id,text,timestamp,like_count,username,from}"
+        "id,text,timestamp,like_count,username,from,parent_id,"
+        "replies.limit(50){id,text,timestamp,like_count,username,from}"
     )
 
     @staticmethod
@@ -624,6 +625,8 @@ class InstagramService:
             "like_count": int(item.get("like_count", 0)),
             "author": item.get("username") or sender.get("username") or "",
             "author_id": str(sender.get("id") or ""),
+            # The /comments listing also returns replies as if top-level; this says which they are.
+            "parent_id": str(item.get("parent_id") or ""),
             "published_at": item.get("timestamp", ""),
         }
 

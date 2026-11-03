@@ -152,9 +152,13 @@ def rows_from_threads(
         if row:
             rows.append(row)
 
+    # Instagram's listing repeats replies as if they were top-level comments; the nested copy knows its
+    # thread, so the flat one is skipped.
+    nested = {str(r.get("comment_id")) for t in threads for r in t.get("replies") or []}
     for thread in threads:
         top = thread.get("top") or {}
-        add(top, None)
+        if str(top.get("comment_id")) not in nested:
+            add(top, str(top.get("parent_id") or "") or None)
         for reply in thread.get("replies") or []:
             add(reply, str(top.get("comment_id") or "") or None)
     return rows
