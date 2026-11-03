@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -12,6 +13,7 @@ from app.main import app
 from app.routers import instagram_dms as router_mod
 from app.services.instagram_dm_inbox import next_cursor, parse_conversation, parse_message, parse_thread
 from tests.conftest import GLOBAL_API_KEY
+from tests.mongo_fakes import DB
 
 OWN = "tryalgoviz"
 
@@ -86,21 +88,40 @@ def test_a_cursor_is_offered_only_when_there_is_a_next_page() -> None:
 
 # ---- routes ----
 
+THEM = "4242424242"
 
-class _Db:
-    class channels:  # noqa: N801 - mimics a collection attribute
-        @staticmethod
-        async def find_one(query: dict[str, Any], projection: Any = None) -> dict[str, Any] | None:
-            return {"channel_id": "ch"} if query.get("channel_id") == "ch" else None
+
+def _seeded_db() -> DB:
+    """A channel with one stored conversation: they wrote, we answered."""
+    at = datetime(2026, 10, 27, 8, 0, tzinfo=UTC)
+    return DB(
+        channels=[{"channel_id": "ch", "platform": "instagram", "instagram_username": OWN}],
+        dm_conversations=[{"channel_id": "ch", "peer_id": THEM, "peer_username": "gdg_rvce", "history": "complete"}],
+        dm_messages=[
+            {
+                "message_id": "m1",
+                "channel_id": "ch",
+                "peer_id": THEM,
+                "from_me": False,
+                "text": "hello",
+                "created_at": at,
+            },
+            {
+                "message_id": "m2",
+                "channel_id": "ch",
+                "peer_id": THEM,
+                "from_me": True,
+                "text": "reply",
+                "created_at": at + timedelta(minutes=3),
+            },
+        ],
+    )
 
 
 class _Service:
     def __init__(self, error: requests.RequestException | None = None) -> None:
         self.error = error
         self.calls: list[tuple[Any, ...]] = []
-
-    def own_username(self, ig_user_id: str) -> str:
-        return OWN
 
     def list_conversations(self, ig_user_id: str, limit: int, after: str | None) -> dict[str, Any]:
         self.calls.append(("list", limit, after))
@@ -110,17 +131,16 @@ class _Service:
             "data": [
                 {
                     "id": "c1",
-                    "updated_time": "2026-10-27T08:00:00+0000",
-                    "participants": {"data": [{"username": OWN, "id": "1"}, {"username": "gdg_rvce", "id": "2"}]},
-                    "messages": {"data": [message("m1", "gdg_rvce", "hello")]},
+                    "updated_time": "2026-10-28T08:00:00+0000",
+                    "participants": {"data": [{"username": OWN, "id": "1"}, {"username": "gdg_rvce", "id": THEM}]},
+                    "messages": {"data": [message("m3", "gdg_rvce", "again", when="2026-10-28T08:00:00+0000")]},
                 }
             ],
-            "paging": {"cursors": {"after": "NEXT"}, "next": "https://graph/next"},
         }
 
-    def get_conversation_messages(self, conversation_id: str, limit: int) -> list[dict[str, Any]]:
-        self.calls.append(("thread", conversation_id, limit))
-        return [message("m2", OWN, "reply"), message("m1", "gdg_rvce", "hello")]
+    def get_conversation_page(self, conversation_id: str) -> tuple[list[dict[str, Any]], bool]:
+        self.calls.append(("thread", conversation_id))
+        return [message("m3", "gdg_rvce", "again", when="2026-10-28T08:00:00+0000")], False
 
 
 class _Manager:
@@ -131,9 +151,11 @@ class _Manager:
         return self.service, "1"
 
 
-def _wire(monkeypatch: pytest.MonkeyPatch, service: _Service) -> TestClient:
+def _wire(monkeypatch: pytest.MonkeyPatch, service: _Service, db: DB | None = None) -> TestClient:
     monkeypatch.setattr("app.main.instagram_service_manager", _Manager(service), raising=False)
-    app.dependency_overrides[router_mod.get_db] = _Db
+    monkeypatch.setattr(router_mod.dm_store, "CALL_SPACING_SECONDS", 0)
+    stored = db or _seeded_db()
+    app.dependency_overrides[router_mod.get_db] = lambda: stored
     return TestClient(app)
 
 
@@ -147,18 +169,45 @@ def _headers() -> dict[str, str]:
     return {"x-api-key": GLOBAL_API_KEY}
 
 
-def test_listing_asks_instagram_once_and_returns_a_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_opening_the_inbox_reads_the_store_not_instagram(monkeypatch: pytest.MonkeyPatch) -> None:
     service = _Service()
     body = _wire(monkeypatch, service).get("/api/v1/channels/ch/instagram/dms?limit=5", headers=_headers()).json()
-    assert service.calls == [("list", 5, None)]
-    assert body["conversations"][0]["with_username"] == "gdg_rvce"
-    assert body["next_cursor"] == "NEXT"
+    assert service.calls == []
+    [conv] = body["conversations"]
+    assert (conv["id"], conv["with_username"], conv["started_by"], conv["message_count"]) == (
+        THEM,
+        "gdg_rvce",
+        "them",
+        2,
+    )
+    assert conv["last_message"]["text"] == "reply" and body["next_cursor"] is None and body["total"] == 1
 
 
-def test_a_thread_comes_back_oldest_first(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_thread_comes_back_oldest_first_from_the_store(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _wire(monkeypatch, _Service())
-    body = client.get("/api/v1/channels/ch/instagram/dms/convo_abcdef12", headers=_headers()).json()
-    assert [(m["text"], m["from_me"]) for m in body["messages"]] == [("hello", False), ("reply", True)]
+    body = client.get(f"/api/v1/channels/ch/instagram/dms/{THEM}", headers=_headers()).json()
+    assert [(m["text"], m["from_me"], m["sender"]) for m in body["messages"]] == [
+        ("hello", False, "gdg_rvce"),
+        ("reply", True, OWN),
+    ]
+    assert client.get("/api/v1/channels/ch/instagram/dms/99999999", headers=_headers()).status_code == 404
+
+
+def test_refresh_reads_only_what_changed_and_keeps_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _seeded_db()
+    db.channels.docs[0]["dm_backfilled_at"] = datetime(2026, 10, 27, tzinfo=UTC)
+    service = _Service()
+    client = _wire(monkeypatch, service, db)
+    result = client.post("/api/v1/channels/ch/instagram/dms/sync", headers=_headers()).json()
+    assert result == {"conversations": 1, "read": 1, "added": 1, "failed": 0}
+    assert [
+        m["text"]
+        for m in client.get(f"/api/v1/channels/ch/instagram/dms/{THEM}", headers=_headers()).json()["messages"]
+    ] == [
+        "hello",
+        "reply",
+        "again",
+    ]
 
 
 def test_a_missing_permission_is_a_clear_403(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,7 +215,7 @@ def test_a_missing_permission_is_a_clear_403(monkeypatch: pytest.MonkeyPatch) ->
     response.status_code = 400
     response._content = b'{"error": {"message": "(#10) App is missing the `instagram_manage_messages` permission"}}'
     client = _wire(monkeypatch, _Service(requests.HTTPError(response=response)))
-    result = client.get("/api/v1/channels/ch/instagram/dms", headers=_headers())
+    result = client.post("/api/v1/channels/ch/instagram/dms/sync", headers=_headers())
     assert result.status_code == 403 and "permission is missing" in result.json()["detail"]
 
 
@@ -174,6 +223,15 @@ def test_an_unknown_channel_is_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (
         _wire(monkeypatch, _Service()).get("/api/v1/channels/nope/instagram/dms", headers=_headers()).status_code == 404
     )
+
+
+def test_stats_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        _wire(monkeypatch, _Service())
+        .get("/api/v1/channels/ch/instagram/dms/stats", params={"window": "all"}, headers=_headers())
+        .json()
+    )
+    assert body["started_all_time"]["them"] == 1 and body["totals"]["messages_in"] == 1
 
 
 # ---- sending ----
@@ -217,12 +275,15 @@ def test_sending_goes_out_only_when_called_and_returns_the_message_id(monkeypatc
         return "mid.1"
 
     service.send_dm = send_dm  # type: ignore[attr-defined]
-    client = _wire(monkeypatch, service)
+    db = _seeded_db()
+    client = _wire(monkeypatch, service, db)
     assert service.calls == [] and sent == []
     result = client.post(
         "/api/v1/channels/ch/instagram/dms/send", headers=_headers(), json={"recipient_id": "12345678", "text": "hi"}
     )
     assert result.json()["message_id"] == "mid.1" and sent == [("1", "12345678", "hi")]
+    # Kept at once, so the thread shows it without asking Instagram again.
+    assert [m["message_id"] for m in db.dm_messages.docs if m["peer_id"] == "12345678"] == ["mid.1"]
 
 
 def test_a_closed_window_is_a_409_with_instagrams_reason(monkeypatch: pytest.MonkeyPatch) -> None:

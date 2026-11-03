@@ -35,6 +35,9 @@ class DmConversationOut(BaseModel):
     with_id: str | None = None
     updated_at: str | None = None
     last_message: DmMessageOut | None = None
+    # them / us / comment_dm, or unknown when Instagram hid the start of an older conversation.
+    started_by: str | None = None
+    message_count: int | None = None
 
 
 def _data(value: Any) -> list[Mapping[str, Any]]:

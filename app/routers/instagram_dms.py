@@ -1,13 +1,16 @@
-"""Read an Instagram account's DMs, only when asked.
+"""An Instagram account's DMs, served from what we keep in Mongo.
 
-Nothing here runs on a schedule or stores messages: each request goes to Instagram and the
-answer is returned as it stands. Needs a token with ``instagram_manage_messages`` — the shared
-Facebook token on most channels doesn't have it, which comes back as a clear 403.
+Messages are read from Instagram once — live from the ``messages`` webhook, or by a catch-up that only
+re-reads conversations whose ``updated_time`` moved — so opening the inbox costs no Instagram call at all.
+Refresh runs the catch-up; sending still goes to Instagram, only when asked. Reading needs a token with
+``instagram_manage_messages``; without it the catch-up comes back as a clear 403.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
+from typing import Any, Literal
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
@@ -16,17 +19,12 @@ from pydantic import BaseModel, Field
 
 from app.database import get_db
 from app.dependencies import verify_api_key
+from app.services import dm_store
+from app.services.dm_stats import WINDOWS, dm_stats, started_by
 from app.services.instagram import InstagramService, graph_error_message
-from app.services.instagram_dm_inbox import (
-    DmConversationOut,
-    DmMessageOut,
-    next_cursor,
-    parse_conversation,
-    parse_thread,
-    reply_window_ends_at,
-)
+from app.services.instagram_dm_inbox import DmConversationOut, DmMessageOut, reply_window_ends_at
 from app.services.instagram_tokens import PROVIDER_INSTAGRAM
-from app.timezone import now_ist
+from app.timezone import IST, assume_utc, now_ist, to_ist_iso
 
 router = APIRouter(
     prefix="/api/v1/channels/{channel_id}/instagram/dms",
@@ -34,8 +32,10 @@ router = APIRouter(
     dependencies=[Depends(verify_api_key)],
 )
 
-# Conversation ids are long opaque strings; reject anything that isn't one before it reaches Meta.
-CONVERSATION_ID = Path(pattern=r"^[A-Za-z0-9_\-]{8,400}$")
+# A conversation is addressed by the other person's Instagram-scoped id.
+PEER_ID = Path(pattern=r"^[0-9]{5,32}$")
+SYNC_COOLDOWN = timedelta(seconds=30)
+_syncing: set[str] = set()
 
 
 class ConversationsOut(BaseModel):
@@ -43,6 +43,16 @@ class ConversationsOut(BaseModel):
     conversations: list[DmConversationOut]
     # Pass back as ``after`` for the next page; None on the last one.
     next_cursor: str | None = None
+    total: int = 0
+    # When the stored DMs were last checked against Instagram; None before the first catch-up.
+    synced_at: str | None = None
+
+
+class SyncOut(BaseModel):
+    conversations: int
+    read: int
+    added: int
+    failed: int = 0
 
 
 class ThreadOut(BaseModel):
@@ -51,6 +61,8 @@ class ThreadOut(BaseModel):
     messages: list[DmMessageOut]
     # When we may no longer message this person; None once that has passed.
     reply_window_ends_at: str | None = None
+    # "complete" when we hold the whole conversation; "partial" when Instagram hid older messages.
+    history: str | None = None
 
 
 class SendIn(BaseModel):
@@ -65,22 +77,17 @@ class SendOut(BaseModel):
     message_id: str
 
 
-async def _service(channel_id: str, db: AsyncIOMotorDatabase) -> tuple[InstagramService, str, str | None]:
-    """The channel's Instagram client, the id to address, and its own handle."""
+async def _service(channel_id: str, db: AsyncIOMotorDatabase) -> tuple[InstagramService, str]:
+    """The channel's Instagram client and the id to address."""
     import app.main as main_mod
 
-    if not await db.channels.find_one({"channel_id": channel_id}, {"_id": 1}):
-        raise HTTPException(404, "Channel not found")
+    await _channel(db, channel_id)
     manager = main_mod.instagram_service_manager
     resolved = await manager.get_service_and_user_id(channel_id, PROVIDER_INSTAGRAM) if manager else None
     if resolved is None:
         raise HTTPException(422, "This channel has no Instagram token")
     service, ig_user_id = resolved
-    try:
-        own = await asyncio.to_thread(service.own_username, ig_user_id)
-    except requests.RequestException as exc:
-        raise _refused(exc) from exc
-    return service, ig_user_id, own
+    return service, ig_user_id
 
 
 def _refused(exc: requests.RequestException) -> HTTPException:
@@ -98,45 +105,155 @@ def _refused(exc: requests.RequestException) -> HTTPException:
     return HTTPException(502, f"Instagram refused: {message[:300]}")
 
 
-@router.get("", response_model=ConversationsOut)
-async def list_dms(
-    channel_id: str,
-    limit: int = Query(20, ge=1, le=50),
-    after: str | None = Query(None, max_length=400, description="Cursor from the previous page"),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-) -> ConversationsOut:
-    """Conversations, most recently active first, each with its newest message."""
-    service, ig_user_id, own = await _service(channel_id, db)
-    try:
-        page = await asyncio.to_thread(service.list_conversations, ig_user_id, limit, after)
-    except requests.RequestException as exc:
-        raise _refused(exc) from exc
-    return ConversationsOut(
-        channel_id=channel_id,
-        conversations=[parse_conversation(raw, own) for raw in page.get("data", [])],
-        next_cursor=next_cursor(page),
+async def _channel(db: AsyncIOMotorDatabase, channel_id: str) -> dict[str, Any]:
+    channel: dict[str, Any] | None = await db.channels.find_one({"channel_id": channel_id})
+    if channel is None:
+        raise HTTPException(404, "Channel not found")
+    return channel
+
+
+def _message_out(row: dict[str, Any], own_username: str | None, peer_username: str | None) -> DmMessageOut:
+    return DmMessageOut(
+        id=str(row["message_id"]),
+        created_at=to_ist_iso(assume_utc(row["created_at"])),
+        from_me=bool(row["from_me"]),
+        sender=own_username if row["from_me"] else peer_username,
+        text=row.get("text") or None,
+        kind=row.get("kind") or "text",
+        link=row.get("link"),
     )
 
 
-@router.get("/{conversation_id}", response_model=ThreadOut)
-async def get_dm_thread(
+def _iso(value: Any) -> str | None:
+    return assume_utc(value).astimezone(IST).isoformat() if isinstance(value, datetime) else None
+
+
+@router.get("", response_model=ConversationsOut)
+async def list_dms(
     channel_id: str,
-    conversation_id: str = CONVERSATION_ID,
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
+    after: str | None = Query(None, pattern=r"^[0-9]{1,6}$", description="Cursor from the previous page"),
     db: AsyncIOMotorDatabase = Depends(get_db),
-) -> ThreadOut:
-    """The newest *limit* messages of one conversation, oldest first."""
-    service, _, own = await _service(channel_id, db)
+) -> ConversationsOut:
+    """Stored conversations, most recently active first, each with its newest message and who started it."""
+    channel = await _channel(db, channel_id)
+    own_username = str(channel.get("instagram_username") or "") or None
+    conversations = await db.dm_conversations.find({"channel_id": channel_id}).to_list(length=None)
+    messages = await db.dm_messages.find({"channel_id": channel_id, "deleted": {"$ne": True}}).to_list(length=None)
+    comment_dm_ids = await _comment_dm_ids(db, channel_id)
+    threads: dict[str, list[dict[str, Any]]] = {}
+    for m in sorted(messages, key=lambda r: assume_utc(r["created_at"])):
+        threads.setdefault(m["peer_id"], []).append(m)
+    shown = []
+    for conv in conversations:
+        thread = threads.get(conv["peer_id"], [])
+        if not thread:
+            continue
+        name = conv.get("peer_username")
+        last = thread[-1]
+        shown.append(
+            (
+                assume_utc(last["created_at"]),
+                DmConversationOut(
+                    id=conv["peer_id"],
+                    with_username=name,
+                    with_id=conv["peer_id"],
+                    updated_at=to_ist_iso(assume_utc(last["created_at"])),
+                    last_message=_message_out(last, own_username, name),
+                    started_by=started_by(conv, thread, comment_dm_ids),
+                    message_count=len(thread),
+                ),
+            )
+        )
+    shown.sort(key=lambda pair: pair[0], reverse=True)
+    offset = int(after or 0)
+    page = [c for _, c in shown[offset : offset + limit]]
+    return ConversationsOut(
+        channel_id=channel_id,
+        conversations=page,
+        next_cursor=str(offset + limit) if offset + limit < len(shown) else None,
+        total=len(shown),
+        synced_at=_iso(channel.get(dm_store.SYNCED_FIELD)),
+    )
+
+
+async def _comment_dm_ids(db: AsyncIOMotorDatabase, channel_id: str) -> set[str]:
+    """Ids of the DMs comment-to-DM sent, which mark the conversations it started."""
+    rows = await db.comment_dm_events.find(
+        {"channel_id": channel_id, "dm_message_id": {"$exists": True}}, {"dm_message_id": 1}
+    ).to_list(length=None)
+    return {str(r["dm_message_id"]) for r in rows if r.get("dm_message_id")}
+
+
+@router.post("/sync", response_model=SyncOut)
+async def sync_dms(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> SyncOut:
+    """Check Instagram for anything the webhook missed: only conversations that changed are read."""
+    channel = await _channel(db, channel_id)
+    synced = channel.get(dm_store.SYNCED_FIELD)
+    if channel_id in _syncing:
+        raise HTTPException(409, "A refresh is already running")
+    if isinstance(synced, datetime) and now_ist() - assume_utc(synced) < SYNC_COOLDOWN:
+        # Checked moments ago; the stored copy is as fresh as another read would make it.
+        return SyncOut(conversations=0, read=0, added=0)
+    service, ig_user_id = await _service(channel_id, db)
+    _syncing.add(channel_id)
     try:
-        raw = await asyncio.to_thread(service.get_conversation_messages, conversation_id, limit)
+        stats = await dm_store.catch_up(db, channel, service, ig_user_id, now_ist())
     except requests.RequestException as exc:
         raise _refused(exc) from exc
-    messages = parse_thread(raw, own)
+    finally:
+        _syncing.discard(channel_id)
+    return SyncOut(**stats)
+
+
+@router.get("/stats")
+async def dm_numbers(
+    channel_id: str,
+    window: Literal["24h", "7d", "30d", "all"] = Query("7d"),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> dict[str, Any]:
+    """Who starts conversations (them, us, comment-to-DM), replies both ways, who's waiting, daily series."""
+    channel = await _channel(db, channel_id)
+    conversations = await db.dm_conversations.find({"channel_id": channel_id}).to_list(length=None)
+    messages = await db.dm_messages.find({"channel_id": channel_id}).to_list(length=None)
+    commenters = await db.comment_log.find(
+        {"channel_id": channel_id, "from_id": {"$nin": ["", None]}}, {"from_id": 1}
+    ).to_list(length=None)
+    stats = dm_stats(
+        conversations,
+        messages,
+        comment_dm_ids=await _comment_dm_ids(db, channel_id),
+        commenter_ids={str(r["from_id"]) for r in commenters},
+        now=now_ist(),
+        days=WINDOWS[window],
+    )
+    return {"window": window, "synced_at": _iso(channel.get(dm_store.SYNCED_FIELD)), **stats}
+
+
+@router.get("/{peer_id}", response_model=ThreadOut)
+async def get_dm_thread(
+    channel_id: str,
+    peer_id: str = PEER_ID,
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> ThreadOut:
+    """The newest *limit* stored messages with one person, oldest first."""
+    channel = await _channel(db, channel_id)
+    conv = await db.dm_conversations.find_one({"channel_id": channel_id, "peer_id": peer_id})
+    if conv is None:
+        raise HTTPException(404, "No conversation with this account")
+    rows = await db.dm_messages.find({"channel_id": channel_id, "peer_id": peer_id, "deleted": {"$ne": True}}).to_list(
+        length=None
+    )
+    rows.sort(key=lambda r: assume_utc(r["created_at"]))
+    own_username = str(channel.get("instagram_username") or "") or None
+    messages = [_message_out(r, own_username, conv.get("peer_username")) for r in rows[-limit:]]
     return ThreadOut(
         channel_id=channel_id,
-        conversation_id=conversation_id,
+        conversation_id=peer_id,
         messages=messages,
         reply_window_ends_at=reply_window_ends_at(messages, now_ist()),
+        history=conv.get("history"),
     )
 
 
@@ -147,9 +264,11 @@ async def send_dm(channel_id: str, body: SendIn, db: AsyncIOMotorDatabase = Depe
     Instagram decides whether it may go: it must be within 24 hours of the person's last message.
     A refusal comes back with Instagram's own reason.
     """
-    service, ig_user_id, _ = await _service(channel_id, db)
+    service, ig_user_id = await _service(channel_id, db)
     try:
         message_id = await asyncio.to_thread(service.send_dm, ig_user_id, body.recipient_id, body.text)
     except requests.RequestException as exc:
         raise _refused(exc) from exc
+    if message_id:
+        await dm_store.record_sent(db, channel_id, body.recipient_id, message_id, body.text, now_ist())
     return SendOut(channel_id=channel_id, recipient_id=body.recipient_id, message_id=message_id)

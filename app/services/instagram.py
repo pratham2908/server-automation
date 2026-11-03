@@ -773,6 +773,18 @@ class InstagramService:
         body = self._get(conversation_id, {"fields": f"messages.limit({limit}){{{self._DM_FIELDS}}}"})
         return list((body.get("messages") or {}).get("data", []))
 
+    # Instagram only gives details for a conversation's 20 newest messages; older ones read as deleted.
+    MESSAGE_DETAIL_LIMIT = 20
+
+    def get_conversation_page(self, conversation_id: str) -> tuple[list[dict[str, Any]], bool]:
+        """A conversation's newest messages (newest first) and whether older ones exist beyond them."""
+        limit = self.MESSAGE_DETAIL_LIMIT
+        body = self._get(conversation_id, {"fields": f"messages.limit({limit}){{{self._DM_FIELDS}}}"})
+        messages = body.get("messages") or {}
+        data = list(messages.get("data", []))
+        # Instagram attaches a "next" link even to a two-message chat, so only a full page can hide more.
+        return data, len(data) >= limit and bool((messages.get("paging") or {}).get("next"))
+
     def send_dm(self, ig_user_id: str, recipient_id: str, text: str) -> str:
         """Send a text DM into an existing conversation; returns the message id.
 

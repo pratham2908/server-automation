@@ -174,6 +174,10 @@ async def connect_db(
     await _db.comment_log.create_index([("channel_id", 1), ("commented_at", -1)])
     await _db.comment_log.create_index([("channel_id", 1), ("author", 1)])
     await _db.comment_log_media.create_index([("channel_id", 1), ("media_id", 1)], unique=True)
+    # DM store: a message is kept once by its id; a conversation is one row per person per channel.
+    await _db.dm_messages.create_index("message_id", unique=True)
+    await _db.dm_messages.create_index([("channel_id", 1), ("peer_id", 1), ("created_at", 1)])
+    await _db.dm_conversations.create_index([("channel_id", 1), ("peer_id", 1)], unique=True)
     await _db.comment_dm_video_rules.create_index([("channel_id", 1), ("video_id", 1)], unique=True)
     # AI cost observability — recent-first feed plus per-model/per-task rollups.
     await _db.ai_call_logs.create_index([("timestamp", -1)])
