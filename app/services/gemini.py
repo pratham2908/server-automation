@@ -1135,7 +1135,9 @@ empty list."""
         video is: "this is wrong" under a tutorial is criticism, but "this is wild" under a
         mind-blowing demo is praise.
 
-        Returns a list of ``{"comment_id": "...", "sentiment": "positive|negative|neutral|spam"}``.
+        Returns a list of ``{"comment_id": "...", "sentiment": "positive|negative|neutral|spam|creepy",
+        "explicit": bool}``. ``creepy`` is never answered, however warm it sounds; ``explicit`` marks the
+        creepy ones that are openly sexual, which get hidden (see ``comment_reply_guard``).
         """
         batch = [{"comment_id": c["comment_id"], "text": c["text"], "author": c.get("author", "")} for c in comments]
         about = f"The comments are on this video:\n{video_context}\n\n" if video_context else ""
@@ -1147,6 +1149,14 @@ Categories:
 - **negative**: Complaints, criticism, dislike, or dissatisfaction.
 - **neutral**: Questions, factual statements, or remarks with no clear sentiment.
 - **spam**: Self-promotion, gibberish, irrelevant links, or bot-like content.
+- **creepy**: Sexual or lewd remarks; wanting to meet, be near, hug or kiss the creator; comments on
+  their body or looks that go past a plain compliment; asking them to "show more"; asking for their DM,
+  number or to talk privately. In any language or script, Hinglish included (e.g. "apke pass ane ka man
+  karta hai", "kya kya dikhaogi baby", "DM aao", "number do"). Creepy wins over positive: an admiring
+  tone does not make it positive. A plain "you look beautiful" or "nice video" is positive, not creepy.
+
+Mark **explicit** true only for a creepy comment that is openly sexual (sexual acts, body parts,
+nudity, sexual propositions); false for everything else.
 
 Comments:
 ```json
@@ -1154,7 +1164,7 @@ Comments:
 ```
 
 Return a JSON array with one entry per comment:
-[{{"comment_id": "...", "sentiment": "positive|negative|neutral|spam"}}]
+[{{"comment_id": "...", "sentiment": "positive|negative|neutral|spam|creepy", "explicit": false}}]
 
 Classify every comment. Do not skip any."""
 

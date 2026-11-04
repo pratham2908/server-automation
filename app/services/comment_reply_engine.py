@@ -14,6 +14,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.services import comment_reply_guard as guard
 from app.services.comment_reply_review import (
     MODE_REVIEW,
     build_pending_row,
@@ -208,17 +209,25 @@ async def run_comment_reply_cycle(
                 stats["errors"] += 1
                 continue
 
-            sentiment_map = {r["comment_id"]: r.get("sentiment", "") for r in results if isinstance(r, dict)}
+            verdicts = {r["comment_id"]: r for r in results if isinstance(r, dict) and r.get("comment_id")}
             for c in batch:
-                sent = sentiment_map.get(c["comment_id"], "neutral")
+                verdict = verdicts.get(c["comment_id"], {})
+                sent = str(verdict.get("sentiment") or "neutral")
                 sentiment_counts[sent] = sentiment_counts.get(sent, 0) + 1
                 if sent == "positive" or (review_mode and is_reviewable(sent)):
                     to_answer.append((c, sent))
                 else:
                     # Mark as skipped in DB to avoid re-analysis
-                    status_val = f"skipped_{sent}" if sent in ("negative", "neutral", "spam") else "skipped_other"
+                    status_val = (
+                        f"skipped_{sent}" if sent in ("negative", "neutral", "spam", guard.CREEPY) else "skipped_other"
+                    )
+                    hidden: dict[str, Any] = {}
+                    if sent == guard.CREEPY and verdict.get("explicit") is True and ig_reply_svc:
+                        hidden = {**await guard.hide(ig_reply_svc, c["comment_id"]), "explicit": True}
                     await db.comment_replies.insert_one(
                         {
+                            **hidden,
+                            "comment_author_id": c.get("author_id", ""),
                             "channel_id": channel_id,
                             "video_id": video.get("video_id", ""),
                             "video_title": video.get("title", ""),
@@ -248,6 +257,29 @@ async def run_comment_reply_cycle(
         for c, sent in to_answer:
             if total_replies >= max_replies:
                 break
+
+            if platform == "instagram" and await guard.at_cap(
+                db, channel_id, str(c.get("author_id") or ""), str(c.get("author") or ""), now_ist()
+            ):
+                await db.comment_replies.insert_one(
+                    {
+                        "channel_id": channel_id,
+                        "video_id": video.get("video_id", ""),
+                        "video_title": video.get("title", ""),
+                        "video_url": c.get("video_url", ""),
+                        "platform": platform,
+                        "comment_id": c["comment_id"],
+                        "comment_text": c.get("text", ""),
+                        "comment_author": c.get("author", ""),
+                        "comment_author_id": c.get("author_id", ""),
+                        "comment_url": c.get("comment_url", ""),
+                        "sentiment": sent,
+                        "status": guard.STATUS_SKIPPED_LIMIT,
+                        "replied_at": now_ist(),
+                    }
+                )
+                stats["skipped"] += 1
+                continue
 
             # AI-generated reply first
             reply_text = ""
@@ -307,6 +339,7 @@ async def run_comment_reply_cycle(
                     "comment_id": c["comment_id"],
                     "comment_text": c.get("text", ""),
                     "comment_author": c.get("author", ""),
+                    "comment_author_id": c.get("author_id", ""),
                     "comment_url": c.get("comment_url", ""),
                     "sentiment": "positive",
                     "status": "replied",
