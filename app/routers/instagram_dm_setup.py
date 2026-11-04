@@ -247,3 +247,75 @@ async def tap_replies(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db
         )
         for r in rows
     ]
+
+
+class CityDemandOut(BaseModel):
+    # Accent-free, lower case ("istanbul"); the key the tally groups by.
+    normalised: str
+    name: str
+    slug: str | None
+    outcome: str
+    count: int
+    people: int
+    last_at: str | None
+
+
+class CityAnswerOut(BaseModel):
+    text: str
+    name: str
+    normalised: str
+    slug: str | None
+    outcome: str
+    replied: bool
+    reply_kind: str
+    peer_id: str
+    answered_at: str | None
+
+
+class CityAnswersOut(BaseModel):
+    demand: list[CityDemandOut]
+    recent: list[CityAnswerOut]
+
+
+@router.get("/city-answers", response_model=CityAnswersOut)
+async def city_answers(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> CityAnswersOut:
+    """Cities typed in the meet flow: a tally by city (most asked first), and the latest answers."""
+    await _channel(db, channel_id)
+    rows = await db.dm_city_answers.find({"channel_id": channel_id}).to_list(length=None)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        if r.get("outcome") != "ignored":
+            groups.setdefault(str(r.get("slug") or r.get("normalised") or ""), []).append(r)
+    demand = [
+        CityDemandOut(
+            normalised=str(g[-1].get("normalised") or ""),
+            name=str(g[-1].get("name") or ""),
+            slug=g[-1].get("slug"),
+            outcome=str(g[-1].get("outcome") or ""),
+            count=len(g),
+            people=len({r.get("peer_id") for r in g}),
+            last_at=_iso(
+                max((r["answered_at"] for r in g if isinstance(r.get("answered_at"), datetime)), default=None)
+            ),
+        )
+        for g in groups.values()
+    ]
+    demand.sort(key=lambda d: (-d.people, -d.count, d.normalised))
+    recent = sorted(rows, key=lambda r: assume_utc(r["created_at"]), reverse=True)[:100]
+    return CityAnswersOut(
+        demand=demand,
+        recent=[
+            CityAnswerOut(
+                text=str(r.get("text") or ""),
+                name=str(r.get("name") or ""),
+                normalised=str(r.get("normalised") or ""),
+                slug=r.get("slug"),
+                outcome=str(r.get("outcome") or ""),
+                replied=bool(r.get("replied")),
+                reply_kind=str(r.get("reply_kind") or ""),
+                peer_id=str(r.get("peer_id") or ""),
+                answered_at=_iso(r.get("answered_at")),
+            )
+            for r in recent
+        ],
+    )

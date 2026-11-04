@@ -67,6 +67,8 @@ class DmEvent(BaseModel):
     link: str | None = None
     is_echo: bool = False
     is_deleted: bool = False
+    # A quick-reply chip: its title arrives as the message's text, but it was tapped, not typed.
+    is_chip: bool = False
 
 
 def _webhook_kind(message: Mapping[str, Any]) -> tuple[str, str | None]:
@@ -120,6 +122,7 @@ def parse_message_webhook(payload: Mapping[str, Any]) -> list[DmEvent]:
                     link=link,
                     is_echo=bool(message.get("is_echo")),
                     is_deleted=bool(message.get("is_deleted")),
+                    is_chip=isinstance(message.get("quick_reply"), Mapping),
                 )
             )
     return events
