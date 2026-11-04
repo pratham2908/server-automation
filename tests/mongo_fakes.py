@@ -179,6 +179,13 @@ class Collection:
                 return Result(1)
         return Result(0)
 
+    async def distinct(self, key: str, query: dict[str, Any] | None = None) -> list[Any]:
+        out: list[Any] = []
+        for d in self.docs:
+            if matches(d, query or {}) and (v := _get(d, key)) is not None and v not in out:
+                out.append(v)
+        return out
+
     async def count_documents(self, query: dict[str, Any]) -> int:
         return sum(1 for d in self.docs if matches(d, query))
 

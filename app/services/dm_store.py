@@ -434,4 +434,11 @@ async def run_dm_catch_up(db: AsyncIOMotorDatabase, manager: Any) -> None:
         results = await catch_up_all(db, manager, now_ist())
         added = {cid: r["added"] for cid, r in results.items() if r["added"]}
         logger.info("[DmStore] Catch-up done for %d channels; new messages: %s", len(results), added or "none")
+        # Fresh messages mean fresh people Instagram will now tell us about; ask whether they follow us.
+        from app.services import follow_status
+
+        follows = await follow_status.refresh_all(db, manager, now_ist())
+        logger.info(
+            "[Follows] Checked: %s", {cid: r["checked"] for cid, r in follows.items() if r["checked"]} or "none"
+        )
         await asyncio.sleep(CATCH_UP_EVERY_SECONDS)
