@@ -20,8 +20,10 @@ from app.config import get_settings
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services import comment_dm_store as store
-from app.services import meta_webhook_config
+from app.services import follow_status, meta_webhook_config
 from app.services.comment_dm import DmRule, StoredRule
+from app.services.comment_dm_numbers import Numbers, Window
+from app.services.comment_dm_numbers import numbers as dm_numbers
 from app.services.dm_content import DmButton, DmCard, DmQuickReply, main_message
 from app.services.dm_sender import context_for, r2_signer
 from app.services.instagram import graph_error_message
@@ -283,6 +285,65 @@ async def summary(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -
         last_24h=DmCounts(**await store.summary(db, channel_id, now_ist() - timedelta(hours=24))),
         all_time=DmCounts(**await store.summary(db, channel_id, None)),
     )
+
+
+@router.get("/numbers", response_model=Numbers)
+async def numbers(
+    channel_id: str,
+    window: Window = Query("7d"),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> Numbers:
+    """DMs per hour (24h) or day, and how far people got after their DM — read from what we store."""
+    await _channel(db, channel_id)
+    events = await db.comment_dm_events.find(
+        {"channel_id": channel_id},
+        {"status": 1, "created_at": 1, "sent_at": 1, "commented_at": 1, "from_id": 1, "person": 1, "media_id": 1},
+    ).to_list(None)
+    dm_ids = sorted({str(e["from_id"]) for e in events if e.get("status") == "sent" and e.get("from_id")})
+    replies: dict[str, list[datetime]] = {}
+    async for m in db.dm_messages.find(
+        {"channel_id": channel_id, "from_me": False, "peer_id": {"$in": dm_ids}}, {"peer_id": 1, "created_at": 1}
+    ):
+        replies.setdefault(str(m["peer_id"]), []).append(m["created_at"])
+    taps: dict[str, list[datetime]] = {}
+    async for t in db.dm_outbox.find(
+        {"channel_id": channel_id, "recipient_id": {"$in": dm_ids}}, {"recipient_id": 1, "created_at": 1}
+    ):
+        taps.setdefault(str(t["recipient_id"]), []).append(t["created_at"])
+    follows = {
+        str(c["peer_id"]): c.get(follow_status.FOLLOWS_FIELD)
+        async for c in db.dm_conversations.find(
+            {"channel_id": channel_id, "peer_id": {"$in": dm_ids}}, {"peer_id": 1, follow_status.FOLLOWS_FIELD: 1}
+        )
+    }
+    result = dm_numbers(
+        events, window=window, now=now_ist(), replies_by_person=replies, taps_by_person=taps, follows_by_person=follows
+    )
+    titles = await _titles(db, channel_id, [r.media_id for r in result.reels])
+    for reel in result.reels:
+        reel.title = titles.get(reel.media_id) or None
+    return result
+
+
+class FollowCheckOut(BaseModel):
+    checked: int
+    following: int
+    not_following: int
+    unknown: int
+
+
+@router.post("/follow-check", response_model=FollowCheckOut)
+async def follow_check(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> FollowCheckOut:
+    """Ask Instagram now whether each person who has written or tapped follows us (one call each)."""
+    import app.main as main_mod
+
+    await _channel(db, channel_id)
+    manager = main_mod.instagram_service_manager
+    resolved = await manager.get_service_and_user_id(channel_id, PROVIDER_INSTAGRAM) if manager else None
+    if resolved is None or resolved[0].provider != PROVIDER_INSTAGRAM:
+        raise HTTPException(422, "Checking follows needs an Instagram Login token on this channel")
+    counts = await follow_status.refresh_channel(db, channel_id, resolved[0], now_ist(), force=True)
+    return FollowCheckOut(**counts)
 
 
 @router.post("/subscribe", response_model=SubscribeOut)
