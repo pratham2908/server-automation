@@ -227,3 +227,12 @@ def test_the_live_profile_is_read_one_field_per_call() -> None:
     service._user_node = lambda ig_user_id: ig_user_id  # type: ignore[method-assign]  # noqa: SLF001
     assert service.get_messenger_profile("1") == {"ice_breakers": ["x"], "persistent_menu": ["x"]}
     assert asked == ["ice_breakers", "persistent_menu"]
+
+
+def test_menu_is_posted_before_the_ice_breakers(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, db = _Service(), _db()
+    client = _wire(monkeypatch, service, db)
+    client.put(f"{BASE}/settings", headers=HEADERS, json=SETTINGS_BOTH)
+    client.post(f"{BASE}/settings/publish", headers=HEADERS)
+    kinds = ["menu" if "persistent_menu" in b else "ice" for b in service.profile_posts]
+    assert kinds[:2] == ["menu", "ice"]

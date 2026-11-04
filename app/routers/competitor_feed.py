@@ -260,9 +260,7 @@ async def get_competitor_stats(
     service, channel, ig_user_id = await _load_service(db, via_channel_id)
     target = username.lstrip("@").strip()
     try:
-        raw = await asyncio.to_thread(
-            service.discover_all_media, ig_user_id, target, limit, 50, STATS_MEDIA_FIELDS
-        )
+        raw = await asyncio.to_thread(service.discover_all_media, ig_user_id, target, limit, 50, STATS_MEDIA_FIELDS)
     except ValueError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except Exception as exc:
