@@ -73,6 +73,8 @@ SETTINGS = {
     "menu": [],
 }
 
+SETTINGS_BOTH = {**SETTINGS, "menu": [{"title": "Website", "type": "url", "url": "https://tryalgoviz.com"}]}
+
 
 def test_saving_settings_does_not_touch_instagram(monkeypatch: pytest.MonkeyPatch) -> None:
     service, db = _Service(), _db()
@@ -162,3 +164,66 @@ def test_an_upload_needs_storage_and_a_type_instagram_takes(monkeypatch: pytest.
     ok = client.post(f"{BASE}/media", headers=HEADERS, files={"file": ("a.png", b"1234", "image/png")}).json()
     assert ok["type"] == "image" and ok["r2_key"].startswith("dm-media/ch/") and ok["r2_key"].endswith(".png")
     assert ok["preview_url"].endswith("type=image/png") and r2.keys == [ok["r2_key"]]
+
+
+class _DropsIceBreakersOnMenu(_Service):
+    """Instagram's observed fault: the menu post wipes the ice breakers until they are posted again."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.live: dict[str, Any] = {}
+
+    def set_messenger_profile(self, ig_user_id: str, body: dict[str, Any]) -> bool:
+        self.profile_posts.append(body)
+        if "persistent_menu" in body:
+            self.live.pop("ice_breakers", None)
+        self.live.update(body)
+        return True
+
+    def clear_messenger_profile(self, ig_user_id: str, fields: list[str]) -> bool:
+        self.cleared.append(fields)
+        for f in fields:
+            self.live.pop(f, None)
+        return True
+
+    def get_messenger_profile(self, ig_user_id: str) -> dict[str, Any]:
+        return dict(self.live)
+
+
+class _NeverGoesLive(_Service):
+    def get_messenger_profile(self, ig_user_id: str) -> dict[str, Any]:
+        return {}
+
+
+def test_ice_breakers_lost_to_the_menu_post_are_set_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, db = _DropsIceBreakersOnMenu(), _db()
+    client = _wire(monkeypatch, service, db)
+    client.put(f"{BASE}/settings", headers=HEADERS, json=SETTINGS_BOTH)
+    assert client.post(f"{BASE}/settings/publish", headers=HEADERS).status_code == 200
+    assert "ice_breakers" in service.live and "persistent_menu" in service.live
+
+
+def test_publish_fails_loudly_when_nothing_reads_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, db = _NeverGoesLive(), _db()
+    client = _wire(monkeypatch, service, db)
+    client.put(f"{BASE}/settings", headers=HEADERS, json=SETTINGS)
+    result = client.post(f"{BASE}/settings/publish", headers=HEADERS)
+    assert result.status_code == 502 and "ice breakers" in result.json()["detail"]
+    assert db.channels.docs[0].get("dm_inbox_published_at") is None
+
+
+def test_the_live_profile_is_read_one_field_per_call() -> None:
+    """Asked for both fields at once Instagram returns only the menu, so each is read on its own."""
+    from app.services.instagram import InstagramService
+
+    asked: list[str] = []
+
+    def fake_get(endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+        asked.append(params["fields"])
+        return {"data": [{params["fields"]: ["x"]}]}
+
+    service = object.__new__(InstagramService)
+    service._get = fake_get  # type: ignore[method-assign]  # noqa: SLF001
+    service._user_node = lambda ig_user_id: ig_user_id  # type: ignore[method-assign]  # noqa: SLF001
+    assert service.get_messenger_profile("1") == {"ice_breakers": ["x"], "persistent_menu": ["x"]}
+    assert asked == ["ice_breakers", "persistent_menu"]

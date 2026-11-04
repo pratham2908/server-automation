@@ -204,8 +204,21 @@ async def publish_settings(channel_id: str, db: AsyncIOMotorDatabase = Depends(g
             await asyncio.to_thread(service.set_messenger_profile, ig_user_id, menu_body(settings, channel_id))
         else:
             await asyncio.to_thread(service.clear_messenger_profile, ig_user_id, ["persistent_menu"])
+        # Instagram answered "success" to a set that was not live afterwards (2026-11-04: the ice
+        # breakers were gone once the menu went up), so trust only what reads back.
+        live = await asyncio.to_thread(service.get_messenger_profile, ig_user_id)
+        if settings.ice_breakers and not live.get("ice_breakers"):
+            await asyncio.to_thread(service.set_messenger_profile, ig_user_id, ice_breakers_body(settings, channel_id))
+            live = await asyncio.to_thread(service.get_messenger_profile, ig_user_id)
     except requests.RequestException as exc:
         raise HTTPException(502, f"Instagram refused: {graph_error_message(exc)[:300]}") from exc
+    missing = [
+        name
+        for name, wanted in (("ice breakers", settings.ice_breakers), ("menu", settings.menu))
+        if wanted and not live.get("ice_breakers" if name == "ice breakers" else "persistent_menu")
+    ]
+    if missing:
+        raise HTTPException(502, f"Instagram said yes but the {' and '.join(missing)} are not live when read back")
     await db.channels.update_one({"channel_id": channel_id}, {"$set": {PUBLISHED_FIELD: now}})
     return PublishOut(ice_breakers=bool(settings.ice_breakers), menu=bool(settings.menu), published_at=_iso(now) or "")
 

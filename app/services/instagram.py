@@ -825,10 +825,19 @@ class InstagramService:
     _MESSENGER_PROFILE_FIELDS = ("ice_breakers", "persistent_menu")
 
     def get_messenger_profile(self, ig_user_id: str) -> dict[str, Any]:
-        """The account's live ice breakers and persistent menu, as Instagram holds them."""
-        params = {"fields": ",".join(self._MESSENGER_PROFILE_FIELDS), "platform": "instagram"}
-        data = self._get(f"{self._user_node(ig_user_id)}/messenger_profile", params).get("data") or []
-        return dict(data[0]) if data and isinstance(data[0], dict) else {}
+        """The account's live ice breakers and persistent menu, as Instagram holds them.
+
+        One call per field: asked for both at once, Instagram answers with only the menu, so a
+        combined read shows ice breakers as empty even when they are live (verified 2026-11-04).
+        """
+        profile: dict[str, Any] = {}
+        for field in self._MESSENGER_PROFILE_FIELDS:
+            params = {"fields": field, "platform": "instagram"}
+            data = self._get(f"{self._user_node(ig_user_id)}/messenger_profile", params).get("data") or []
+            for item in data:
+                if isinstance(item, dict):
+                    profile.update(item)
+        return profile
 
     def set_messenger_profile(self, ig_user_id: str, body: dict[str, Any]) -> bool:
         """Replace the fields in *body* (ice breakers and/or the persistent menu) on the live account."""
