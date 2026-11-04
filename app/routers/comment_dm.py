@@ -334,7 +334,11 @@ class FollowCheckOut(BaseModel):
 
 @router.post("/follow-check", response_model=FollowCheckOut)
 async def follow_check(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> FollowCheckOut:
-    """Ask Instagram now whether each person who has written or tapped follows us (one call each)."""
+    """Ask Instagram now about each person who has written or tapped and wasn't asked in the last day.
+
+    Not forced: re-asking everyone is one call per person half a second apart (87 s for TryAlgoViz's 170),
+    and an answer from today is as good as a fresh one.
+    """
     import app.main as main_mod
 
     await _channel(db, channel_id)
@@ -342,7 +346,7 @@ async def follow_check(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_d
     resolved = await manager.get_service_and_user_id(channel_id, PROVIDER_INSTAGRAM) if manager else None
     if resolved is None or resolved[0].provider != PROVIDER_INSTAGRAM:
         raise HTTPException(422, "Checking follows needs an Instagram Login token on this channel")
-    counts = await follow_status.refresh_channel(db, channel_id, resolved[0], now_ist(), force=True)
+    counts = await follow_status.refresh_channel(db, channel_id, resolved[0], now_ist())
     return FollowCheckOut(**counts)
 
 
