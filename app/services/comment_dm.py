@@ -66,8 +66,10 @@ class DmRule(BaseModel):
     # One is picked at random per comment, so a burst of replies doesn't read as one pasted line.
     # Empty means no public reply, only the DM.
     reply_texts: list[str] = Field(default_factory=list, max_length=MAX_REPLY_TEXTS)
-    # Roughly how long after the comment the DM goes out; jittered so it doesn't land instantly.
-    delay_seconds: int = Field(default=45, ge=0, le=3600)
+    # Roughly how long after the comment the DM goes out; jittered so it doesn't land instantly. Short,
+    # because a comment deleted before the DM goes out can't be answered at all (owner, 2026-11-04: was 45;
+    # 46 of TryAlgoViz's first 461 failed that way, ~57 s after the comment).
+    delay_seconds: int = Field(default=10, ge=0, le=3600)
     # Buttons under the text: a link, our profile, or a reply sent when tapped. Empty sends plain text.
     buttons: list[DmButton] = Field(default_factory=list, max_length=MAX_BUTTONS)
     # A carousel instead of text and buttons.
