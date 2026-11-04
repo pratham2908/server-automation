@@ -1174,6 +1174,34 @@ Classify every comment. Do not skip any."""
         except (json.JSONDecodeError, TypeError):
             return []
 
+    async def extract_place(self, comment_text: str) -> str | None:
+        """The city (or other place) an Instagram comment asks for a map of, or None when it names none.
+
+        For a "comment your city and I'll send you the map" reel. Comments are loose ("do Lagos next",
+        "where's Toronto", "Mumbai please!!"), and a word list can't tell those from praise that happens to
+        be a place name ("nice"), which is why this is a model call. Raises when the call fails, so the
+        caller can try again rather than read a failure as "no place".
+        """
+        prompt = f"""A map account's reels say "Comment your city and I'll send you the map". Read one comment and say which place it asks for.
+
+Rules:
+- Return the city or town the commenter names or asks for, in its usual English spelling ("Lagos", "Toronto", "São Paulo").
+- A region or country they ask for ("Kerala", "Nigeria") counts: return it.
+- Praise, emoji, jokes and questions about the video are NOT a place: return null. A word that is also a place name counts only when they ask for it as a place: "nice" or "nice video" is praise (null), "Nice please, the French one" asks for Nice.
+- One place only. If they name several, the first.
+
+Comment: {json.dumps(comment_text, ensure_ascii=False)}
+
+Answer with JSON only: {{"place": "Lagos"}} or {{"place": null}}"""
+        text = await self._generate_preferring(prompt, self._COMMENT_SENTIMENT_MODEL, task="comment_place")
+        try:
+            place = _loads_json_object(text).get("place")
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(f"place answer is not JSON: {text[:200]!r}") from exc
+        if not isinstance(place, str):
+            return None
+        return place.strip() or None
+
     async def generate_comment_reply(
         self,
         comment_text: str,

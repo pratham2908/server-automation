@@ -22,6 +22,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
+from app.services import city_tally, meet_city
 from app.services.comment_dm import (
     LOGGED_SKIPS,
     STATUS_FAILED,
@@ -40,6 +41,7 @@ from app.services.comment_dm import (
     skip_reason,
     stored_rule,
 )
+from app.services.dm_content import DmMessage
 from app.services.instagram_tokens import ALT_FIELD, PRIMARY_FIELD
 
 DEFAULT_FIELD = "comment_dm_default"
@@ -51,6 +53,14 @@ QUEUED = "queued"
 DUPLICATE = "duplicate"
 NO_RULE = "no rule"
 NO_MATCH = "no match"
+NO_CITY = "no city in the comment"
+
+# A city rule's comment that names none of the meet tool's cities by name: the worker asks the model
+# which place it names (if any) just before sending, so the webhook stays fast.
+CITY_PENDING = "pending"
+CITY_DONE = "done"
+CITY_NONE = "none"
+CITY_CHECK_FIELD = "city_check"
 
 
 def _stored(doc: dict[str, Any] | None) -> StoredRule | None:
@@ -187,10 +197,25 @@ async def _already_messaged(db: AsyncIOMotorDatabase, channel_id: str, media_id:
             "media_id": media_id,
             "person": person,
             "status": {"$in": [STATUS_PENDING, STATUS_SENDING, STATUS_SENT]},
+            # A comment still waiting to be read for a city may turn out to name none ("nice"), and must not
+            # stop the next one ("London") from getting its DM; the worker checks again before it sends.
+            CITY_CHECK_FIELD: {"$ne": CITY_PENDING},
         },
         {"_id": 1},
     )
     return found is not None
+
+
+def message_fields(message: DmMessage | None) -> dict[str, Any]:
+    """A DM's content as a queued event stores it (the worker rebuilds it with ``event_message``)."""
+    if message is None:
+        return {"dm_text": "", "buttons": [], "cards": [], "quick_replies": []}
+    return {
+        "dm_text": message.text,
+        "buttons": [b.model_dump(mode="json") for b in message.buttons],
+        "cards": [c.model_dump(mode="json") for c in message.cards],
+        "quick_replies": [q.model_dump(mode="json") for q in message.quick_replies],
+    }
 
 
 async def enqueue(
@@ -223,6 +248,27 @@ async def enqueue(
     )
     if reason is not None and reason not in LOGGED_SKIPS:
         return reason
+    city_map = active.rule.city_map
+    rule = active.rule
+    content: dict[str, Any] = {
+        "dm_text": rule.dm_text,
+        "buttons": [b.model_dump(mode="json") for b in rule.buttons],
+        "cards": [c.model_dump(mode="json") for c in rule.cards],
+        "quick_replies": [q.model_dump(mode="json") for q in rule.quick_replies],
+    }
+    city: meet_city.CityAnswer | None = None
+    city_fields: dict[str, Any] = {}
+    if city_map is not None:
+        slug = meet_city.city_in(event.text)
+        if slug is not None:
+            city = meet_city.answer_for_slug(slug, event.text)
+            content = message_fields(meet_city.comment_dm(city, city_map))
+            city_fields = {CITY_CHECK_FIELD: CITY_DONE, "city": city.model_dump()}
+        elif not meet_city.has_words(event.text):
+            return NO_CITY
+        else:
+            city_fields = {CITY_CHECK_FIELD: CITY_PENDING, "city": None}
+        city_fields["city_map"] = city_map.model_dump(mode="json")
     doc = {
         "comment_id": event.comment_id,
         "channel_id": channel_id,
@@ -235,11 +281,9 @@ async def enqueue(
         "commented_at": event.created_at,
         "trigger": trigger,
         "source": source,
-        "dm_text": active.rule.dm_text,
+        **content,
+        **city_fields,
         "reply_text": pick_reply(active.rule, rng),
-        "buttons": [b.model_dump(mode="json") for b in active.rule.buttons],
-        "cards": [c.model_dump(mode="json") for c in active.rule.cards],
-        "quick_replies": [q.model_dump(mode="json") for q in active.rule.quick_replies],
         "status": STATUS_SKIPPED if reason else STATUS_PENDING,
         "skip_reason": reason,
         "send_after": now + send_delay(active.rule, rng),
@@ -252,6 +296,20 @@ async def enqueue(
     except DuplicateKeyError:
         # Webhook and poll raced on the same comment; the unique index let exactly one through.
         return DUPLICATE
+    if city is not None:
+        await city_tally.record_comment(
+            db,
+            channel_id=channel_id,
+            comment_id=event.comment_id,
+            media_id=event.media_id,
+            peer_id=event.from_id,
+            username=event.username,
+            text=event.text,
+            answer=city,
+            dm_queued=reason is None,
+            commented_at=event.created_at,
+            now=now,
+        )
     return reason or QUEUED
 
 

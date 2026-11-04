@@ -318,7 +318,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     global _comment_dm_task
     _comment_dm_task = create_monitored_task(
-        run_comment_dm_worker(db, instagram_service_manager),
+        run_comment_dm_worker(db, instagram_service_manager, gemini_service),
         feature="Background: Comment DM worker",
     )
     logger.info("Background comment-to-DM worker started")

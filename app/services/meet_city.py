@@ -1,4 +1,9 @@
-"""A city someone TYPED in @tryalgoviz's meet DM flow, matched to the meet tool's cities. Pure.
+"""A city someone named, matched to the meet tool's cities, and the DM that answers it. Pure.
+
+Two flows ask for a city. @tryalgoviz's meet DM flow asks "Which city is your group in?" and its
+answer is TYPED in the chat (below). A comment rule with a ``CityMap`` (@themapworld: "Comment your
+city and I'll send you the map") reads the city from the COMMENT and DMs that city's map
+(``city_in``, ``answer_for_place``, ``comment_dm``).
 
 The flow asks "Which city is your group in?" with eight chips, and its "Other" reply asks them to type
 it. A typed answer used to get nothing back (4 Nov: "Trivandrum", "İstanbul"). This reads the text,
@@ -17,11 +22,12 @@ import re
 import unicodedata
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.services.dm_content import DmButton, DmMessage
+from app.services.dm_content import DmButton, DmCard, DmMedia, DmMessage
 
-CHANNEL_ID = "TryAlgoViz"
+# The one channel whose DM flow asks the city question; typed answers elsewhere are left alone.
+TYPED_ANSWER_CHANNEL = "TryAlgoViz"
 # Both prompts start with this: the chip question and the "Other" reply that asks them to type it.
 PROMPT_PREFIX = "Which city is your group in?"
 MAP_URL = "https://tryalgoviz.com/algorithms/graph/city-map/meet/"
@@ -203,3 +209,85 @@ def typed_reply(answer: CityAnswer) -> DmMessage | None:
 
 def is_prompt(text: str) -> bool:
     return text.strip().startswith(PROMPT_PREFIX)
+
+
+# --- a city named in a comment ---
+
+FOLLOW_BUTTON = "🔔 Follow for more"
+OPEN_CITY_BUTTON = "📍 Open the map"
+CARD_SUBTITLE = "Drop your friends' areas and find the fairest place to meet. Free, no signup."
+# A place name, as the model hands it back, is a few words at most.
+MAX_PLACE_WORDS = 5
+
+
+class CityMap(BaseModel):
+    """On a comment rule: DM each commenter the map of the city their comment names.
+
+    The DM's copy is fixed here so it names no brand (the page is shown to a foreign audience);
+    ``utm_prefix`` keeps one channel's traffic apart from another's (``utm_content=<prefix>-<slug>``).
+    """
+
+    utm_prefix: str = Field(default="city", pattern=r"^[a-z0-9-]{1,20}$")
+    # The card's picture, uploaded through the DM setup's media route. None sends the card without one.
+    image: DmMedia | None = None
+
+
+def city_in(text: str) -> str | None:
+    """The meet tool's city a comment names ("London 🔥", "Mumbai please!!", "nyc!!"), if any."""
+    return _match([fold(w) for w in _words(text)])
+
+
+def has_words(text: str) -> bool:
+    """Whether a comment has any letters at all: "🔥🔥" and "!!!" can name no place."""
+    return bool(_words(text))
+
+
+def answer_for_slug(slug: str, said: str = "") -> CityAnswer:
+    return CityAnswer(
+        outcome="matched", name=CITIES[slug], normalised=" ".join(fold(w) for w in _words(said)), slug=slug
+    )
+
+
+def answer_for_place(place: str) -> CityAnswer:
+    """A place name the model read out of a comment: one of our cities, or another place."""
+    words = _strip(_words(place.strip()))
+    folded = [fold(w) for w in words]
+    if not words or len(words) > MAX_PLACE_WORDS or len(place) > MAX_CHARS:
+        return CityAnswer(outcome="ignored", normalised=" ".join(folded))
+    slug = _match(folded)
+    if slug is not None:
+        return answer_for_slug(slug, place)
+    name = " ".join(words)
+    if name == name.lower():
+        name = " ".join(w[:1].upper() + w[1:] for w in words)
+    return CityAnswer(outcome="unlisted", name=name, normalised=" ".join(folded))
+
+
+def comment_dm(answer: CityAnswer, city_map: CityMap) -> DmMessage | None:
+    """The DM a comment naming *answer* gets: that city's map as a card, or the map with the city on our list."""
+    follow = DmButton(type="profile", title=FOLLOW_BUTTON)
+    prefix = city_map.utm_prefix
+    if answer.outcome == "matched" and answer.slug:
+        url = map_url(f"{prefix}-{answer.slug}", answer.slug)
+        card = DmCard(
+            title=f"Your {answer.name} map is ready 🗺️",
+            subtitle=CARD_SUBTITLE,
+            image=city_map.image,
+            link=url,
+            buttons=[DmButton(type="url", title=OPEN_CITY_BUTTON, url=url), follow],
+        )
+        return DmMessage(cards=[card])
+    if answer.outcome == "unlisted":
+        text = f"{answer.name} is on our list ✅, we're adding it. Try the cities that are live meanwhile 👇"
+        return DmMessage(
+            text=text, buttons=[DmButton(type="url", title=MAP_BUTTON, url=map_url(f"{prefix}-other")), follow]
+        )
+    return None
+
+
+def sample_comment_dm(city_map: CityMap) -> DmMessage:
+    """What a city rule sends for London: checked when the rule is saved, so a bad image fails then."""
+    message = comment_dm(answer_for_slug("london", "London"), city_map)
+    if message is None:  # London is one of CITIES, so this is always a card.
+        raise RuntimeError("London is missing from CITIES")
+    return message

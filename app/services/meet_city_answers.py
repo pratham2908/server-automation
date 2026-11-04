@@ -71,7 +71,7 @@ async def _last_from_us(db: AsyncIOMotorDatabase, channel_id: str, peer_id: str,
 async def handle(db: AsyncIOMotorDatabase, channel: Mapping[str, Any], event: DmEvent, now: datetime) -> str:
     """Answer one webhook message if it's a city typed for the meet flow. Returns what happened."""
     channel_id = str(channel["channel_id"])
-    if channel_id != meet_city.CHANNEL_ID:
+    if channel_id != meet_city.TYPED_ANSWER_CHANNEL:
         return NOT_THIS_FLOW
     sender = event.sender_id
     if (
