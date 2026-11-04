@@ -32,6 +32,8 @@ _SKIP_STATUS = {
     "skipped_spam": "spam comment",
     "skipped_neutral": "neutral comment",
     "skipped_negative": "negative comment",
+    "skipped_creepy": "creepy comment",
+    "skipped_limit": "reply limit for this person",
 }
 
 

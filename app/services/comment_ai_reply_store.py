@@ -86,6 +86,7 @@ async def enqueue(
         "channel_id": channel_id,
         "media_id": event.media_id,
         "username": event.username,
+        "from_id": event.from_id,
         "text": event.text,
         "commented_at": event.created_at,
         "status": STATUS_SKIPPED if reason else STATUS_PENDING,

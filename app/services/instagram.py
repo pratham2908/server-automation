@@ -594,7 +594,8 @@ class InstagramService:
         Returns a list of dicts with keys:
         ``comment_id``, ``text``, ``like_count``, ``author``, ``published_at``.
         """
-        fields = "id,text,timestamp,like_count,username"
+        # ``username`` is empty for everyone but the account itself; ``from`` names every commenter.
+        fields = "id,text,timestamp,like_count,username,from"
         comments: list[dict[str, Any]] = []
         url: str | None = f"{media_id}/comments"
         params: dict = {"fields": fields, "limit": "100"}
@@ -607,7 +608,8 @@ class InstagramService:
                         "comment_id": item.get("id", ""),
                         "text": item.get("text", ""),
                         "like_count": int(item.get("like_count", 0)),
-                        "author": item.get("username", ""),
+                        "author": item.get("username") or (item.get("from") or {}).get("username", ""),
+                        "author_id": str((item.get("from") or {}).get("id") or ""),
                         "published_at": item.get("timestamp", ""),
                         "video_url": f"https://www.instagram.com/reels/{media_id}/",
                         "comment_url": f"https://www.instagram.com/reels/comments/{item.get('id', '')}/",
@@ -741,6 +743,10 @@ class InstagramService:
         from typing import cast
 
         return cast(str, self._post(f"{media_id}/comments", {"message": message}).get("id", ""))
+
+    def hide_comment(self, comment_id: str) -> bool:
+        """Hide a comment on our media: it stays visible to the person who wrote it and no one else."""
+        return bool(self._post(comment_id, {"hide": "true"}).get("success"))
 
     def reply_to_comment(self, comment_id: str, message: str) -> str:
         """Reply to a comment on an owned media item.

@@ -14,6 +14,7 @@ import requests
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.services import comment_reply_guard as guard
 from app.services.comment_ai_reply import STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED
 from app.services.comment_ai_reply_store import claim_due, fail_interrupted, load_config, update_item
 from app.services.comment_reply_review import MODE_REVIEW, build_pending_row, is_reviewable, normalise_mode
@@ -46,11 +47,17 @@ def _answer_row(
         "comment_id": item["comment_id"],
         "comment_text": item.get("text", ""),
         "comment_author": item.get("username", ""),
+        "comment_author_id": str(item.get("from_id") or ""),
         "comment_url": "",
         "sentiment": sentiment,
         "status": status,
         "replied_at": now,
     }
+
+
+def row_flags(row: dict[str, Any]) -> dict[str, Any]:
+    """The hide outcome, copied onto the queue item so the log shows it too."""
+    return {k: row[k] for k in ("hidden", "hide_error") if k in row}
 
 
 async def answer_one(
@@ -78,15 +85,34 @@ async def answer_one(
 
     try:
         results = await gemini.classify_comment_sentiment([comment], video_context=context)
-        sentiment = next(
-            (r.get("sentiment", "neutral") for r in results if r.get("comment_id") == comment_id), "neutral"
-        )
+        verdict = next((r for r in results if r.get("comment_id") == comment_id), {})
+        sentiment = str(verdict.get("sentiment") or "neutral")
+        if sentiment == guard.CREEPY:
+            # Never answered, in either mode. An explicit one is hidden too, so only its author sees it.
+            row = _answer_row(channel_id, item, video, sentiment, guard.STATUS_SKIPPED_CREEPY, now)
+            if verdict.get("explicit") is True:
+                service = await manager.get_service(channel_id, PREFER_FOR_REPLYING)
+                hidden = (
+                    await guard.hide(service, comment_id) if service else {"hidden": False, "hide_error": "no token"}
+                )
+                row.update(hidden, explicit=True)
+            await db.comment_replies.insert_one(row)
+            await update_item(
+                db, comment_id, {"status": STATUS_SKIPPED, "skip_reason": guard.SKIP_CREEPY, **row_flags(row)}, now
+            )
+            return STATUS_SKIPPED
         if sentiment != "positive" and not (review and is_reviewable(sentiment)):
             # Same bookkeeping as the cycle's skips, so the comment isn't read again.
             await db.comment_replies.insert_one(
                 _answer_row(channel_id, item, video, sentiment, f"skipped_{sentiment}", now)
             )
             await update_item(db, comment_id, {"status": STATUS_SKIPPED, "skip_reason": f"{sentiment} comment"}, now)
+            return STATUS_SKIPPED
+        if await guard.at_cap(db, channel_id, str(item.get("from_id") or ""), str(item.get("username") or ""), now):
+            await db.comment_replies.insert_one(
+                _answer_row(channel_id, item, video, sentiment, guard.STATUS_SKIPPED_LIMIT, now)
+            )
+            await update_item(db, comment_id, {"status": STATUS_SKIPPED, "skip_reason": guard.SKIP_LIMIT}, now)
             return STATUS_SKIPPED
         reply = await gemini.generate_comment_reply(
             comment_text=item["text"],
