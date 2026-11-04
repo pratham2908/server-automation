@@ -365,13 +365,21 @@ def summary_text(message: DmMessage) -> str:
 
 
 def following_gate(message: DmMessage, channel_id: str, again_title: str = "I followed ✅") -> DmMessage:
-    """What a non-follower gets instead of *message*: the gate text and a button that checks again."""
-    return DmMessage(
+    """What a non-follower gets instead of *message*: the gate text and a button that checks again.
+
+    Built without validation: the gate wraps a reply that already passed it, and wrapping adds one tap
+    of depth, so a reply at the deepest level allowed would otherwise be refused at send time.
+    """
+    return DmMessage.model_construct(
         text=message.followers_only_text,
         buttons=[
             DmButton(type="profile", title="Open profile"),
             DmButton(type="reply", title=again_title, reply=message),
         ],
+        cards=[],
+        quick_replies=[],
+        media=None,
+        followers_only_text="",
     )
 
 
