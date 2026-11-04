@@ -118,8 +118,10 @@ def normalise_post(raw: dict[str, Any]) -> dict[str, Any]:
 def post_stats(raw: dict[str, Any]) -> dict[str, Any]:
     """One Graph media item reduced to its counts (the stats endpoint's row)."""
     row = normalise_post(raw)
-    return {k: row[k] for k in ("id", "permalink", "timestamp", "media_product_type",
-                                "like_count", "comments_count", "view_count")}
+    return {
+        k: row[k]
+        for k in ("id", "permalink", "timestamp", "media_product_type", "like_count", "comments_count", "view_count")
+    }
 
 
 def trim_to_new(

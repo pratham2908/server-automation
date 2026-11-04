@@ -196,20 +196,24 @@ async def publish_settings(channel_id: str, db: AsyncIOMotorDatabase = Depends(g
     # Registered first, so a tap the moment they go live finds its reply.
     await dm_replies.register(db, channel_id, settings_replies(settings), now)
     try:
-        if settings.ice_breakers:
-            await asyncio.to_thread(service.set_messenger_profile, ig_user_id, ice_breakers_body(settings, channel_id))
-        else:
-            await asyncio.to_thread(service.clear_messenger_profile, ig_user_id, ["ice_breakers"])
+        # Menu first: the menu post has been seen to wipe the ice breakers (2026-11-04), so the
+        # ice breakers go up last.
         if settings.menu:
             await asyncio.to_thread(service.set_messenger_profile, ig_user_id, menu_body(settings, channel_id))
         else:
             await asyncio.to_thread(service.clear_messenger_profile, ig_user_id, ["persistent_menu"])
-        # Instagram answered "success" to a set that was not live afterwards (2026-11-04: the ice
-        # breakers were gone once the menu went up), so trust only what reads back.
+        if settings.ice_breakers:
+            await asyncio.to_thread(service.set_messenger_profile, ig_user_id, ice_breakers_body(settings, channel_id))
+        else:
+            await asyncio.to_thread(service.clear_messenger_profile, ig_user_id, ["ice_breakers"])
+        # Instagram has answered "success" to a set that was not live afterwards, so trust only
+        # what reads back, and set a missing one once more before giving up.
         live = await asyncio.to_thread(service.get_messenger_profile, ig_user_id)
         if settings.ice_breakers and not live.get("ice_breakers"):
             await asyncio.to_thread(service.set_messenger_profile, ig_user_id, ice_breakers_body(settings, channel_id))
-            live = await asyncio.to_thread(service.get_messenger_profile, ig_user_id)
+        if settings.menu and not live.get("persistent_menu"):
+            await asyncio.to_thread(service.set_messenger_profile, ig_user_id, menu_body(settings, channel_id))
+        live = await asyncio.to_thread(service.get_messenger_profile, ig_user_id)
     except requests.RequestException as exc:
         raise HTTPException(502, f"Instagram refused: {graph_error_message(exc)[:300]}") from exc
     missing = [
