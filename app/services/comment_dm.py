@@ -27,6 +27,7 @@ from app.services.dm_content import (
     DmMessage,
     DmQuickReply,
 )
+from app.services.meet_city import CityMap, sample_comment_dm
 from app.timezone import IST, assume_utc
 
 PRIVATE_REPLY_WINDOW = timedelta(days=7)
@@ -76,6 +77,9 @@ class DmRule(BaseModel):
     cards: list[DmCard] = Field(default_factory=list, max_length=MAX_CARDS)
     # Chips under the text; a tap counts as them writing back, which opens Instagram's 24-hour window.
     quick_replies: list[DmQuickReply] = Field(default_factory=list, max_length=MAX_QUICK_REPLIES)
+    # Set: the DM is built from the city each comment names (see ``meet_city``), and the text, buttons,
+    # cards and chips above are unused. A comment that names no place gets no DM and no public reply.
+    city_map: CityMap | None = None
 
     @model_validator(mode="after")
     def _is_one_message(self) -> DmRule:
@@ -86,7 +90,10 @@ class DmRule(BaseModel):
         return self
 
     def message(self) -> DmMessage:
-        """The DM this rule sends, as the shared content model."""
+        """The DM this rule sends, as the shared content model. A city rule's DM depends on the comment,
+        so its message here is the one London gets: enough to check the rule can be sent at all."""
+        if self.city_map is not None:
+            return sample_comment_dm(self.city_map)
         return DmMessage(text=self.dm_text, buttons=self.buttons, cards=self.cards, quick_replies=self.quick_replies)
 
     @field_validator("triggers")

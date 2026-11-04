@@ -12,31 +12,42 @@ from __future__ import annotations
 import asyncio
 import random
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 import requests
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import ValidationError
 
 from app.logger import get_logger
-from app.services import comment_log, dm_outbox, dm_replies
+from app.services import city_tally, comment_log, dm_outbox, dm_replies, meet_city
 from app.services.comment_dm import (
     HOURLY_CAP,
+    MAX_ATTEMPTS,
     PRIVATE_REPLY_WINDOW,
+    RETRY_BACKOFF,
+    SKIP_ALREADY_MESSAGED,
     STATUS_FAILED,
     STATUS_PENDING,
+    STATUS_SENDING,
     STATUS_SENT,
+    STATUS_SKIPPED,
     CommentEvent,
     is_rate_limited,
     retry_at,
 )
 from app.services.comment_dm_store import (
+    CITY_CHECK_FIELD,
+    CITY_DONE,
+    CITY_NONE,
+    CITY_PENDING,
     DEFAULT_FIELD,
+    NO_CITY,
     QUEUED,
     channels_with_rules,
     claim_due,
     enqueue,
     fail_interrupted,
+    message_fields,
     own_rules_by_media,
     sent_since,
     update_event,
@@ -50,6 +61,13 @@ from app.services.instagram_tokens import PROVIDER_FACEBOOK, PROVIDER_INSTAGRAM
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
+
+
+class GeminiLike(Protocol):
+    """The one model call the worker makes: which place a city rule's comment asks for."""
+
+    async def extract_place(self, comment_text: str) -> str | None: ...
+
 
 TICK_SECONDS = 10
 POLL_INTERVAL = timedelta(minutes=5)
@@ -106,13 +124,88 @@ async def _send_dm(
     return {"dm_message_id": message_id, "dm_format": "text_fallback", "button_error": button_error}
 
 
-async def send_one(db: AsyncIOMotorDatabase, manager: Any, event: dict[str, Any], now: datetime) -> str:
+async def _messaged_on_reel(db: AsyncIOMotorDatabase, event: dict[str, Any]) -> bool:
+    """Whether this person already got (or is about to get) a DM on this reel from another comment."""
+    found = await db.comment_dm_events.find_one(
+        {
+            "channel_id": event["channel_id"],
+            "media_id": event.get("media_id"),
+            "person": event.get("person"),
+            "comment_id": {"$ne": event["comment_id"]},
+            "status": {"$in": [STATUS_SENDING, STATUS_SENT]},
+        },
+        {"_id": 1},
+    )
+    return found is not None
+
+
+async def resolve_city(
+    db: AsyncIOMotorDatabase, gemini: GeminiLike | None, event: dict[str, Any], now: datetime
+) -> dict[str, Any] | None:
+    """Read the place a city rule's comment asks for and build its DM. None when it gets no DM (recorded)."""
+    comment_id = str(event["comment_id"])
+    text = str(event.get("text") or "")
+    attempts = int(event.get("city_attempts", 0)) + 1
+    place: str | None = None
+    if gemini is not None:
+        try:
+            place = await gemini.extract_place(text)
+        except Exception as exc:  # noqa: BLE001 - any model failure is retried, then given up on, never sent blind
+            logger.warning("[CommentDM] Reading a city from comment %s failed: %s", comment_id, exc)
+            if attempts < MAX_ATTEMPTS:
+                await update_event(
+                    db,
+                    comment_id,
+                    {"status": STATUS_PENDING, "send_after": now + RETRY_BACKOFF, "city_attempts": attempts},
+                    now,
+                )
+                return None
+    answer = meet_city.answer_for_place(place) if place else None
+    if answer is None or answer.outcome == "ignored":
+        fields = {"status": STATUS_SKIPPED, "skip_reason": NO_CITY, CITY_CHECK_FIELD: CITY_NONE, "city_place": place}
+        await update_event(db, comment_id, fields, now)
+        return None
+    city_map = meet_city.CityMap.model_validate(event.get("city_map") or {})
+    again = await _messaged_on_reel(db, event)
+    await city_tally.record_comment(
+        db,
+        channel_id=str(event["channel_id"]),
+        comment_id=comment_id,
+        media_id=str(event.get("media_id") or ""),
+        peer_id=str(event.get("from_id") or ""),
+        username=str(event.get("username") or ""),
+        text=text,
+        answer=answer,
+        dm_queued=not again,
+        commented_at=event.get("commented_at"),
+        now=now,
+    )
+    city = {CITY_CHECK_FIELD: CITY_DONE, "city": answer.model_dump(), "city_place": place}
+    if again:
+        await update_event(
+            db, comment_id, {"status": STATUS_SKIPPED, "skip_reason": SKIP_ALREADY_MESSAGED, **city}, now
+        )
+        return None
+    content = message_fields(meet_city.comment_dm(answer, city_map))
+    await update_event(db, comment_id, {**content, **city}, now)
+    return {**event, **content, **city}
+
+
+async def send_one(
+    db: AsyncIOMotorDatabase, manager: Any, event: dict[str, Any], now: datetime, gemini: GeminiLike | None = None
+) -> str:
     """DM the commenter, then reply to the comment. Returns the status the event ends in."""
     comment_id = str(event["comment_id"])
     channel_id = str(event["channel_id"])
     if await sent_since(db, channel_id, now - timedelta(hours=1)) >= HOURLY_CAP:
         await update_event(db, comment_id, {"status": STATUS_PENDING, "send_after": now + CAP_PAUSE}, now)
         return STATUS_PENDING
+    if event.get(CITY_CHECK_FIELD) == CITY_PENDING:
+        resolved_event = await resolve_city(db, gemini, event, now)
+        if resolved_event is None:
+            stored = await db.comment_dm_events.find_one({"comment_id": comment_id}, {"status": 1})
+            return str((stored or {}).get("status") or STATUS_SKIPPED)
+        event = resolved_event
     # Instagram Login can send a private reply with the comment permission alone; Facebook Login also
     # needs instagram_manage_messages, which the shared token lacks — so prefer Instagram Login.
     resolved = await manager.get_service_and_user_id(channel_id, prefer=PROVIDER_INSTAGRAM)
@@ -219,18 +312,18 @@ async def _poll_all(db: AsyncIOMotorDatabase, manager: Any, now: datetime) -> No
                 logger.info("[CommentDM] Poll queued %d DM(s) on %s", queued, channel_id)
 
 
-async def _send_due(db: AsyncIOMotorDatabase, manager: Any) -> None:
+async def _send_due(db: AsyncIOMotorDatabase, manager: Any, gemini: GeminiLike | None) -> None:
     for _ in range(MAX_SENDS_PER_TICK):
         now = now_ist()
         event = await claim_due(db, now)
         if event is None:
             break
-        await send_one(db, manager, event, now)
+        await send_one(db, manager, event, now, gemini)
     # Replies owed for taps on our buttons and chips ride the same tick.
     await dm_outbox.send_due(db, manager, now_ist)
 
 
-async def run_comment_dm_worker(db: AsyncIOMotorDatabase, manager: Any) -> None:
+async def run_comment_dm_worker(db: AsyncIOMotorDatabase, manager: Any, gemini: GeminiLike | None = None) -> None:
     """Long-running loop: sends due DMs every few seconds and polls for missed comments every few minutes."""
     now = now_ist()
     failed = await fail_interrupted(db, now - STUCK_AFTER, now) + await dm_outbox.fail_interrupted(db, now)
@@ -240,7 +333,7 @@ async def run_comment_dm_worker(db: AsyncIOMotorDatabase, manager: Any) -> None:
     logger.info("[CommentDM] Worker started (tick %ds, poll every %s)", TICK_SECONDS, POLL_INTERVAL)
     while True:
         try:
-            await _send_due(db, manager)
+            await _send_due(db, manager, gemini)
             if now_ist() >= next_poll:
                 await _poll_all(db, manager, now_ist())
                 next_poll = now_ist() + POLL_INTERVAL
