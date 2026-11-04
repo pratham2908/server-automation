@@ -214,3 +214,10 @@ def test_ice_breakers_and_menu_are_messenger_profile_bodies() -> None:
     assert site == {"type": "web_url", "title": "Website", "url": "https://tryalgoviz.com"}
     assert postback["type"] == "postback" and postback["payload"].startswith("dmr:")
     assert [m.text for m in settings_replies(settings)] == ["Algorithm visuals", "here"]
+
+
+def test_the_gate_wraps_even_the_deepest_reply() -> None:
+    deepest = DmMessage.model_validate({**_nested(MAX_REPLY_DEPTH), "followers_only_text": "Follow first"})
+    gate = following_gate(deepest, "ch")
+    [built] = build_messages(gate, CTX)
+    assert built["attachment"]["payload"]["buttons"][1]["payload"] == reply_payload("ch", deepest)
