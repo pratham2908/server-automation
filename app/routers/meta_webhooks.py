@@ -16,7 +16,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_db
 from app.logger import get_logger
-from app.services import comment_ai_reply_store, comment_log, dm_store, meta_webhook_config
+from app.services import comment_ai_reply_store, comment_log, dm_outbox, dm_store, meta_webhook_config
 from app.services.comment_dm import parse_comment_webhook, verify_signature
 from app.services.comment_dm_store import QUEUED, channel_for_webhook, enqueue
 from app.timezone import now_ist
@@ -58,6 +58,8 @@ async def receive(request: Request, db: AsyncIOMotorDatabase = Depends(get_db)) 
     now = now_ist()
     # DMs ride the same subscription: keep each one so the inbox never reads it from Instagram again.
     await dm_store.record_webhook(db, payload if isinstance(payload, dict) else {}, now)
+    # Taps on our reply buttons, chips, ice breakers and menu: the worker sends what each one asks for.
+    await dm_outbox.record_webhook(db, payload if isinstance(payload, dict) else {}, now)
     rng = random.Random()
     queued = 0
     for event in events:

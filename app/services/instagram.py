@@ -55,6 +55,19 @@ FEED_MEDIA_FIELDS = (
 STATS_MEDIA_FIELDS = "id,permalink,timestamp,media_type,media_product_type,like_count,comments_count,view_count"
 
 
+def graph_error_code(exc: Exception) -> int | None:
+    """Meta's numeric error code for a failed Graph call, or None when the body carries none."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    try:
+        code = (response.json().get("error") or {}).get("code")
+    except ValueError:
+        # Not JSON (a proxy error page): no Graph code to classify by.
+        return None
+    return int(code) if isinstance(code, int) else None
+
+
 def graph_error_message(exc: Exception) -> str:
     """Meta's own words for a failed Graph call.
 
@@ -793,6 +806,40 @@ class InstagramService:
         """
         body = {"recipient": {"id": recipient_id}, "message": {"text": text}}
         return str(self._post(f"{self._user_node(ig_user_id)}/messages", json_body=body).get("message_id", ""))
+
+    def send_message(self, ig_user_id: str, recipient_id: str, message: dict[str, Any]) -> str:
+        """Send any Send API ``message`` object (text, template, media, sticker) into a conversation.
+
+        The same 24-hour rule as ``send_dm`` applies: a tap on one of our buttons counts as the person
+        writing, so a reply to a tap may always go.
+        """
+        body = {"recipient": {"id": recipient_id}, "message": message}
+        return str(self._post(f"{self._user_node(ig_user_id)}/messages", json_body=body).get("message_id", ""))
+
+    def messaging_profile(self, igsid: str) -> dict[str, Any]:
+        """What Instagram tells a business about someone who has messaged it, including whether they
+        follow us. Fails for anyone who hasn't written to (or tapped something in) our DMs."""
+        fields = "username,name,is_user_follow_business,is_business_follow_user,follower_count,is_verified_user"
+        return self._get(igsid, {"fields": fields})
+
+    _MESSENGER_PROFILE_FIELDS = ("ice_breakers", "persistent_menu")
+
+    def get_messenger_profile(self, ig_user_id: str) -> dict[str, Any]:
+        """The account's live ice breakers and persistent menu, as Instagram holds them."""
+        params = {"fields": ",".join(self._MESSENGER_PROFILE_FIELDS), "platform": "instagram"}
+        data = self._get(f"{self._user_node(ig_user_id)}/messenger_profile", params).get("data") or []
+        return dict(data[0]) if data and isinstance(data[0], dict) else {}
+
+    def set_messenger_profile(self, ig_user_id: str, body: dict[str, Any]) -> bool:
+        """Replace the fields in *body* (ice breakers and/or the persistent menu) on the live account."""
+        return bool(self._post(f"{self._user_node(ig_user_id)}/messenger_profile", json_body=body).get("result"))
+
+    def clear_messenger_profile(self, ig_user_id: str, fields: list[str]) -> bool:
+        """Remove *fields* from the live account."""
+        import json
+
+        params = {"fields": json.dumps(fields), "platform": "instagram"}
+        return bool(self._delete(f"{self._user_node(ig_user_id)}/messenger_profile", params).get("result"))
 
     def own_username(self, ig_user_id: str) -> str | None:
         """This account's handle, to tell which side of a conversation is us."""

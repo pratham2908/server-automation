@@ -15,7 +15,8 @@ from pydantic import BaseModel
 
 from app.timezone import to_ist_iso
 
-DmKind = Literal["text", "attachment", "share", "story", "unsupported"]
+# "tap": they tapped one of our reply buttons, ice breakers or menu items; the text is its title.
+DmKind = Literal["text", "attachment", "share", "story", "unsupported", "tap"]
 
 
 class DmMessageOut(BaseModel):

@@ -427,6 +427,7 @@ from app.routers import (
     fallback_video,
     followers,
     growth,
+    instagram_dm_setup,
     instagram_dms,
     instagram_insights,
     meta_webhooks,
@@ -485,6 +486,7 @@ app.include_router(observability.router)
 app.include_router(growth.router)
 app.include_router(instagram_insights.router)
 app.include_router(instagram_dms.router)
+app.include_router(instagram_dm_setup.router)
 app.include_router(youtube_insights.router)
 app.include_router(threads.router)
 app.include_router(views_series.router)

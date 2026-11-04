@@ -17,14 +17,24 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.services.dm_content import (
+    BUTTON_TEXT_LIMIT,
+    MAX_BUTTONS,
+    MAX_CARDS,
+    MAX_QUICK_REPLIES,
+    DmButton,
+    DmCard,
+    DmMessage,
+    DmQuickReply,
+)
 from app.timezone import IST, assume_utc
 
 PRIVATE_REPLY_WINDOW = timedelta(days=7)
 # A queued DM still has to go out before Meta's window shuts, retries included.
 ENQUEUE_WINDOW = PRIVATE_REPLY_WINDOW - timedelta(hours=6)
-# Meta allows ~750 private replies an hour per account; staying far below means a reel taking off,
-# plus retries, never reaches the ceiling.
-HOURLY_CAP = 200
+# Meta allows ~750 private replies an hour per account. 500 leaves room for retries under that
+# ceiling without holding a viral reel's DMs back (owner, 2026-11-04: was 200).
+HOURLY_CAP = 500
 MAX_ATTEMPTS = 3
 RETRY_BACKOFF = timedelta(minutes=5)
 # Graph error codes that mean "too many calls, try later" rather than "this will never work".
@@ -34,10 +44,6 @@ MAX_TRIGGERS = 20
 MAX_REPLY_TEXTS = 10
 DM_TEXT_LIMIT = 1000  # Instagram's cap on one message
 REPLY_TEXT_LIMIT = 300
-# Instagram's button template: at most 3 buttons, 20-character labels, and 640 characters of text.
-MAX_BUTTONS = 3
-BUTTON_TITLE_LIMIT = 20
-BUTTON_TEXT_LIMIT = 640
 
 STATUS_PENDING = "pending"
 STATUS_SENDING = "sending"
@@ -49,41 +55,37 @@ EventStatus = Literal["pending", "sending", "sent", "failed", "skipped"]
 ANY_COMMENT = "*"
 
 
-class DmButton(BaseModel):
-    """A tappable link under the DM's text."""
-
-    title: str = Field(min_length=1, max_length=BUTTON_TITLE_LIMIT)
-    url: str = Field(max_length=2000, pattern=r"^https?://\S+$")
-
-    @field_validator("title")
-    @classmethod
-    def _strip_title(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("button title must not be blank")
-        return stripped
-
-
 class DmRule(BaseModel):
     """What one reel (or a channel's default) does with matching comments."""
 
     enabled: bool = True
     # Empty means every comment triggers; otherwise a comment must contain one of these words or phrases.
     triggers: list[str] = Field(default_factory=list, max_length=MAX_TRIGGERS)
-    dm_text: str = Field(min_length=1, max_length=DM_TEXT_LIMIT)
+    # The DM's text. Empty only when the DM is a carousel of cards.
+    dm_text: str = Field(default="", max_length=DM_TEXT_LIMIT)
     # One is picked at random per comment, so a burst of replies doesn't read as one pasted line.
     # Empty means no public reply, only the DM.
     reply_texts: list[str] = Field(default_factory=list, max_length=MAX_REPLY_TEXTS)
     # Roughly how long after the comment the DM goes out; jittered so it doesn't land instantly.
     delay_seconds: int = Field(default=45, ge=0, le=3600)
-    # Links shown as buttons under the text. Empty sends plain text.
+    # Buttons under the text: a link, our profile, or a reply sent when tapped. Empty sends plain text.
     buttons: list[DmButton] = Field(default_factory=list, max_length=MAX_BUTTONS)
+    # A carousel instead of text and buttons.
+    cards: list[DmCard] = Field(default_factory=list, max_length=MAX_CARDS)
+    # Chips under the text; a tap counts as them writing back, which opens Instagram's 24-hour window.
+    quick_replies: list[DmQuickReply] = Field(default_factory=list, max_length=MAX_QUICK_REPLIES)
 
     @model_validator(mode="after")
-    def _buttons_fit_the_template(self) -> DmRule:
+    def _is_one_message(self) -> DmRule:
         if self.buttons and len(self.dm_text) > BUTTON_TEXT_LIMIT:
             raise ValueError(f"with buttons, the message must be at most {BUTTON_TEXT_LIMIT} characters")
+        # A private reply is exactly one message, so it carries no media; everything else must build.
+        self.message()
         return self
+
+    def message(self) -> DmMessage:
+        """The DM this rule sends, as the shared content model."""
+        return DmMessage(text=self.dm_text, buttons=self.buttons, cards=self.cards, quick_replies=self.quick_replies)
 
     @field_validator("triggers")
     @classmethod
@@ -98,10 +100,7 @@ class DmRule(BaseModel):
     @field_validator("dm_text")
     @classmethod
     def _strip_dm(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("dm_text must not be blank")
-        return stripped
+        return value.strip()
 
     @field_validator("reply_texts")
     @classmethod
@@ -234,30 +233,6 @@ def send_delay(rule: DmRule, rng: random.Random) -> timedelta:
 
 def pick_reply(rule: DmRule, rng: random.Random) -> str | None:
     return rng.choice(rule.reply_texts) if rule.reply_texts else None
-
-
-def dm_message(text: str, buttons: list[DmButton]) -> dict[str, Any]:
-    """The ``message`` object for a DM: plain text, or Instagram's button template when there are buttons."""
-    if not buttons:
-        return {"text": text}
-    return {
-        "attachment": {
-            "type": "template",
-            "payload": {
-                "template_type": "button",
-                "text": text,
-                "buttons": [{"type": "web_url", "url": b.url, "title": b.title} for b in buttons],
-            },
-        }
-    }
-
-
-def text_with_links(text: str, buttons: list[DmButton]) -> str:
-    """The fallback when Instagram won't take buttons on this message: the links written under the text."""
-    if not buttons:
-        return text
-    lines = "\n".join(f"{b.title}: {b.url}" for b in buttons)
-    return f"{text}\n\n{lines}"[:DM_TEXT_LIMIT]
 
 
 def is_rate_limited(code: int | None) -> bool:

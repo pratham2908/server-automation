@@ -247,6 +247,39 @@ async def record_sent(
     )
 
 
+async def record_tap(
+    db: AsyncIOMotorDatabase,
+    channel: Mapping[str, Any],
+    peer_id: str,
+    tap_id: str,
+    title: str,
+    at: datetime,
+    now: datetime,
+) -> bool:
+    """A tap on one of our buttons, ice breakers or menu items, kept as their side of the chat.
+
+    Instagram shows the tap as their message, and it opens the 24-hour window the way a message does,
+    so the inbox counts it as one: kind ``tap``, the button's title as its text.
+    """
+    channel_id = str(channel["channel_id"])
+    await _touch_conversation(db, channel_id, peer_id, {}, history=None, now=now)
+    return await _insert_message(
+        db,
+        {
+            "message_id": tap_id,
+            "channel_id": channel_id,
+            "peer_id": peer_id,
+            "from_me": False,
+            "text": title,
+            "kind": "tap",
+            "link": None,
+            "created_at": at,
+            "source": SOURCE_WEBHOOK,
+            "logged_at": now,
+        },
+    )
+
+
 def _peer(raw: Mapping[str, Any], own: set[str], own_username: str) -> Mapping[str, Any]:
     participants = [p for p in (raw.get("participants") or {}).get("data") or [] if isinstance(p, Mapping)]
     others = [

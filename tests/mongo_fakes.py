@@ -101,10 +101,11 @@ class Cursor:
 
 
 class Result:
-    def __init__(self, matched: int = 0, inserted_id: Any = None) -> None:
+    def __init__(self, matched: int = 0, inserted_id: Any = None, upserted_id: Any = None) -> None:
         self.matched_count = matched
         self.modified_count = matched
         self.inserted_id = inserted_id
+        self.upserted_id = upserted_id
 
 
 class Collection:
@@ -125,17 +126,20 @@ class Collection:
 
     async def update_one(self, query: dict[str, Any], update: dict[str, Any], upsert: bool = False) -> Result:
         target = next((d for d in self.docs if matches(d, query)), None)
+        upserted = None
         if target is None:
             if not upsert:
                 return Result(0)
             target = {k: v for k, v in query.items() if not isinstance(v, dict)}
-            target["_id"] = next(_ids)
+            target["_id"] = upserted = next(_ids)
             self.docs.append(target)
+            for k, v in (update.get("$setOnInsert") or {}).items():
+                _set(target, k, copy.deepcopy(v))
         for k, v in (update.get("$set") or {}).items():
             _set(target, k, copy.deepcopy(v))
         for k in update.get("$unset") or {}:
             _unset(target, k)
-        return Result(1)
+        return Result(1, upserted_id=upserted)
 
     async def update_many(self, query: dict[str, Any], update: dict[str, Any]) -> Result:
         targets = [d for d in self.docs if matches(d, query)]

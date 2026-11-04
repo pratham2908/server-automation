@@ -16,9 +16,10 @@ from typing import Any
 
 import requests
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import ValidationError
 
 from app.logger import get_logger
-from app.services import comment_log
+from app.services import comment_log, dm_outbox, dm_replies
 from app.services.comment_dm import (
     HOURLY_CAP,
     PRIVATE_REPLY_WINDOW,
@@ -26,11 +27,8 @@ from app.services.comment_dm import (
     STATUS_PENDING,
     STATUS_SENT,
     CommentEvent,
-    DmButton,
-    dm_message,
     is_rate_limited,
     retry_at,
-    text_with_links,
 )
 from app.services.comment_dm_store import (
     DEFAULT_FIELD,
@@ -43,8 +41,10 @@ from app.services.comment_dm_store import (
     sent_since,
     update_event,
 )
+from app.services.dm_content import DmMessage, fallback_text, has_template, main_message
+from app.services.dm_sender import context_for, r2_signer
 from app.services.error_reporting import get_error_service
-from app.services.instagram import graph_error_message
+from app.services.instagram import graph_error_code, graph_error_message
 from app.services.instagram_content_analysis import parse_published_at
 from app.services.instagram_tokens import PROVIDER_FACEBOOK, PROVIDER_INSTAGRAM
 from app.timezone import now_ist
@@ -61,40 +61,48 @@ CAP_PAUSE = timedelta(minutes=5)
 POLL_REEL_LIMIT = 30
 
 
-def _graph_code(exc: Exception) -> int | None:
-    response = getattr(exc, "response", None)
-    if response is None:
-        return None
-    try:
-        code = (response.json().get("error") or {}).get("code")
-    except ValueError:
-        # Not JSON (a proxy error page): no Graph code to classify by.
-        return None
-    return int(code) if isinstance(code, int) else None
+def event_message(event: dict[str, Any]) -> DmMessage:
+    """The DM a queued event sends: its text plus the buttons, cards and chips copied from its rule."""
+    return DmMessage(
+        text=str(event.get("dm_text") or ""),
+        buttons=event.get("buttons") or [],
+        cards=event.get("cards") or [],
+        quick_replies=event.get("quick_replies") or [],
+    )
 
 
-async def _send_dm(service: Any, ig_user_id: str, event: dict[str, Any]) -> dict[str, Any]:
-    """Send the DM, with buttons when the rule has them. Returns the fields to record; raises when it can't send.
+def _format(message: DmMessage) -> str:
+    if message.cards:
+        return "cards"
+    return "buttons" if message.buttons or message.quick_replies else "text"
 
-    Meta doesn't document whether a private reply may carry a template. If it refuses the buttons
-    (anything but a rate limit), the same DM goes again as text with the links written out, so a
-    button never costs the commenter their message.
+
+async def _send_dm(
+    db: AsyncIOMotorDatabase, service: Any, ig_user_id: str, channel: dict[str, Any], event: dict[str, Any]
+) -> dict[str, Any]:
+    """Send the DM as its rule composed it. Returns the fields to record; raises when it can't send.
+
+    Meta doesn't document which templates a private reply may carry. If it refuses one (anything but a
+    rate limit), the same DM goes again as text with the links written out, so a button or a card never
+    costs the commenter their message. Reply buttons and chips can't survive as text and are dropped.
     """
     comment_id = str(event["comment_id"])
-    text = str(event["dm_text"])
-    buttons = [DmButton.model_validate(b) for b in event.get("buttons") or []]
+    message = event_message(event)
+    ctx = context_for(channel, message, r2_signer())
+    built = main_message(message, ctx)
+    if built is None:
+        raise ValueError("the DM is empty")
+    # Before sending, so a tap a second later finds the reply its button names.
+    await dm_replies.register_message(db, str(channel["channel_id"]), message, now_ist())
     try:
-        message_id = await asyncio.to_thread(
-            service.send_private_reply, ig_user_id, comment_id, dm_message(text, buttons)
-        )
-        return {"dm_message_id": message_id, "dm_format": "buttons" if buttons else "text"}
+        message_id = await asyncio.to_thread(service.send_private_reply, ig_user_id, comment_id, built)
+        return {"dm_message_id": message_id, "dm_format": _format(message)}
     except requests.RequestException as exc:
-        if not buttons or is_rate_limited(_graph_code(exc)):
+        if not has_template(message) or is_rate_limited(graph_error_code(exc)):
             raise
         button_error = graph_error_message(exc)
-    message_id = await asyncio.to_thread(
-        service.send_private_reply, ig_user_id, comment_id, {"text": text_with_links(text, buttons)}
-    )
+    text = fallback_text(message, ctx)
+    message_id = await asyncio.to_thread(service.send_private_reply, ig_user_id, comment_id, {"text": text})
     return {"dm_message_id": message_id, "dm_format": "text_fallback", "button_error": button_error}
 
 
@@ -113,11 +121,18 @@ async def send_one(db: AsyncIOMotorDatabase, manager: Any, event: dict[str, Any]
         return STATUS_FAILED
     service, ig_user_id = resolved
     attempts = int(event.get("attempts", 0)) + 1
+    channel = await db.channels.find_one({"channel_id": channel_id}) or {"channel_id": channel_id}
     try:
-        sent = await _send_dm(service, ig_user_id, event)
+        sent = await _send_dm(db, service, ig_user_id, channel, event)
+    except (ValueError, ValidationError) as exc:
+        # Can't be built here (a profile button with no username, an upload with no storage): no retry helps.
+        error = str(exc)[:500]
+        logger.warning("[CommentDM] DM for comment %s on %s can't be built: %s", comment_id, channel_id, error)
+        await update_event(db, comment_id, {"status": STATUS_FAILED, "attempts": attempts, "error": error}, now)
+        return STATUS_FAILED
     except requests.RequestException as exc:
         error = graph_error_message(exc)
-        again = retry_at(attempts, now) if is_rate_limited(_graph_code(exc)) else None
+        again = retry_at(attempts, now) if is_rate_limited(graph_error_code(exc)) else None
         if again is not None:
             retry = {"status": STATUS_PENDING, "send_after": again, "attempts": attempts, "error": error}
             await update_event(db, comment_id, retry, now)
@@ -209,14 +224,16 @@ async def _send_due(db: AsyncIOMotorDatabase, manager: Any) -> None:
         now = now_ist()
         event = await claim_due(db, now)
         if event is None:
-            return
+            break
         await send_one(db, manager, event, now)
+    # Replies owed for taps on our buttons and chips ride the same tick.
+    await dm_outbox.send_due(db, manager, now_ist)
 
 
 async def run_comment_dm_worker(db: AsyncIOMotorDatabase, manager: Any) -> None:
     """Long-running loop: sends due DMs every few seconds and polls for missed comments every few minutes."""
     now = now_ist()
-    failed = await fail_interrupted(db, now - STUCK_AFTER, now)
+    failed = await fail_interrupted(db, now - STUCK_AFTER, now) + await dm_outbox.fail_interrupted(db, now)
     if failed:
         logger.warning("[CommentDM] %d DM(s) were cut off by a restart and marked failed", failed)
     next_poll = now
