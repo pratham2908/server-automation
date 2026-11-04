@@ -272,7 +272,7 @@ class TestEnqueue:
     async def test_the_rule_buttons_travel_with_the_queued_dm(self):
         db = _db_with_rule(_rule(buttons=[BUTTON]))
         await _enqueue(db, _event(created_at=NOW))
-        assert db.comment_dm_events.docs[0]["buttons"] == [BUTTON]
+        assert db.comment_dm_events.docs[0]["buttons"] == [{**BUTTON, "type": "url", "reply": None}]
 
     async def test_summary_counts_each_outcome(self):
         def ev(i: int, **kw: Any) -> dict[str, Any]:

@@ -21,7 +21,9 @@ from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services import comment_dm_store as store
 from app.services import meta_webhook_config
-from app.services.comment_dm import DmButton, DmRule, StoredRule
+from app.services.comment_dm import DmRule, StoredRule
+from app.services.dm_content import DmButton, DmCard, DmQuickReply, main_message
+from app.services.dm_sender import context_for, r2_signer
 from app.services.instagram import graph_error_message
 from app.services.instagram_tokens import PROVIDER_FACEBOOK, PROVIDER_INSTAGRAM, has_provider
 from app.timezone import now_ist
@@ -37,8 +39,9 @@ config_router = APIRouter(prefix="/api/v1/comment-dm", tags=["comment-dm"], depe
 MEDIA_ID = Path(pattern=r"^[0-9]{5,32}$")
 # Our video ids are UUIDs.
 VIDEO_ID = Path(pattern=r"^[A-Za-z0-9-]{8,64}$")
-# The webhook fields we keep subscribed: comments drive the DMs; messages was already on and stays on.
-WEBHOOK_FIELDS = ["comments", "messages"]
+# The webhook fields we keep subscribed: comments drive the DMs, messages fill the inbox (and carry chip
+# taps), and postbacks carry taps on reply buttons, ice breakers and menu items.
+WEBHOOK_FIELDS = ["comments", "messages", "messaging_postbacks"]
 WEBHOOK_FIELDS_FIELD = "instagram_webhook_fields"
 
 
@@ -91,6 +94,8 @@ class EventOut(BaseModel):
     reply_error: str | None = None
     dm_text: str = ""
     buttons: list[DmButton] = []
+    cards: list[DmCard] = []
+    quick_replies: list[DmQuickReply] = []
     # "text", "buttons", or "text_fallback" when Instagram refused the buttons and the links went as text.
     dm_format: str | None = None
     button_error: str | None = None
@@ -141,6 +146,17 @@ async def _channel(db: AsyncIOMotorDatabase, channel_id: str) -> dict[str, Any]:
     return dict(channel)
 
 
+def _check_sendable(channel: dict[str, Any], rule: DmRule) -> None:
+    """Refuse a rule now that would fail at every send: a profile button with no handle on record, an
+    uploaded picture with no storage. Building it here is the same build the worker does."""
+    message = rule.message()
+    try:
+        ctx = context_for(channel, message, r2_signer())
+        main_message(message, ctx)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 async def _titles(db: AsyncIOMotorDatabase, channel_id: str, media_ids: list[str]) -> dict[str, str]:
     cursor = db.videos.find(
         {"channel_id": channel_id, "instagram_media_id": {"$in": media_ids}}, {"instagram_media_id": 1, "title": 1}
@@ -185,7 +201,7 @@ async def overview(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) 
 
 @router.put("/default", response_model=StoredRule)
 async def put_default(channel_id: str, rule: DmRule, db: AsyncIOMotorDatabase = Depends(get_db)) -> StoredRule:
-    await _channel(db, channel_id)
+    _check_sendable(await _channel(db, channel_id), rule)
     return await store.save_default(db, channel_id, rule, now_ist())
 
 
@@ -201,7 +217,7 @@ async def delete_default(channel_id: str, db: AsyncIOMotorDatabase = Depends(get
 async def put_reel_rule(
     channel_id: str, rule: DmRule, media_id: str = MEDIA_ID, db: AsyncIOMotorDatabase = Depends(get_db)
 ) -> StoredRule:
-    await _channel(db, channel_id)
+    _check_sendable(await _channel(db, channel_id), rule)
     return await store.save_reel_rule(db, channel_id, media_id, rule, now_ist())
 
 
@@ -233,7 +249,7 @@ async def scheduled_videos(channel_id: str, db: AsyncIOMotorDatabase = Depends(g
 async def put_video_rule(
     channel_id: str, rule: DmRule, video_id: str = VIDEO_ID, db: AsyncIOMotorDatabase = Depends(get_db)
 ) -> StoredRule:
-    await _channel(db, channel_id)
+    _check_sendable(await _channel(db, channel_id), rule)
     await _video(db, channel_id, video_id)
     return await store.save_video_rule(db, channel_id, video_id, rule, now_ist())
 

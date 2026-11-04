@@ -15,11 +15,13 @@ from typing import Any, Literal
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services import dm_store
+from app.services.dm_content import DmMessage
+from app.services.dm_sender import deliver, r2_signer
 from app.services.dm_stats import WINDOWS, awaiting_reply, dm_stats, flow, started_by
 from app.services.follower_export import follower_handles
 from app.services.instagram import InstagramService, graph_error_message
@@ -72,14 +74,23 @@ class ThreadOut(BaseModel):
 
 class SendIn(BaseModel):
     recipient_id: str = Field(pattern=r"^[0-9]{5,32}$")
-    # Instagram caps a text DM at 1,000 characters.
-    text: str = Field(min_length=1, max_length=1000)
+    # Plain text (Instagram caps one at 1,000 characters), or ``message`` for anything richer.
+    text: str = Field(default="", max_length=1000)
+    message: DmMessage | None = None
+
+    @model_validator(mode="after")
+    def _one_of(self) -> SendIn:
+        if bool(self.text.strip()) == (self.message is not None):
+            raise ValueError("send either text or a message, not both or neither")
+        return self
 
 
 class SendOut(BaseModel):
     channel_id: str
     recipient_id: str
     message_id: str
+    # Every message the send became (media first); ``message_id`` is the last.
+    message_ids: list[str] = Field(default_factory=list)
 
 
 async def _service(channel_id: str, db: AsyncIOMotorDatabase) -> tuple[InstagramService, str]:
@@ -312,10 +323,26 @@ async def send_dm(channel_id: str, body: SendIn, db: AsyncIOMotorDatabase = Depe
     A refusal comes back with Instagram's own reason.
     """
     service, ig_user_id = await _service(channel_id, db)
+    if body.message is not None:
+        channel = await _channel(db, channel_id)
+        try:
+            ids = await deliver(
+                db, service, ig_user_id, channel, body.recipient_id, body.message, now_ist(), r2_signer()
+            )
+        except requests.RequestException as exc:
+            raise _refused(exc) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return SendOut(
+            channel_id=channel_id, recipient_id=body.recipient_id, message_id=ids[-1] if ids else "", message_ids=ids
+        )
+    text = body.text.strip()
     try:
-        message_id = await asyncio.to_thread(service.send_dm, ig_user_id, body.recipient_id, body.text)
+        message_id = await asyncio.to_thread(service.send_dm, ig_user_id, body.recipient_id, text)
     except requests.RequestException as exc:
         raise _refused(exc) from exc
     if message_id:
-        await dm_store.record_sent(db, channel_id, body.recipient_id, message_id, body.text, now_ist())
-    return SendOut(channel_id=channel_id, recipient_id=body.recipient_id, message_id=message_id)
+        await dm_store.record_sent(db, channel_id, body.recipient_id, message_id, text, now_ist())
+    return SendOut(
+        channel_id=channel_id, recipient_id=body.recipient_id, message_id=message_id, message_ids=[message_id]
+    )
