@@ -15,6 +15,7 @@ from typing import Any
 from app.logger import get_logger
 from app.services.ai_call_logger import schedule_ai_call_log
 from app.services.comment_reply_text import humanise_reply
+from app.services.meet_city import PlaceRead
 from app.services.one_ai_client import AI_CALL_TIMEOUT_S, get_one_ai
 
 logger = get_logger(__name__)
@@ -1174,33 +1175,42 @@ Classify every comment. Do not skip any."""
         except (json.JSONDecodeError, TypeError):
             return []
 
-    async def extract_place(self, comment_text: str) -> str | None:
-        """The city (or other place) an Instagram comment asks for a map of, or None when it names none.
+    async def extract_place(self, comment_text: str) -> PlaceRead | None:
+        """Which place an Instagram comment asks for a map of, the city it is in, and whether it asks at all.
 
         For a "comment your city and I'll send you the map" reel. Comments are loose ("do Lagos next",
-        "where's Toronto", "Mumbai please!!"), and a word list can't tell those from praise that happens to
-        be a place name ("nice"), which is why this is a model call. Raises when the call fails, so the
-        caller can try again rather than read a failure as "no place".
+        "where's Toronto"), a word list can't tell those from praise that happens to be a place name
+        ("nice"), and a neighbourhood ("Battersea") has to be read as its city (London). None when the
+        comment names no place. Raises when the call fails, so the caller retries rather than read a
+        failure as "no place".
         """
-        prompt = f"""A map account's reels say "Comment your city and I'll send you the map". Read one comment and say which place it asks for.
+        prompt = f"""A map account's reels say "Comment your city and I'll send you the map". Read one comment.
 
-Rules:
-- Return the city or town the commenter names or asks for, in its usual English spelling ("Lagos", "Toronto", "São Paulo").
-- A region or country they ask for ("Kerala", "Nigeria") counts: return it.
-- Praise, emoji, jokes and questions about the video are NOT a place: return null. A word that is also a place name counts only when they ask for it as a place: "nice" or "nice video" is praise (null), "Nice please, the French one" asks for Nice.
-- One place only. If they name several, the first.
+Return JSON with three keys:
+- "place": the place the commenter names, in its usual English spelling ("Lagos", "Battersea", "São Paulo", "Nigeria"). null when they name no place.
+- "city": the city that place is in. The place itself when it is a city or town. For a neighbourhood, borough, district or suburb, its city ("Battersea" -> "London", "Brooklyn" -> "New York", "Shibuya" -> "Tokyo", "Montmartre" -> "Paris", "Bandra" -> "Mumbai", "Koramangala" -> "Bengaluru"). null for a region, state or country.
+- "asks": true when they want a map of it or are telling us their city or where they are from ("Lagos", "do Toronto next", "from Kochi 🙏", "Battersea pls"). false when the place only comes up in passing, about something else ("getting to battersea is a nightmare tho", "I went to Paris once, loved it").
+
+Praise, emoji, jokes and questions about the video name no place: {{"place": null, "city": null, "asks": false}}. A word that is also a place name counts only when used as a place: "nice" or "nice video" is praise, "Nice please, the French one" asks for Nice. One place only; if they name several, the first.
 
 Comment: {json.dumps(comment_text, ensure_ascii=False)}
 
-Answer with JSON only: {{"place": "Lagos"}} or {{"place": null}}"""
+Answer with the JSON object only."""
         text = await self._generate_preferring(prompt, self._COMMENT_SENTIMENT_MODEL, task="comment_place")
         try:
-            place = _loads_json_object(text).get("place")
+            raw = _loads_json_object(text)
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError(f"place answer is not JSON: {text[:200]!r}") from exc
-        if not isinstance(place, str):
+
+        def _name(value: Any) -> str | None:
+            if not isinstance(value, str):
+                return None
+            return value.strip() or None
+
+        place, city = _name(raw.get("place")), _name(raw.get("city"))
+        if place is None and city is None:
             return None
-        return place.strip() or None
+        return PlaceRead(place=place, city=city, asks=raw.get("asks") is not False)
 
     async def generate_comment_reply(
         self,
