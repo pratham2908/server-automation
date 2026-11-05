@@ -82,9 +82,19 @@ def test_a_place_mentioned_in_passing_gets_nothing() -> None:
     assert answer_for_read(passing).outcome == "ignored"
 
 
-def test_only_a_short_comment_is_matched_without_the_model() -> None:
-    assert quick_city("London 🔥") == "london" and quick_city("San Francisco plsss") == "san-francisco"
-    assert quick_city("getting to London is a nightmare tho") is None
+@pytest.mark.parametrize(
+    "comment",
+    ["London", "London 🔥", "Mumbai please!!", "do Delhi next", "my city Pune", "San Francisco plsss", "NYC pls 🙏"],
+)
+def test_the_city_alone_or_plainly_asked_for_needs_no_model(comment: str) -> None:
+    assert quick_city(comment) is not None
+
+
+@pytest.mark.parametrize(
+    "comment", ["Love London", "London rocks", "getting to London is a nightmare tho", "Paris was better"]
+)
+def test_a_city_in_any_other_comment_goes_to_the_model(comment: str) -> None:
+    assert quick_city(comment) is None
 
 
 def _all_text(message: Any) -> str:

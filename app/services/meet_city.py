@@ -136,8 +136,8 @@ def _strip(words: list[str]) -> list[str]:
     return kept
 
 
-def _match(folded: list[str]) -> str | None:
-    """The slug the longest run of words names ("greater noida" before "noida"), if any."""
+def _match_span(folded: list[str]) -> tuple[str, int, int] | None:
+    """(slug, start, length) of the longest run of words naming a city ("greater noida" before "noida")."""
     for size in range(min(LONGEST_NAME, len(folded)), 0, -1):
         for start in range(len(folded) - size + 1):
             run = folded[start : start + size]
@@ -146,8 +146,14 @@ def _match(folded: list[str]) -> str | None:
                 # "newyork", "sanfrancisco", "newdelhi": written without the space.
                 slug = next((s for n, s in NAMES.items() if " " in n and n.replace(" ", "") == run[0]), None)
             if slug:
-                return slug
+                return slug, start, size
     return None
+
+
+def _match(folded: list[str]) -> str | None:
+    """The slug the longest run of words names, if any."""
+    span = _match_span(folded)
+    return span[0] if span else None
 
 
 def read_answer(text: str) -> CityAnswer:
@@ -232,9 +238,13 @@ class CityMap(BaseModel):
     image: DmMedia | None = None
 
 
-# A comment this short that names one of our cities is a request on its face ("London 🔥", "Mumbai
-# please!!"); a longer one may only mention a place in passing, so the model reads it.
-QUICK_MATCH_MAX_WORDS = 3
+# The words a comment may hold beside the city and still be a request on its face: the city alone,
+# or the city asked for ("London 🔥", "Mumbai please!!", "do Delhi next", "my city Pune"). Any other
+# word ("Love London", "London traffic is insane") means the model judges whether they asked.
+REQUEST_WORDS = {
+    "please", "pls", "plz", "plss", "plsss", "plzz", "pleaseee", "next", "do", "my", "city", "from", "here",
+    "i", "im", "i'm", "am", "me", "for", "bro", "map", "the", "of", "one", "yes", "too", "also", "now",
+}  # fmt: skip
 
 
 def city_in(text: str) -> str | None:
@@ -243,8 +253,14 @@ def city_in(text: str) -> str | None:
 
 
 def quick_city(text: str) -> str | None:
-    """One of our cities, read straight off a comment of a few words, without asking the model."""
-    return city_in(text) if len(_words(text)) <= QUICK_MATCH_MAX_WORDS else None
+    """One of our cities, when the comment is just that city or a plain ask for it. No model call."""
+    folded = [fold(w).replace("’", "'") for w in _words(text)]
+    span = _match_span(folded)
+    if span is None:
+        return None
+    slug, start, size = span
+    rest = folded[:start] + folded[start + size :]
+    return slug if all(w in REQUEST_WORDS for w in rest) else None
 
 
 class PlaceRead(BaseModel):
