@@ -41,6 +41,7 @@ from app.services.comment_dm_store import (
     CITY_NONE,
     CITY_PENDING,
     DEFAULT_FIELD,
+    NO_ASK,
     NO_CITY,
     QUEUED,
     channels_with_rules,
@@ -66,7 +67,7 @@ logger = get_logger(__name__)
 class GeminiLike(Protocol):
     """The one model call the worker makes: which place a city rule's comment asks for."""
 
-    async def extract_place(self, comment_text: str) -> str | None: ...
+    async def extract_place(self, comment_text: str) -> meet_city.PlaceRead | None: ...
 
 
 TICK_SECONDS = 10
@@ -146,10 +147,10 @@ async def resolve_city(
     comment_id = str(event["comment_id"])
     text = str(event.get("text") or "")
     attempts = int(event.get("city_attempts", 0)) + 1
-    place: str | None = None
+    read: meet_city.PlaceRead | None = None
     if gemini is not None:
         try:
-            place = await gemini.extract_place(text)
+            read = await gemini.extract_place(text)
         except Exception as exc:  # noqa: BLE001 - any model failure is retried, then given up on, never sent blind
             logger.warning("[CommentDM] Reading a city from comment %s failed: %s", comment_id, exc)
             if attempts < MAX_ATTEMPTS:
@@ -160,9 +161,12 @@ async def resolve_city(
                     now,
                 )
                 return None
-    answer = meet_city.answer_for_place(place) if place else None
+    place = read.model_dump() if read is not None else None
+    answer = meet_city.answer_for_read(read) if read is not None else None
     if answer is None or answer.outcome == "ignored":
-        fields = {"status": STATUS_SKIPPED, "skip_reason": NO_CITY, CITY_CHECK_FIELD: CITY_NONE, "city_place": place}
+        # No place, or one only mentioned in passing ("getting to battersea is a nightmare tho").
+        reason = NO_CITY if read is None or read.asks else NO_ASK
+        fields = {"status": STATUS_SKIPPED, "skip_reason": reason, CITY_CHECK_FIELD: CITY_NONE, "city_place": place}
         await update_event(db, comment_id, fields, now)
         return None
     city_map = meet_city.CityMap.model_validate(event.get("city_map") or {})
@@ -179,6 +183,7 @@ async def resolve_city(
         dm_queued=not again,
         commented_at=event.get("commented_at"),
         now=now,
+        place=read.place if read is not None else None,
     )
     city = {CITY_CHECK_FIELD: CITY_DONE, "city": answer.model_dump(), "city_place": place}
     if again:

@@ -54,6 +54,7 @@ DUPLICATE = "duplicate"
 NO_RULE = "no rule"
 NO_MATCH = "no match"
 NO_CITY = "no city in the comment"
+NO_ASK = "a place mentioned, no map asked for"
 
 # A city rule's comment that names none of the meet tool's cities by name: the worker asks the model
 # which place it names (if any) just before sending, so the webhook stays fast.
@@ -259,7 +260,7 @@ async def enqueue(
     city: meet_city.CityAnswer | None = None
     city_fields: dict[str, Any] = {}
     if city_map is not None:
-        slug = meet_city.city_in(event.text)
+        slug = meet_city.quick_city(event.text)
         if slug is not None:
             city = meet_city.answer_for_slug(slug, event.text)
             content = message_fields(meet_city.comment_dm(city, city_map))

@@ -13,7 +13,15 @@ from app.services import comment_dm_store as store
 from app.services import meet_city
 from app.services.comment_dm import MAX_ATTEMPTS, SKIP_ALREADY_MESSAGED, CommentEvent, DmRule, stored_rule
 from app.services.comment_dm_worker import send_one
-from app.services.meet_city import CityMap, answer_for_place, city_in, comment_dm
+from app.services.meet_city import (
+    CityMap,
+    PlaceRead,
+    answer_for_place,
+    answer_for_read,
+    city_in,
+    comment_dm,
+    quick_city,
+)
 from app.timezone import IST
 from tests.mongo_fakes import DB
 
@@ -51,6 +59,32 @@ def test_a_place_the_model_reads_is_ours_or_on_our_list() -> None:
     assert (lagos.outcome, lagos.name) == ("unlisted", "Lagos")
     assert answer_for_place("são paulo").name == "São Paulo"
     assert answer_for_place("").outcome == "ignored"
+
+
+def test_a_neighbourhood_is_its_city_and_tallies_under_it() -> None:
+    battersea = answer_for_read(PlaceRead(place="Battersea", city="London"))
+    assert (battersea.outcome, battersea.slug, battersea.name, battersea.normalised) == (
+        "matched",
+        "london",
+        "London",
+        "battersea",
+    )
+    assert answer_for_read(PlaceRead(place="Bandra", city="Mumbai")).slug == "mumbai"
+    # A neighbourhood of a city we don't have names the city, not the neighbourhood.
+    ikeja = answer_for_read(PlaceRead(place="Ikeja", city="Lagos"))
+    assert (ikeja.outcome, ikeja.name, ikeja.normalised) == ("unlisted", "Lagos", "ikeja")
+    # A country has no city: it is named as itself.
+    assert answer_for_read(PlaceRead(place="Nigeria", city=None)).name == "Nigeria"
+
+
+def test_a_place_mentioned_in_passing_gets_nothing() -> None:
+    passing = PlaceRead(place="Battersea", city="London", asks=False)
+    assert answer_for_read(passing).outcome == "ignored"
+
+
+def test_only_a_short_comment_is_matched_without_the_model() -> None:
+    assert quick_city("London 🔥") == "london" and quick_city("San Francisco plsss") == "san-francisco"
+    assert quick_city("getting to London is a nightmare tho") is None
 
 
 def _all_text(message: Any) -> str:
@@ -112,15 +146,19 @@ async def _enqueue(db: DB, event: CommentEvent) -> str:
 
 
 class FakeGemini:
-    def __init__(self, answers: dict[str, str | None | Exception]) -> None:
+    """Answers by comment: a place name (a city that asks), a PlaceRead, None, or an error to raise."""
+
+    def __init__(self, answers: dict[str, str | PlaceRead | None | Exception]) -> None:
         self.answers = answers
         self.asked: list[str] = []
 
-    async def extract_place(self, comment_text: str) -> str | None:
+    async def extract_place(self, comment_text: str) -> PlaceRead | None:
         self.asked.append(comment_text)
         answer = self.answers[comment_text]
         if isinstance(answer, Exception):
             raise answer
+        if isinstance(answer, str):
+            return PlaceRead(place=answer, city=answer)
         return answer
 
 
@@ -236,6 +274,32 @@ class TestCityComments:
         db = _db()
         await _enqueue(db, _comment("London", cid="c1"))
         assert await _enqueue(db, _comment("Paris too", cid="c2")) == SKIP_ALREADY_MESSAGED
+
+    async def test_a_neighbourhood_gets_its_citys_card_and_counts_for_the_city(self) -> None:
+        db = _db()
+        comment = "Battersea please, I live there"
+        await _enqueue(db, _comment(comment))
+        service = FakeService()
+        read = PlaceRead(place="Battersea", city="London")
+        assert await _send(db, FakeGemini({comment: read}), service) == "sent"
+        assert "Your London map is ready" in json.dumps(service.dms[0], ensure_ascii=False)
+        [row] = db.dm_city_answers.docs
+        assert (row["slug"], row["name"], row["place"], row["normalised"]) == (
+            "london",
+            "London",
+            "Battersea",
+            "battersea",
+        )
+
+    async def test_a_place_only_mentioned_gets_no_dm_and_no_reply(self) -> None:
+        db = _db()
+        comment = "getting to battersea is a nightmare tho"
+        assert await _enqueue(db, _comment(comment)) == store.QUEUED
+        service = FakeService()
+        read = PlaceRead(place="Battersea", city="London", asks=False)
+        assert await _send(db, FakeGemini({comment: read}), service) == "skipped"
+        assert service.dms == [] and service.replies == [] and db.dm_city_answers.docs == []
+        assert _event_doc(db)["skip_reason"] == store.NO_ASK
 
     async def test_the_model_is_never_asked_about_a_city_we_matched(self) -> None:
         db = _db()

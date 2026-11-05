@@ -232,9 +232,31 @@ class CityMap(BaseModel):
     image: DmMedia | None = None
 
 
+# A comment this short that names one of our cities is a request on its face ("London 🔥", "Mumbai
+# please!!"); a longer one may only mention a place in passing, so the model reads it.
+QUICK_MATCH_MAX_WORDS = 3
+
+
 def city_in(text: str) -> str | None:
     """The meet tool's city a comment names ("London 🔥", "Mumbai please!!", "nyc!!"), if any."""
     return _match([fold(w) for w in _words(text)])
+
+
+def quick_city(text: str) -> str | None:
+    """One of our cities, read straight off a comment of a few words, without asking the model."""
+    return city_in(text) if len(_words(text)) <= QUICK_MATCH_MAX_WORDS else None
+
+
+class PlaceRead(BaseModel):
+    """What the model read in a comment: the place as they named it, the city it is in, and whether they asked."""
+
+    # As they named it, in its usual spelling: "Battersea", "Lagos", "Nigeria".
+    place: str | None = None
+    # The city that place is in: itself for a city, the parent city for a neighbourhood or borough
+    # ("Battersea" -> "London"), None for a region or a country.
+    city: str | None = None
+    # False when they only mention it ("getting to battersea is a nightmare tho"): no DM then.
+    asks: bool = True
 
 
 def has_words(text: str) -> bool:
@@ -261,6 +283,26 @@ def answer_for_place(place: str) -> CityAnswer:
     if name == name.lower():
         name = " ".join(w[:1].upper() + w[1:] for w in words)
     return CityAnswer(outcome="unlisted", name=name, normalised=" ".join(folded))
+
+
+def answer_for_read(read: PlaceRead) -> CityAnswer:
+    """One of our cities (a neighbourhood counts as its city), another place, or nothing to answer.
+
+    Tallied under the city, with the place they named as ``normalised``: Battersea is demand for London.
+    """
+    named = (read.place or read.city or "").strip()
+    if not read.asks or not named:
+        return CityAnswer(outcome="ignored", normalised=fold(named))
+    for candidate in (read.city, read.place):
+        if candidate:
+            answer = answer_for_place(candidate)
+            if answer.outcome == "matched" and answer.slug:
+                return answer_for_slug(answer.slug, named)
+    # Not on the map: name the city when it is a neighbourhood of one ("Ikeja" -> "Lagos is on our list").
+    answer = answer_for_place(read.city or named)
+    if answer.outcome == "unlisted" and read.city and read.place:
+        return answer.model_copy(update={"normalised": " ".join(fold(w) for w in _words(read.place))})
+    return answer
 
 
 def comment_dm(answer: CityAnswer, city_map: CityMap) -> DmMessage | None:

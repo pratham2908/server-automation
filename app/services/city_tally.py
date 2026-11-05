@@ -34,6 +34,7 @@ async def record_comment(
     dm_queued: bool,
     commented_at: datetime | None,
     now: datetime,
+    place: str | None = None,
 ) -> bool:
     """Keep what one comment asked for. Returns whether it was new."""
     result = await db.dm_city_answers.update_one(
@@ -48,6 +49,8 @@ async def record_comment(
                 "username": username,
                 "text": text,
                 "name": answer.name,
+                # The place as they named it, when that is not the city it is tallied under ("Battersea").
+                "place": place or answer.name,
                 "normalised": answer.normalised,
                 "slug": answer.slug,
                 "outcome": answer.outcome,
