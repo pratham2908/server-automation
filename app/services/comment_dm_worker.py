@@ -133,7 +133,11 @@ async def _messaged_on_reel(db: AsyncIOMotorDatabase, event: dict[str, Any]) -> 
             "media_id": event.get("media_id"),
             "person": event.get("person"),
             "comment_id": {"$ne": event["comment_id"]},
-            "status": {"$in": [STATUS_SENDING, STATUS_SENT]},
+            "$or": [
+                {"status": {"$in": [STATUS_SENDING, STATUS_SENT]}},
+                # Queued and going to send (its city is read): it gets the one DM, not this comment.
+                {"status": STATUS_PENDING, CITY_CHECK_FIELD: {"$ne": CITY_PENDING}},
+            ],
         },
         {"_id": 1},
     )
