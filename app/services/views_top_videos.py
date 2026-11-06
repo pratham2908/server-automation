@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from app.database import get_channel_platform
 from app.services.instagram_reel_hourly import HOUR, MetricReading, bucket_gains, floor_to
 from app.services.instagram_reel_snapshot import MEASURED_ONLY
-from app.services.view_series import RANGES, STEPS, Step, daily_from_readings
+from app.services.view_series import STEPS, Granularity, Step, daily_from_readings, parse_range
 from app.timezone import IST, assume_utc, now_ist
 
 
@@ -102,17 +102,19 @@ async def get_channel_top_videos(
     bucket: str | None = None,
     limit: int = 6,
     step: Step = "1h",
+    granularity_override: Granularity | None = None,
 ) -> ViewsTopVideosOut:
     """Return top videos ranked by views gained over the given range or specific candle bucket."""
-    if range_key not in RANGES:
-        raise HTTPException(status_code=422, detail=f"range must be one of {', '.join(RANGES)}")
+    parsed = parse_range(range_key, granularity_override)
+    if parsed is None:
+        raise HTTPException(status_code=422, detail="range must be 24h, 48h, 7d, 28d, 90d or a custom Nh/Nd window")
 
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
 
     platform = get_channel_platform(channel)
-    granularity, size = RANGES[range_key]
+    granularity, size = parsed
     now = now_ist()
 
     if granularity == "hour":
@@ -152,7 +154,7 @@ async def _get_hourly_top_videos(
     total_views_all_videos = 0.0
 
     for mid, readings in by_media.items():
-        hg = bucket_gains(None, readings, step)
+        hg = bucket_gains(None, readings, step, size)
         tot = 0.0
         for g in hg:
             if g.start in target_hours:

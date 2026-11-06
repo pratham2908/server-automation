@@ -14,9 +14,12 @@ from app.services.view_series import (
     daily_points,
     hourly_points,
     last_known,
+    parse_range,
     reconstruct_channel_totals,
     series_total,
+    today_so_far,
     window_starts,
+    with_running_today,
 )
 from app.timezone import IST
 
@@ -153,3 +156,67 @@ class TestCurve:
     def test_daily_clock_window_ends_at_todays_midnight(self) -> None:
         starts = window_starts("clock", DAY, 2, now=datetime(2026, 10, 24, 15, 0, tzinfo=IST), published_at=None)
         assert starts == [datetime(2026, 10, 22, tzinfo=IST), datetime(2026, 10, 23, tzinfo=IST)]
+
+
+class TestParseRange:
+    def test_fixed_keys_keep_their_bars(self) -> None:
+        assert parse_range("48h") == ("hour", 48)
+        assert parse_range("28d") == ("day", 28)
+
+    def test_custom_windows_open_hourly_up_to_a_week(self) -> None:
+        assert parse_range("5d") == ("hour", 120)
+        assert parse_range("36h") == ("hour", 36)
+        assert parse_range("10d") == ("day", 10)
+
+    def test_the_other_kind_of_bar_can_be_asked_for(self) -> None:
+        assert parse_range("28d", "hour") == ("hour", 672)
+        assert parse_range("5d", "day") == ("day", 5)
+        # A part day still gets its own bar.
+        assert parse_range("36h", "day") == ("day", 2)
+
+    def test_too_long_or_not_a_window(self) -> None:
+        assert parse_range("90d", "hour") is None
+        assert parse_range("400d") is None
+        assert parse_range("0d") is None
+        assert parse_range("week") is None
+
+
+class TestHourlyBeyondTwoWeeks:
+    def test_a_28_day_hourly_range_reaches_back_past_the_default_cap(self) -> None:
+        readings = [MetricReading(at=at(h), values={"views": 10.0 * h}) for h in range(0, 28 * 24 + 1)]
+        points = hourly_points(None, readings, "views", now=at(28 * 24 + 0.5), hours=28 * 24)
+        assert len(points) == 28 * 24
+        assert all(p.value == 10 for p in points)
+
+
+class TestRunningToday:
+    MIDNIGHT = datetime(2026, 11, 6, 0, 0, tzinfo=IST)
+
+    def reading(self, hours: float, views: float) -> MetricReading:
+        return MetricReading(at=self.MIDNIGHT + timedelta(hours=hours), values={"views": views})
+
+    def test_today_so_far_sums_todays_complete_hours(self) -> None:
+        # 100 an hour from 10 PM yesterday; now is 3:20 AM, so today's complete hours are 0–3.
+        readings = [self.reading(h, 1000.0 + 100 * (h + 2)) for h in range(-2, 4)]
+        now = self.MIDNIGHT + timedelta(hours=3, minutes=20)
+        total, through = today_so_far(None, readings, "views", now)
+        assert total == 300
+        assert through == (self.MIDNIGHT + timedelta(hours=3)).isoformat()
+
+    def test_nothing_today_yet(self) -> None:
+        readings = [self.reading(-3, 100.0), self.reading(-2, 200.0)]
+        assert today_so_far(None, readings, "views", self.MIDNIGHT + timedelta(minutes=30)) is None
+
+    def test_an_empty_today_is_filled_and_marked_running(self) -> None:
+        points = daily_points({"2026-11-05": 50.0}, set(), date(2026, 11, 6), 2)
+        out = with_running_today(points, date(2026, 11, 6), (123.44, "x"))
+        assert [(p.value, p.running) for p in out] == [(50.0, False), (123.4, True)]
+
+    def test_a_reported_today_keeps_its_number_but_is_still_running(self) -> None:
+        points = daily_points({"2026-11-06": 80.0}, set(), date(2026, 11, 6), 1)
+        out = with_running_today(points, date(2026, 11, 6), (10.0, "x"))
+        assert [(p.value, p.running) for p in out] == [(80.0, True)]
+
+    def test_a_window_not_ending_today_is_untouched(self) -> None:
+        points = daily_points({}, set(), date(2026, 11, 5), 1)
+        assert with_running_today(points, date(2026, 11, 6), (10.0, "x")) == points

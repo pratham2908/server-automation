@@ -17,6 +17,7 @@ post would read as a drop.
 
 from __future__ import annotations
 
+import re
 from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from app.services.instagram_follow_attribution import ViewReading
 from app.services.instagram_reel_hourly import (
     HOUR,
     MAX_GAP_HOURS,
+    MAX_HOURS,
     QUARTER,
     QUARTER_MAX_GAP_HOURS,
     MetricReading,
@@ -53,6 +55,39 @@ RANGES: dict[str, tuple[Granularity, int]] = {
     "28d": ("day", 28),
     "90d": ("day", 90),
 }
+
+# A custom window: a number of hours or days, "5d" or "36h".
+_CUSTOM_RANGE = re.compile(r"^(\d{1,4})([hd])$")
+# The longest window of each kind. Hourly bars are rebuilt from every sync reading, so they stop at 28 days.
+MAX_RANGE_DAYS = 365
+MAX_HOURLY_HOURS = 28 * 24
+# Quarter-hour bars exist only while a video is read every 15 minutes, its first week.
+MAX_QUARTER_HOURS = 7 * 24
+
+
+def parse_range(key: str, granularity: Granularity | None = None) -> tuple[Granularity, int] | None:
+    """A range key's bars: ``(granularity, count)`` — hours for hourly bars, days for daily ones.
+
+    The fixed keys keep their own bars unless *granularity* asks for the other kind. A custom
+    "Nh"/"Nd" key opens on hourly bars up to a week and daily bars beyond. None if the key isn't a
+    window or the bars asked for would be too many to build.
+    """
+    if key in RANGES:
+        natural, size = RANGES[key]
+        hours = size if natural == "hour" else size * 24
+    else:
+        match = _CUSTOM_RANGE.match(key)
+        if not match or int(match.group(1)) < 1:
+            return None
+        hours = int(match.group(1)) * (24 if match.group(2) == "d" else 1)
+        natural = "hour" if hours <= 7 * 24 else "day"
+    if hours > MAX_RANGE_DAYS * 24:
+        return None
+    chosen = granularity or natural
+    if chosen == "hour":
+        return None if hours > MAX_HOURLY_HOURS else ("hour", hours)
+    return "day", -(-hours // 24)
+
 
 # Rates and averages rather than counts: each reading is where the figure stood, so a bucket has no
 # "gain" — only the level at its end. The snapshot field each is read from; watch-through is the
@@ -81,6 +116,8 @@ class SeriesPoint:
     rough: bool = False
     # Hours from the video's publish time to the bucket's start, on a since-posted series.
     offset_hours: float | None = None
+    # Today's bar while today is still going: the hours so far, so it will grow.
+    running: bool = False
 
 
 def channel_totals(
@@ -116,11 +153,41 @@ def hourly_points(
 
     The running bucket is left out.
     """
-    gains = {h.start: h.values.get(metric) for h in bucket_gains(published_at, readings, step)}
+    gains = {h.start: h.values.get(metric) for h in bucket_gains(published_at, readings, step, max(hours, MAX_HOURS))}
     end = floor_to(now, step)
     count = int(hours * HOUR / step)
     starts = [end - step * (count - i) for i in range(count)]
     return [SeriesPoint(start=s.isoformat(), value=gains.get(s)) for s in starts]
+
+
+def today_so_far(
+    published_at: datetime | None, readings: Sequence[MetricReading], metric: str, now: datetime
+) -> tuple[float, str] | None:
+    """Today's (IST) gain so far: the sum of its complete hours, and the end of the last one summed.
+
+    The same hours the hourly bars show, so today's daily bar is exactly their sum. None when no
+    hour of today has a number yet.
+    """
+    midnight = now.astimezone(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    hours = [
+        (h.start, value)
+        for h in bucket_gains(published_at, readings, HOUR, 26)
+        if h.start >= midnight and (value := h.values.get(metric)) is not None
+    ]
+    if not hours:
+        return None
+    return sum(v for _, v in hours), (hours[-1][0] + HOUR).isoformat()
+
+
+def with_running_today(points: list[SeriesPoint], today: date, so_far: tuple[float, str] | None) -> list[SeriesPoint]:
+    """Mark today's daily bar as still running, filling it from today's hours when the source has nothing yet."""
+    out = list(points)
+    if not out or out[-1].start != today.isoformat():
+        return out
+    last = out[-1]
+    value = last.value if last.value is not None else (round(so_far[0], 1) if so_far else None)
+    out[-1] = SeriesPoint(start=last.start, value=value, rough=last.rough, running=True)
+    return out
 
 
 def daily_from_readings(
