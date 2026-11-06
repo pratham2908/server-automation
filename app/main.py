@@ -39,6 +39,7 @@ _post_publisher_task = None
 _threads_publisher_task = None
 _threads_token_task = None
 _comment_dm_task = None
+_city_catalog_task = None
 _fallback_video_task = None
 _comment_log_task = None
 _dm_catch_up_task = None
@@ -323,6 +324,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background comment-to-DM worker started")
 
+    # ---- City catalog: the DMs' city list, read from the site's meet tool every hour ----
+    from app.services.city_catalog import run_city_catalog
+
+    global _city_catalog_task
+    _city_catalog_task = create_monitored_task(run_city_catalog(), feature="Background: City catalog")
+
     # ---- AI comment replies: answers webhook comments once each channel's delay has passed ----
     from app.services.comment_ai_reply_worker import run_comment_ai_reply_worker
 
@@ -363,6 +370,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _threads_publisher_task,
         _threads_token_task,
         _comment_dm_task,
+        _city_catalog_task,
         _comment_ai_reply_task,
         _fallback_video_task,
         _comment_log_task,
