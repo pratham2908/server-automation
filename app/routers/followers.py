@@ -12,6 +12,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services import follower_export as fx
+from app.services.comment_dm_delivery import record_delivery
+from app.services.ig_export import ExportArchive
 from app.timezone import IST, assume_utc, now_ist
 
 router = APIRouter(
@@ -20,8 +22,9 @@ router = APIRouter(
     dependencies=[Depends(verify_api_key)],
 )
 
-# The zip Instagram sends for "Followers and following" alone is small; this leaves room for more ticked.
-MAX_UPLOAD_BYTES = 150 * 1024 * 1024
+# An export with every category ticked runs to a few hundred MB (nginx takes 500 MB). The zip is read
+# member by member from the spooled upload, never into memory whole.
+MAX_UPLOAD_BYTES = 480 * 1024 * 1024
 SERIES_DAYS = 30
 NOT_FOLLOWING_LIMIT = 15
 
@@ -55,18 +58,35 @@ async def _dm_handles(db: AsyncIOMotorDatabase, channel_id: str) -> set[str]:
 async def import_export(
     channel_id: str, file: UploadFile = File(...), db: AsyncIOMotorDatabase = Depends(get_db)
 ) -> dict[str, Any]:
-    """Take one export (the zip, or its followers_1.json) and compare it with the last one imported."""
+    """Take one export (the zip in JSON or HTML, or its followers_1 file) and compare it with the last one.
+
+    A zip that holds DMs also says which comment-DMs Instagram refused to deliver (``dm_delivery``).
+    """
     channel = await _channel(db, channel_id)
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "That file is too big — request the export with only “Followers and following”.")
+    if (file.size or 0) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "That file is too big — untick photos and videos when requesting the export.")
     now = now_ist()
+    name = file.filename or ""
     try:
-        taken_at = fx.export_taken_at(file.filename or "", channel, now)
-        followers = fx.read_export(file.filename or "", content)
-        result = await fx.import_snapshot(
-            db, channel, followers, taken_at=taken_at, source_name=file.filename or "", now=now
-        )
+        head = await file.read(2)
+        await file.seek(0)
+        if head == b"PK":
+            archive = ExportArchive(file.file)
+            generated = archive.generated_at()
+            taken_at = fx.export_taken_at(name, channel, now, generated)
+            followers = archive.followers()
+            if followers is None:
+                raise fx.ExportError(fx.NO_FOLLOWERS)
+            result = await fx.import_snapshot(db, channel, followers, taken_at=taken_at, source_name=name, now=now)
+            delivery = await record_delivery(db, channel_id, archive.dm_threads(), generated or taken_at)
+            result["dm_delivery"] = delivery if delivery["private_replies_in_export"] else None
+        else:
+            content = await file.read(fx.MAX_JSON_BYTES + 1)
+            if len(content) > fx.MAX_JSON_BYTES:
+                raise fx.ExportError("That file is too big to be a followers list — upload the zip.")
+            taken_at = fx.export_taken_at(name, channel, now)
+            followers = fx.read_export(name, content)
+            result = await fx.import_snapshot(db, channel, followers, taken_at=taken_at, source_name=name, now=now)
     except fx.ExportError as exc:
         raise HTTPException(422, str(exc)) from exc
     return {**result, "api_followers": channel.get("subscriber_count")}
@@ -125,7 +145,7 @@ async def follower_summary(channel_id: str, db: AsyncIOMotorDatabase = Depends(g
     channel = await _channel(db, channel_id)
     latest = await fx.latest_snapshot(db, channel_id)
     now = now_ist()
-    first_day = (now - timedelta(days=SERIES_DAYS - 1)).date()
+    first_day = (now.astimezone(fx.INSTAGRAM_DAY_TZ) - timedelta(days=SERIES_DAYS - 1)).date()
     days = [(first_day + timedelta(days=i)).isoformat() for i in range(SERIES_DAYS)]
     insights = {
         r["date"]: r
@@ -134,8 +154,9 @@ async def follower_summary(channel_id: str, db: AsyncIOMotorDatabase = Depends(g
         ).to_list(length=None)
     }
     followers = await db.followers.find({"channel_id": channel_id}).to_list(length=None)
+    # Bucketed on Instagram's own (Pacific) days, so each bar lines up with that day's insights.
     followed_by_day = Counter(
-        assume_utc(d["followed_at"]).astimezone(IST).date().isoformat()
+        fx.instagram_day(d["followed_at"])
         for d in followers
         if d.get("status") == fx.STATUS_FOLLOWING and isinstance(d.get("followed_at"), datetime)
     )
@@ -184,6 +205,7 @@ async def follower_summary(channel_id: str, db: AsyncIOMotorDatabase = Depends(g
         if author not in following and not author.startswith("id:")
     ][:NOT_FOLLOWING_LIMIT]
     snapshots = await db.follower_snapshots.count_documents({"channel_id": channel_id})
+    window = await _window(db, channel_id, latest, len(by_kind[fx.EVENT_FOLLOWED]), len(by_kind[fx.EVENT_UNFOLLOWED]))
     return {
         **base,
         "last_import": {"taken_at": _iso(latest["taken_at"]), "count": latest.get("count"), "imports": snapshots},
@@ -193,4 +215,44 @@ async def follower_summary(channel_id: str, db: AsyncIOMotorDatabase = Depends(g
         "followers_who_dm": len(following & dms),
         "changes": by_kind,
         "commenters_not_following": not_following,
+        "window": window,
+    }
+
+
+async def _window(
+    db: AsyncIOMotorDatabase, channel_id: str, latest: dict[str, Any], new: int, left: int
+) -> dict[str, Any] | None:
+    """The last two exports' gap, what they found, and what Instagram's daily insights counted over it.
+
+    The insights are whole Pacific days, so the gap is widened to the days it touches; the days
+    Instagram hasn't reported yet are counted, so a short total isn't read as a mismatch.
+    """
+    previous = (
+        await db.follower_snapshots.find({"channel_id": channel_id, "taken_at": {"$lt": latest["taken_at"]}})
+        .sort("taken_at", -1)
+        .limit(1)
+        .to_list(1)
+    )
+    if not previous:
+        return None
+    after, before = assume_utc(previous[0]["taken_at"]), assume_utc(latest["taken_at"])
+    first = datetime.fromisoformat(fx.instagram_day(after)).date()
+    last = datetime.fromisoformat(fx.instagram_day(before)).date()
+    days = [(first + timedelta(days=i)).isoformat() for i in range((last - first).days + 1)]
+    rows = {
+        r["date"]: r
+        for r in await db.instagram_account_daily.find(
+            {"channel_id": channel_id, "date": {"$in": days}}, {"date": 1, "follows": 1, "unfollows": 1}
+        ).to_list(length=None)
+    }
+    reported = [d for d in days if (rows.get(d) or {}).get("follows") is not None]
+    return {
+        "after": _iso(after),
+        "before": _iso(before),
+        "export_new": new,
+        "export_unfollowed": left,
+        "insight_days": days,
+        "insight_days_missing": [d for d in days if d not in reported],
+        "api_follows": sum(int(rows[d].get("follows") or 0) for d in reported),
+        "api_unfollows": sum(int(rows[d].get("unfollows") or 0) for d in reported),
     }

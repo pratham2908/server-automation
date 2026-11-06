@@ -10,6 +10,10 @@ snapshot; comparing it with the previous one says who followed and who left:
 - ``follower_events``: what each import found, so a past import's changes can be shown again.
 
 Someone who follows and leaves between two exports is in neither, so they only show in the daily counts.
+
+Instagram's daily account numbers (follows, unfollows) are counted over **Pacific-time days**, whatever
+window is asked for: an export bucketed by Pacific day matches them almost to the follower, while by IST
+day it doesn't. So anything compared with those numbers is bucketed with ``instagram_day``.
 """
 
 from __future__ import annotations
@@ -21,10 +25,14 @@ import zipfile
 from collections.abc import Iterator
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.timezone import IST, assume_utc
+
+# The clock Instagram's daily insights are counted on.
+INSTAGRAM_DAY_TZ = ZoneInfo("America/Los_Angeles")
 
 STATUS_FOLLOWING = "following"
 STATUS_UNFOLLOWED = "unfollowed"
@@ -41,6 +49,11 @@ FOLLOWERS_FILE = re.compile(r"(^|/)followers(_\d+)?\.json$", re.IGNORECASE)
 
 class ExportError(ValueError):
     """The file isn't a followers export we can read; the message says what to do instead."""
+
+
+def instagram_day(at: datetime) -> str:
+    """The date Instagram's daily insights put *at* under (its Pacific-time day)."""
+    return assume_utc(at).astimezone(INSTAGRAM_DAY_TZ).date().isoformat()
 
 
 def _handle_from_href(href: str) -> str:
@@ -78,28 +91,24 @@ def parse_followers_json(data: Any) -> dict[str, datetime | None]:
     return out
 
 
+NO_FOLLOWERS = "No followers file in this zip. Request the export with “Followers and following” ticked."
+
+
 def read_export(filename: str, content: bytes) -> dict[str, datetime | None]:
-    """The followers in an uploaded export: the whole zip, or just its followers_1.json."""
+    """The followers in an uploaded export: the whole zip (JSON or HTML), or just its followers_1 file."""
+    from app.services.ig_export import ExportArchive, html_offset, parse_followers_html
+
     if content[:2] == b"PK":
-        try:
-            archive = zipfile.ZipFile(io.BytesIO(content))
-        except zipfile.BadZipFile as exc:
-            raise ExportError("That zip couldn't be opened — download the export again.") from exc
-        names = [n for n in archive.namelist() if FOLLOWERS_FILE.search(n)]
-        if not names:
-            if any(n.lower().endswith(".html") and "followers" in n.lower() for n in archive.namelist()):
-                raise ExportError("This export is in HTML. Request it again with the format set to JSON.")
-            raise ExportError(
-                "No followers file in this zip. Request the export with “Followers and following” ticked."
-            )
-        followers: dict[str, datetime | None] = {}
-        for name in names:
-            if archive.getinfo(name).file_size > MAX_JSON_BYTES:
-                raise ExportError(f"{name} is too large to be a followers list.")
-            followers.update(parse_followers_json(_load(archive.read(name))))
+        followers = ExportArchive(io.BytesIO(content)).followers()
+        if followers is None:
+            raise ExportError(NO_FOLLOWERS)
         return followers
     if filename.lower().endswith(".html"):
-        raise ExportError("This is the HTML export. Request it again with the format set to JSON.")
+        page = content.decode("utf-8", errors="replace")
+        shift = html_offset(page)
+        if shift is None:
+            raise ExportError("Couldn't read the times in this HTML file; upload the whole zip instead.")
+        return parse_followers_html(page, shift[0])
     return parse_followers_json(_load(content))
 
 
@@ -110,26 +119,33 @@ def _load(raw: bytes) -> Any:
         raise ExportError("That file isn't JSON — upload the zip Instagram sent, or its followers_1.json.") from exc
 
 
-def export_taken_at(filename: str, channel: dict[str, Any], now: datetime) -> datetime:
-    """When the export was made. Instagram dates the zip; a bare JSON counts as made at upload.
+def export_taken_at(
+    filename: str, channel: dict[str, Any], now: datetime, generated_at: datetime | None = None
+) -> datetime:
+    """When the export was made: the time its pages say they were generated, else the zip's date;
+    a bare JSON counts as made at upload.
 
     The zip also names the account, which must be this channel's — importing another account's
     followers here would read as everyone unfollowing.
     """
     match = ZIP_NAME.search(filename or "")
+    if match:
+        own = str(channel.get("instagram_username") or "").lower()
+        if own and match["handle"].lower() != own:
+            raise ExportError(f"This export is for @{match['handle']}, not @{own}.")
+    if generated_at is not None:
+        return min(now, generated_at.astimezone(IST))
     if not match:
         return now
-    own = str(channel.get("instagram_username") or "").lower()
-    if own and match["handle"].lower() != own:
-        raise ExportError(f"This export is for @{match['handle']}, not @{own}.")
     day = datetime.strptime(match["date"], "%Y-%m-%d").date()
     # The zip carries the day, not the hour: the end of that day, and never later than now.
     return min(now, datetime.combine(day, time(23, 59), tzinfo=IST))
 
 
 async def _likely_day(db: AsyncIOMotorDatabase, channel_id: str, after: datetime, before: datetime) -> str | None:
-    """The one IST day in (after, before] whose insights show unfollows, if there's exactly one and no gaps."""
-    first, last = assume_utc(after).astimezone(IST).date(), assume_utc(before).astimezone(IST).date()
+    """The one Instagram day in (after, before] whose insights show unfollows, if there's exactly one and no gaps."""
+    first = assume_utc(after).astimezone(INSTAGRAM_DAY_TZ).date()
+    last = assume_utc(before).astimezone(INSTAGRAM_DAY_TZ).date()
     if (last - first).days > 60:
         return None
     days = [(first + timedelta(days=i)).isoformat() for i in range((last - first).days + 1)]

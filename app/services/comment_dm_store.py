@@ -377,6 +377,8 @@ async def summary(db: AsyncIOMotorDatabase, channel_id: str, since: datetime | N
         "queued": await count({"status": {"$in": [STATUS_PENDING, STATUS_SENDING]}}),
         "failed": await count({"status": STATUS_FAILED}),
         "skipped": await count({"status": STATUS_SKIPPED}),
+        "delivered": await count({"status": STATUS_SENT, "delivery": "delivered"}),
+        "refused": await count({"status": STATUS_SENT, "delivery": "refused"}),
     }
 
 
