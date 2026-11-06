@@ -30,8 +30,9 @@ OTHER_PROMPT = "Which city is your group in? Type it right here 👇\n\nOpen the
         ("bangalore", "matched", "bengaluru", "Bengaluru"),
         ("BLR", "matched", "bengaluru", "Bengaluru"),
         ("Bengalūru", "matched", "bengaluru", "Bengaluru"),
-        ("I am from Greater Noida", "matched", "delhi", "Delhi"),
-        ("gurugram", "matched", "delhi", "Delhi"),
+        ("I am from Greater Noida", "matched", "noida", "Noida"),
+        ("gurgaon", "matched", "gurugram", "Gurugram"),
+        ("Ghaziabad", "matched", "delhi", "Delhi"),
         ("Pune city", "matched", "pune", "Pune"),
         ("New-York", "matched", "new-york", "New York"),
         ("newyork", "matched", "new-york", "New York"),
@@ -39,12 +40,16 @@ OTHER_PROMPT = "Which city is your group in? Type it right here 👇\n\nOpen the
         ("is pune there?", "matched", "pune", "Pune"),
         ("Madras", "matched", "chennai", "Chennai"),
         ("Jaipur", "matched", "jaipur", "Jaipur"),
-        ("Trivandrum", "unlisted", None, "Trivandrum"),
-        ("İstanbul", "unlisted", None, "İstanbul"),
-        ("trivandrum", "unlisted", None, "Trivandrum"),
-        ("Ahmedabad??", "unlisted", None, "Ahmedabad"),
+        ("Trivandrum", "matched", "thiruvananthapuram", "Thiruvananthapuram"),
+        ("Hisar", "unlisted", None, "Hisar"),
+        ("İstanbul", "matched", "istanbul", "Istanbul"),
+        ("Kraków", "unlisted", None, "Kraków"),
+        ("patna", "unlisted", None, "Patna"),
+        ("cochin", "matched", "kochi", "Kochi"),
+        ("Lahore??", "unlisted", None, "Lahore"),
+        ("Ahmedabad??", "matched", "ahmedabad", "Ahmedabad"),
         ("Thane district", "unlisted", None, "Thane"),
-        ("Kochi, Kerala", "unlisted", None, "Kochi"),
+        ("Kozhikode, Kerala", "unlisted", None, "Kozhikode"),
         ("thanks", "ignored", None, ""),
         ("Other", "ignored", None, ""),
         ("what is this?", "ignored", None, ""),
@@ -76,10 +81,10 @@ def test_a_city_without_a_chip_gets_the_chip_template_and_a_typed_link() -> None
 
 
 def test_another_place_is_on_our_list_never_missing() -> None:
-    reply = typed_reply(read_answer("Trivandrum"))
+    reply = typed_reply(read_answer("Hisar"))
     assert reply is not None
     assert reply.text == (
-        "Trivandrum is on our list ✅ We're adding it soon, and the most-asked cities get their own reel 🙌"
+        "Hisar is on our list ✅ We're adding it soon, and the most-asked cities get their own reel 🙌"
     )
     assert "city=" not in str(reply.buttons[0].url) and str(reply.buttons[0].url).endswith(
         "utm_content=meet-typed-other"
@@ -131,14 +136,14 @@ class TestAnswers:
 
     async def test_a_city_typed_after_the_other_reply_is_answered_and_tallied(self) -> None:
         db = await _db(_ours(PROMPT, timedelta(minutes=2), "p1"), _ours(OTHER_PROMPT, timedelta(minutes=1), "p2"))
-        assert await meet_city_answers.record_webhook(db, _typed("İstanbul"), NOW) == 1
+        assert await meet_city_answers.record_webhook(db, _typed("Kraków"), NOW) == 1
         [owed] = db.dm_outbox.docs
-        assert owed["message"]["text"].startswith("İstanbul is on our list ✅")
+        assert owed["message"]["text"].startswith("Kraków is on our list ✅")
         [row] = db.dm_city_answers.docs
         assert (row["normalised"], row["outcome"], row["text"], row["prompt_id"]) == (
-            "istanbul",
+            "krakow",
             "unlisted",
-            "İstanbul",
+            "Kraków",
             "p2",
         )
 
@@ -152,7 +157,7 @@ class TestAnswers:
     async def test_not_a_city_is_logged_unanswered_and_a_real_city_after_it_still_is(self) -> None:
         db = await _db(_ours(PROMPT, timedelta(seconds=20), "p1"))
         assert await meet_city_answers.record_webhook(db, _typed("thanks"), NOW) == 0
-        assert await meet_city_answers.record_webhook(db, _typed("Kochi", mid="m2"), NOW) == 1
+        assert await meet_city_answers.record_webhook(db, _typed("Kozhikode", mid="m2"), NOW) == 1
         assert [(r["outcome"], r["replied"]) for r in db.dm_city_answers.docs] == [
             ("ignored", False),
             ("unlisted", True),
@@ -196,8 +201,8 @@ def test_the_tally_groups_by_city_most_asked_first() -> None:
 
     db = DB(
         channels=[dict(CHANNEL)],
-        dm_city_answers=[row("m1", "a", "İstanbul"), row("m2", "b", "istanbul"), row("m3", "c", "bangalore"),
-                         row("m4", "d", "BLR"), row("m5", "d", "Bengaluru"), row("m6", "e", "Trivandrum"),
+        dm_city_answers=[row("m1", "a", "Kraków"), row("m2", "b", "krakow"), row("m3", "c", "bangalore"),
+                         row("m4", "d", "BLR"), row("m5", "d", "Bengaluru"), row("m6", "e", "Hisar"),
                          row("m7", "f", "thanks")],
     )  # fmt: skip
     app.dependency_overrides[setup_router.get_db] = lambda: db
@@ -211,7 +216,7 @@ def test_the_tally_groups_by_city_most_asked_first() -> None:
         app.dependency_overrides.pop(setup_router.get_db, None)
     assert [(d["name"], d["people"], d["count"]) for d in body["demand"]] == [
         ("Bengaluru", 2, 3),
-        ("Istanbul", 2, 2),
-        ("Trivandrum", 1, 1),
+        ("Krakow", 2, 2),
+        ("Hisar", 1, 1),
     ]
     assert len(body["recent"]) == 7 and body["recent"][0]["text"] == "thanks"

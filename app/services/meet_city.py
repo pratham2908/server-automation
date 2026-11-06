@@ -34,8 +34,10 @@ MAP_URL = "https://tryalgoviz.com/algorithms/graph/city-map/meet/"
 UTM = "utm_source=instagram&utm_medium=dm&utm_campaign=comment-dm"
 MAP_BUTTON = "🗺️ Open the map"
 
-# The meet tool's REAL_CITIES, slug -> how a reply names it.
-CITIES: dict[str, str] = {
+# The meet tool's REAL_CITIES (slug -> how a reply names it), as of 6 Nov 2026. Only the FALLBACK:
+# `city_catalog` reads the live list from the site every hour and installs it with `set_cities`, so a
+# city going live on the site is known here without a deploy. This copy answers when the site can't.
+BUILTIN_CITIES: dict[str, str] = {
     "mumbai": "Mumbai",
     "bengaluru": "Bengaluru",
     "delhi": "Delhi",
@@ -59,20 +61,32 @@ CITIES: dict[str, str] = {
     "dubai": "Dubai",
     "berlin": "Berlin",
     "singapore": "Singapore",
+    # Added to the site 4-5 Nov from what the meet reels' comments asked for (demandCities*.ts).
+    "sydney": "Sydney",
+    "madrid": "Madrid",
+    "toronto": "Toronto",
+    "jakarta": "Jakarta",
+    "istanbul": "Istanbul",
+    "ahmedabad": "Ahmedabad",
+    "chandigarh": "Chandigarh",
+    "gurugram": "Gurugram",
+    "kochi": "Kochi",
+    "noida": "Noida",
+    "thiruvananthapuram": "Thiruvananthapuram",
 }
+# Other names for a city. One whose city isn't on the map (yet) is simply not used.
 ALIASES: dict[str, str] = {
     "bangalore": "bengaluru",
     "bengaluru": "bengaluru",
     "blr": "bengaluru",
     "bombay": "mumbai",
     "new delhi": "delhi",
-    "gurgaon": "delhi",
-    "gurugram": "delhi",
-    "noida": "delhi",
-    "greater noida": "delhi",
     "ghaziabad": "delhi",
     "ncr": "delhi",
     "delhi ncr": "delhi",
+    # Their own maps since 5 Nov; Delhi's until then.
+    "gurgaon": "gurugram",
+    "greater noida": "noida",
     "hyd": "hyderabad",
     "secunderabad": "hyderabad",
     "madras": "chennai",
@@ -81,10 +95,40 @@ ALIASES: dict[str, str] = {
     "nyc": "new-york",
     "new york city": "new-york",
     "sf": "san-francisco",
+    "trivandrum": "thiruvananthapuram",
+    "tvm": "thiruvananthapuram",
+    "cochin": "kochi",
 }
-# Every name that means a city, normalised -> slug. A slug's own spaced form is one of them.
-NAMES: dict[str, str] = {**{s.replace("-", " "): s for s in CITIES}, **ALIASES}
-LONGEST_NAME = max(len(n.split()) for n in NAMES)
+
+
+class Catalog(BaseModel):
+    """The cities in use: slug -> name, and every name (spaced slug or alias) -> slug."""
+
+    cities: dict[str, str]
+    names: dict[str, str]
+    longest: int
+
+    @classmethod
+    def of(cls, cities: dict[str, str]) -> Catalog:
+        names = {s.replace("-", " "): s for s in cities}
+        names.update({alias: slug for alias, slug in ALIASES.items() if slug in cities})
+        return cls(cities=dict(cities), names=names, longest=max(len(n.split()) for n in names))
+
+
+# Module state, on purpose: every reader asks `catalog()`, and only `set_cities` (the hourly refresh)
+# replaces it, whole, so a reader never sees half of an update.
+_catalog = Catalog.of(BUILTIN_CITIES)
+
+
+def catalog() -> Catalog:
+    return _catalog
+
+
+def set_cities(cities: dict[str, str]) -> None:
+    """Use *cities* (slug -> name) from now on: the site's live list."""
+    global _catalog
+    _catalog = Catalog.of(cities)
+
 
 # Words around a city name that aren't part of it: "I'm from Pune", "Pune city", "Thane district".
 FILLER = {
@@ -138,13 +182,14 @@ def _strip(words: list[str]) -> list[str]:
 
 def _match_span(folded: list[str]) -> tuple[str, int, int] | None:
     """(slug, start, length) of the longest run of words naming a city ("greater noida" before "noida")."""
-    for size in range(min(LONGEST_NAME, len(folded)), 0, -1):
+    names = catalog().names
+    for size in range(min(catalog().longest, len(folded)), 0, -1):
         for start in range(len(folded) - size + 1):
             run = folded[start : start + size]
-            slug = NAMES.get(" ".join(run)) or NAMES.get(" ".join(run).replace("-", " ")) or None
+            slug = names.get(" ".join(run)) or names.get(" ".join(run).replace("-", " ")) or None
             if slug is None and size == 1:
                 # "newyork", "sanfrancisco", "newdelhi": written without the space.
-                slug = next((s for n, s in NAMES.items() if " " in n and n.replace(" ", "") == run[0]), None)
+                slug = next((s for n, s in names.items() if " " in n and n.replace(" ", "") == run[0]), None)
             if slug:
                 return slug, start, size
     return None
@@ -168,7 +213,7 @@ def read_answer(text: str) -> CityAnswer:
         return CityAnswer(outcome="ignored", normalised=fold(raw))
     slug = _match(folded)
     if slug is not None:
-        return CityAnswer(outcome="matched", name=CITIES[slug], normalised=normalised, slug=slug)
+        return CityAnswer(outcome="matched", name=catalog().cities[slug], normalised=normalised, slug=slug)
     if (
         len(words) > MAX_WORDS
         or normalised in NOT_A_CITY
@@ -282,7 +327,7 @@ def has_words(text: str) -> bool:
 
 def answer_for_slug(slug: str, said: str = "") -> CityAnswer:
     return CityAnswer(
-        outcome="matched", name=CITIES[slug], normalised=" ".join(fold(w) for w in _words(said)), slug=slug
+        outcome="matched", name=catalog().cities[slug], normalised=" ".join(fold(w) for w in _words(said)), slug=slug
     )
 
 
@@ -345,7 +390,10 @@ def comment_dm(answer: CityAnswer, city_map: CityMap) -> DmMessage | None:
 
 def sample_comment_dm(city_map: CityMap) -> DmMessage:
     """What a city rule sends for London: checked when the rule is saved, so a bad image fails then."""
-    message = comment_dm(answer_for_slug("london", "London"), city_map)
-    if message is None:  # London is one of CITIES, so this is always a card.
-        raise RuntimeError("London is missing from CITIES")
+    # Any city on the map makes the same card; London when it's there, so the sample reads familiar.
+    cities = catalog().cities
+    slug = "london" if "london" in cities else next(iter(cities))
+    message = comment_dm(answer_for_slug(slug, cities[slug]), city_map)
+    if message is None:  # a city on the map always makes a card
+        raise RuntimeError(f"no card for {slug}")
     return message
