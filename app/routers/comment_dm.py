@@ -117,6 +117,10 @@ class DmCounts(BaseModel):
     queued: int
     failed: int
     skipped: int
+    # Of the sent ones, what the last data export said: arrived, or refused by the person's
+    # message settings (Instagram accepts both alike, so only the export tells them apart).
+    delivered: int = 0
+    refused: int = 0
 
 
 class SummaryOut(BaseModel):

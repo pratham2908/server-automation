@@ -288,7 +288,16 @@ class TestEnqueue:
             ]
         )
         recent = await store.summary(db, "ch", NOW - timedelta(hours=24))
-        assert recent == {"comments": 4, "dms_sent": 2, "replies_posted": 1, "queued": 1, "failed": 1, "skipped": 0}
+        assert recent == {
+            "comments": 4,
+            "dms_sent": 2,
+            "replies_posted": 1,
+            "queued": 1,
+            "failed": 1,
+            "skipped": 0,
+            "delivered": 0,
+            "refused": 0,
+        }
         assert (await store.summary(db, "ch", None))["dms_sent"] == 3
 
     async def test_claim_takes_only_due_pending_events(self):

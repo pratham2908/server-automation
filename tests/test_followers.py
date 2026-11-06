@@ -94,8 +94,9 @@ class TestImport:
         first = await _import(db, ["ravi", "anjali", "neha"], T0)
         assert (first["first_import"], first["new"], first["unfollowed"]) == (True, 0, 0)
 
-        # Insights show unfollows on exactly one day of the gap: that's the likely day.
-        days = [(T0.date() + timedelta(days=i)).isoformat() for i in range(4)]
+        # Insights show unfollows on exactly one (Pacific, Instagram's) day of the gap: that's the likely day.
+        start = datetime.fromisoformat(fx.instagram_day(T0)).date()
+        days = [(start + timedelta(days=i)).isoformat() for i in range(4)]
         db.instagram_account_daily.docs.extend(
             {"channel_id": "zk", "date": d, "unfollows": 1 if d == days[2] else 0} for d in days
         )
