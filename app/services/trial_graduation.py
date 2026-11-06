@@ -134,7 +134,7 @@ def check_ends_at(video: Mapping[str, Any]) -> datetime:
 
 def trial_fields(
     strategy_arg: str | None,
-    check_arg: TrialCheck | None,
+    check_arg: TrialCheck | Mapping[str, Any] | None,
     existing_strategy: str | None,
     platform: str,
 ) -> dict[str, Any]:
@@ -155,7 +155,10 @@ def trial_fields(
     if check_arg is not None:
         if strategy != MANUAL:
             raise ValueError("A graduation check only applies to a trial reel you share yourself")
-        fields["trial_check"] = check_arg.model_dump()
+        # PATCH /videos/{id} hands it over already dumped to a dict (body.model_dump()); calling
+        # .model_dump() on that was a 500 on 6 Nov 2026. Validate either form the same way.
+        check = check_arg if isinstance(check_arg, TrialCheck) else TrialCheck.model_validate(check_arg)
+        fields["trial_check"] = check.model_dump()
     return fields
 
 
