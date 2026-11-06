@@ -9,6 +9,8 @@ across all requests.  Index creation runs once during the lifespan event.
 import certifi
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
+from app.services.video_properties import PropertyDef
+
 # Module-level reference – set during startup, closed during shutdown.
 _client: AsyncIOMotorClient | None = None
 _db: AsyncIOMotorDatabase | None = None
@@ -256,6 +258,12 @@ async def get_threads_oauth_config(db: AsyncIOMotorDatabase) -> dict | None:
     return await db.config.find_one({"key": "threads_oauth"})
 
 
+async def get_property_defs(db: AsyncIOMotorDatabase, channel_id: str) -> list[PropertyDef]:
+    """The channel's video properties (empty for an unknown channel or one with none)."""
+    channel = await db.channels.find_one({"channel_id": channel_id}, {"video_properties": 1})
+    return [PropertyDef.model_validate(p) for p in (channel or {}).get("video_properties") or []]
+
+
 async def get_content_schema_for_prompt(
     db: AsyncIOMotorDatabase,
     channel_id: str,
@@ -264,6 +272,9 @@ async def get_content_schema_for_prompt(
 ) -> list[dict]:
     """Fetch content param definitions from the ``content_params`` collection
     and return them in the list-of-dicts format that Gemini prompts expect.
+
+    Legacy: content params gave way to video properties (``get_property_defs``),
+    which every AI prompt now reads. Kept for the old content-param routes.
 
     When *category* is provided, only params whose ``belongs_to`` includes
     that category name or ``"all"`` are returned.

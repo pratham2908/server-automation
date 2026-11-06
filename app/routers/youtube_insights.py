@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.database import get_db, get_property_defs
 from app.dependencies import verify_api_key
 from app.models.content_analysis import (
     ContentAnalysisOut,
@@ -37,7 +37,7 @@ from app.services.instagram_content_analysis import (
     posting_slots,
 )
 from app.services.instagram_reel_hourly import HOURLY_METRICS, MAX_GAP_HOURS, MAX_HOURS, MetricReading, hourly_gains
-from app.services.video_properties import parse_property_filter, property_filter_query
+from app.services.video_properties import labelled, parse_property_filter, property_filter_query
 from app.timezone import assume_utc, now_ist, to_ist_iso
 
 router = APIRouter(
@@ -65,6 +65,8 @@ async def get_content_analysis(
     videos: list[ReelAnalysisOut] = []
     summaries: list[ReelSummary] = []
     params: dict[str, dict[str, list[str]]] = {}
+    # Content groups are the owner's property values (by name and label), not the retired content params.
+    property_defs = await get_property_defs(db, channel_id)
     cursor = db.videos.find(
         {
             "channel_id": channel_id,
@@ -79,7 +81,6 @@ async def get_content_analysis(
             "title": 1,
             "thumbnail_url": 1,
             "category": 1,
-            "content_params": 1,
             "properties": 1,
             "published_at": 1,
             "metadata": 1,
@@ -137,7 +138,7 @@ async def get_content_analysis(
                 views_24h=video.views_24h,
             )
         )
-        params[video_id] = flatten_params(doc.get("content_params"))
+        params[video_id] = flatten_params(labelled(property_defs, doc.get("properties")))
 
     hours, weekdays = posting_slots(summaries, now_ist())
     videos.sort(key=lambda v: v.published_at or "", reverse=True)
