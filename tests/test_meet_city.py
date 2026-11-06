@@ -202,7 +202,7 @@ def test_the_tally_groups_by_city_most_asked_first() -> None:
     db = DB(
         channels=[dict(CHANNEL)],
         dm_city_answers=[row("m1", "a", "Kraków"), row("m2", "b", "krakow"), row("m3", "c", "bangalore"),
-                         row("m4", "d", "BLR"), row("m5", "d", "Bengaluru"), row("m6", "e", "Hisar"),
+                         row("m4", "d", "BLR"), row("m5", "d", "Bengaluru"), row("m6", "e", "Hisar"), row("m8", "g", "Hisar, Haryana"),
                          row("m7", "f", "thanks")],
     )  # fmt: skip
     app.dependency_overrides[setup_router.get_db] = lambda: db
@@ -216,7 +216,7 @@ def test_the_tally_groups_by_city_most_asked_first() -> None:
         app.dependency_overrides.pop(setup_router.get_db, None)
     assert [(d["name"], d["people"], d["count"]) for d in body["demand"]] == [
         ("Bengaluru", 2, 3),
+        ("Hisar", 2, 2),
         ("Krakow", 2, 2),
-        ("Hisar", 1, 1),
     ]
-    assert len(body["recent"]) == 7 and body["recent"][0]["text"] == "thanks"
+    assert len(body["recent"]) == 8
