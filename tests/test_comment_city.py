@@ -281,10 +281,23 @@ class TestCityComments:
         # Both asks still count as demand.
         assert sorted(r["normalised"] for r in db.dm_city_answers.docs) == ["accra", "lagos"]
 
-    async def test_a_second_comment_after_a_named_city_is_already_messaged(self) -> None:
+    async def test_a_second_named_city_is_already_messaged_but_still_tallied(self) -> None:
         db = _db()
         await _enqueue(db, _comment("London", cid="c1"))
-        assert await _enqueue(db, _comment("Paris too", cid="c2")) == SKIP_ALREADY_MESSAGED
+        assert await _enqueue(db, _comment("Paris", cid="c2")) == SKIP_ALREADY_MESSAGED
+        assert sorted(r["slug"] for r in db.dm_city_answers.docs) == ["london", "paris"]
+
+    async def test_a_repeat_ask_the_model_reads_is_tallied_but_never_dmed_twice(self) -> None:
+        db = _db()
+        await _enqueue(db, _comment("London", cid="c1"))
+        # "taipei" from someone already messaged on this reel was once skipped unread, and its ask lost.
+        assert await _enqueue(db, _comment("taipei", cid="c2")) == store.QUEUED
+        service = FakeService()
+        assert await _send(db, FakeGemini({"taipei": "Taipei"}), service, "c2") == "skipped"
+        assert service.dms == [] and _event_doc(db, "c2")["skip_reason"] == SKIP_ALREADY_MESSAGED
+        assert sorted(r["normalised"] for r in db.dm_city_answers.docs) == ["london", "taipei"]
+        # The first comment still gets its DM.
+        assert await _send(db, None, service, "c1") == "sent" and len(service.dms) == 1
 
     async def test_a_neighbourhood_gets_its_citys_card_and_counts_for_the_city(self) -> None:
         db = _db()

@@ -25,6 +25,7 @@ from pymongo.errors import DuplicateKeyError
 from app.services import city_tally, meet_city
 from app.services.comment_dm import (
     LOGGED_SKIPS,
+    SKIP_ALREADY_MESSAGED,
     STATUS_FAILED,
     STATUS_PENDING,
     STATUS_SENDING,
@@ -269,6 +270,10 @@ async def enqueue(
             return NO_CITY
         else:
             city_fields = {CITY_CHECK_FIELD: CITY_PENDING, "city": None}
+            if reason == SKIP_ALREADY_MESSAGED:
+                # Already messaged on this reel, but what they asked for is still demand ("taipei" was lost
+                # this way): the worker reads it, tallies it, and skips the DM itself.
+                reason = None
         city_fields["city_map"] = city_map.model_dump(mode="json")
     doc = {
         "comment_id": event.comment_id,
