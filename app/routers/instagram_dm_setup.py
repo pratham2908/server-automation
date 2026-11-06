@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.dependencies import verify_api_key
-from app.services import dm_replies
+from app.services import dm_replies, meet_city
 from app.services.dm_content import InboxSettings, MediaType, ice_breakers_body, menu_body, settings_replies
 from app.services.dm_sender import r2_signer
 from app.services.instagram import InstagramService, graph_error_message
@@ -285,7 +285,9 @@ async def city_answers(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_d
     groups: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         if r.get("outcome") != "ignored":
-            groups.setdefault(str(r.get("slug") or r.get("normalised") or ""), []).append(r)
+            # By the city, not by how they wrote it: "Rome" and "rome italy" are one ask for Rome.
+            key = r.get("slug") or meet_city.fold(str(r.get("name") or "")) or r.get("normalised") or ""
+            groups.setdefault(str(key), []).append(r)
     demand = [
         CityDemandOut(
             normalised=str(g[-1].get("normalised") or ""),
