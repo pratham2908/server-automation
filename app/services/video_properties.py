@@ -1,8 +1,10 @@
 """Owner-defined properties on a channel's videos — niche, series, format, whatever the owner tracks.
 
 Pure: no I/O. Each channel keeps its own list of properties, each with its own
-values, and a video can carry several values of one property. Only the owner sets
-them; nothing automatic writes here, unlike the AI-filled content params.
+values, and a video can carry several values of one property. Only the owner (or a
+tool acting for them) sets them; no AI guess ever writes here. They replace the
+older AI-filled content params: the AI analysis, scorecard and content groups read
+these, by name and label (``labelled``, ``prompt_schema``).
 
 Properties and values have stable ids, and a video stores ids, so renaming a value
 never has to touch the videos tagged with it. A video's assignment lives in
@@ -13,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -122,3 +125,27 @@ def parse_property_filter(raw: str | None) -> dict[str, list[str]]:
 def property_filter_query(filters: Mapping[str, Sequence[str]]) -> dict[str, dict[str, list[str]]]:
     """The Mongo filter for videos that match: any chosen value of a property, and every property chosen."""
     return {f"properties.{prop}": {"$in": list(values)} for prop, values in filters.items() if values}
+
+
+def labelled(defs: Sequence[PropertyDef], assignment: Mapping[str, Sequence[str]] | None) -> dict[str, str | list[str]]:
+    """A video's tags by property name and value label, the way an AI prompt or a grouping reads them.
+
+    One value reads as a plain label, several as a list: ``{"Format": "Listicle", "Topic": ["DSA", "OS"]}``.
+    Unknown ids are skipped and an untagged property is left out.
+    """
+    out: dict[str, str | list[str]] = {}
+    for prop in defs:
+        chosen = set((assignment or {}).get(prop.id) or [])
+        labels = [v.label for v in prop.values if v.id in chosen]
+        if labels:
+            out[prop.name] = labels[0] if len(labels) == 1 else labels
+    return out
+
+
+def prompt_schema(defs: Sequence[PropertyDef]) -> list[dict[str, Any]]:
+    """The channel's properties as the dimension list the AI analysis prompts take."""
+    return [
+        {"name": p.name, "description": "", "values": [v.label for v in p.values], "unique": False}
+        for p in defs
+        if p.values
+    ]

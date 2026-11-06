@@ -11,8 +11,10 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.database import get_property_defs
 from app.logger import get_logger
 from app.services.gemini import GeminiService
+from app.services.video_properties import labelled
 
 logger = get_logger(__name__)
 
@@ -87,13 +89,13 @@ async def _gather_channel_patterns(
 def _build_content_alignment_signal(
     video: dict,
     channel_patterns: dict[str, Any] | None,
+    video_params: dict[str, str | list[str]],
 ) -> dict[str, Any] | None:
-    """Check how well the video's content params match channel patterns."""
+    """Check how well the video's properties (by name and label) match channel patterns."""
     if not channel_patterns:
         return None
 
     video_category = video.get("category", "")
-    video_params = video.get("content_params") or {}
 
     cat_scores = {c["category"]: c.get("score", 0) for c in channel_patterns.get("category_analysis", [])}
 
@@ -103,7 +105,8 @@ def _build_content_alignment_signal(
     matching_best_values = 0
     total_params = len(video_params)
     for param_name, param_value in video_params.items():
-        if param_value in param_best.get(param_name, []):
+        values = param_value if isinstance(param_value, list) else [param_value]
+        if any(v in param_best.get(param_name, []) for v in values):
             matching_best_values += 1
 
     return {
@@ -155,7 +158,8 @@ async def generate_scorecard(
     retention = await _gather_retention_signal(video)
     thumbnail = await _gather_thumbnail_signal(db, channel_id, video_id)
     channel_patterns = await _gather_channel_patterns(db, channel_id)
-    content_alignment = _build_content_alignment_signal(video, channel_patterns)
+    video_params = labelled(await get_property_defs(db, channel_id), video.get("properties"))
+    content_alignment = _build_content_alignment_signal(video, channel_patterns, video_params)
     title_desc = _build_title_description_signal(video)
 
     posting_time_signal = None

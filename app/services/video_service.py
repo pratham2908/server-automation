@@ -1896,7 +1896,8 @@ class VideoService:
         if not new_vids:
             await self._refresh_youtube_insights(yt, channel_id, channel, yt_vids, incremental)
             return {"ok": True, "synced": 0, "missing": missing}
-        schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
+        # Categories only: the AI no longer guesses content params, and never writes the owner's properties.
+        schema: list[dict[str, Any]] = []
         cats = [
             {"name": c["name"], "description": c.get("description", "")}
             async for c in self.db.categories.find({"channel_id": channel_id})
@@ -1946,7 +1947,6 @@ class VideoService:
                             "youtube_privacy_status": v.get("youtube_privacy_status"),
                             "duration_seconds": v.get("duration_seconds"),
                         },
-                        "content_params": ana.get("content_params"),
                         "verification_status": "unverified",
                         "created_at": now_ist(),
                     }
@@ -2115,7 +2115,8 @@ class VideoService:
         if not new_vids:
             await self._refresh_instagram_account_insights(ig, channel_id, channel, counts_by_media)
             return {"ok": True, "synced": 0, "missing": missing}
-        schema = await get_content_schema_for_prompt(self.db, channel_id, include_belongs_to=True)
+        # Categories only: the AI no longer guesses content params, and never writes the owner's properties.
+        schema: list[dict[str, Any]] = []
         cats = [
             {"name": c["name"], "description": c.get("description", "")}
             async for c in self.db.categories.find({"channel_id": channel_id})
@@ -2152,7 +2153,6 @@ class VideoService:
                         "thumbnail_url": v.get("thumbnail_url"),
                         "metadata": v.get("metadata", {}),
                         "insights_synced_at": now if v["instagram_media_id"] in stored else None,
-                        "content_params": ana.get("content_params"),
                         "verification_status": "unverified",
                         "created_at": now_ist(),
                     }

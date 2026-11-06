@@ -13,8 +13,10 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.database import get_property_defs
 from app.logger import get_logger
 from app.services.gemini import GeminiService
+from app.services.video_properties import labelled
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
@@ -154,6 +156,7 @@ async def _fetch_own_video_metadata(
     db: AsyncIOMotorDatabase,
 ) -> list[dict[str, Any]]:
     """Load own published videos with metadata for intelligence extraction."""
+    defs = await get_property_defs(db, channel_id)
     videos = await db.videos.find(
         {"channel_id": channel_id, "status": "published"},
     ).to_list(length=None)
@@ -175,7 +178,7 @@ async def _fetch_own_video_metadata(
             "engagement_rate": meta.get("engagement_rate", 0),
             "published_at": str(v.get("published_at", "")),
             "category": v.get("category", ""),
-            "content_params": v.get("content_params") or {},
+            "content_params": labelled(defs, v.get("properties")),
             "video_id": v.get("video_id", ""),
         }
         result.append(entry)

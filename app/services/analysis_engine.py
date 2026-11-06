@@ -20,6 +20,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.logger import get_logger
 from app.services.gemini import GeminiService
 from app.services.todo_engine import update_categories_from_analysis
+from app.services.video_properties import labelled, prompt_schema
 from app.services.youtube import YouTubeService
 from app.timezone import now_ist
 
@@ -98,9 +99,11 @@ async def run_analysis(
     if not channel_doc:
         return {}
 
-    from app.database import get_content_schema_for_prompt
+    from app.database import get_property_defs
 
-    content_schema = await get_content_schema_for_prompt(db, channel_id)
+    # The owner's video properties are the dimensions the analysis works in (content params are retired).
+    property_defs = await get_property_defs(db, channel_id)
+    content_schema = prompt_schema(property_defs)
 
     subscriber_count = 0
     if platform == "youtube" and youtube_service:
@@ -250,7 +253,7 @@ async def run_analysis(
         video_data_for_gemini = {
             "title": v.get("title", ""),
             "category": v.get("category", ""),
-            "content_params": v.get("content_params") or {},
+            "content_params": labelled(property_defs, v.get("properties")),
             "stats": stats,
             "audience_retention_curve": curve,
         }
@@ -281,7 +284,7 @@ async def run_analysis(
         performance_data = {
             "title": v.get("title", ""),
             "category": v.get("category", ""),
-            "content_params": v.get("content_params"),
+            "content_params": labelled(property_defs, v.get("properties")),
             "published_at": v.get("published_at"),
             "stats_snapshot": stats,
             "ai_insight": ai_insight,
@@ -335,7 +338,8 @@ async def run_analysis(
             {
                 "title": pv.get("title") or perf.get("title", ""),
                 "category": pv.get("category") or perf.get("category", ""),
-                "content_params": pv.get("content_params") or perf.get("content_params") or {},
+                # Read fresh from the video's tags, so a retag since the last run counts.
+                "content_params": labelled(property_defs, pv.get("properties")),
                 "stats": perf.get("stats_snapshot", {}),
                 "ai_insight": perf.get("ai_insight", {}),
             }

@@ -15,7 +15,9 @@ from app.services.video_properties import (
     PropertyValueIn,
     clean_assignment,
     define_properties,
+    labelled,
     parse_property_filter,
+    prompt_schema,
     property_filter_query,
     removed_ids,
 )
@@ -138,3 +140,43 @@ def test_removing_a_value_untags_only_that_value(client):
     )
     assert res.status_code == 200
     assert [v["properties"] for v in db.videos.docs] == [{"niche": ["dsa"]}, {"niche": []}]
+
+
+class TestLabelledForTheAi:
+    DEFS = [
+        PropertyDef(
+            id="fmt",
+            name="Format",
+            values=[PropertyValue(id="lst", label="Listicle"), PropertyValue(id="cmp", label="Comparison")],
+        ),
+        PropertyDef(
+            id="top", name="Topic", values=[PropertyValue(id="dsa", label="DSA"), PropertyValue(id="os", label="OS")]
+        ),
+        PropertyDef(id="empty", name="Unused", values=[]),
+    ]
+
+    def test_names_and_labels_one_value_plain_several_a_list(self) -> None:
+        tags = {"fmt": ["cmp"], "top": ["os", "dsa"], "gone": ["x"]}
+        assert labelled(self.DEFS, tags) == {"Format": "Comparison", "Topic": ["DSA", "OS"]}
+
+    def test_untagged_or_missing(self) -> None:
+        assert labelled(self.DEFS, None) == {}
+        assert labelled(self.DEFS, {"fmt": ["nope"]}) == {}
+
+    def test_prompt_schema_lists_labels_and_skips_empty_properties(self) -> None:
+        assert prompt_schema(self.DEFS) == [
+            {"name": "Format", "description": "", "values": ["Listicle", "Comparison"], "unique": False},
+            {"name": "Topic", "description": "", "values": ["DSA", "OS"], "unique": False},
+        ]
+
+
+def test_scorecard_alignment_counts_a_best_value_among_several() -> None:
+    from app.services.scorecard import _build_content_alignment_signal
+
+    patterns = {"content_param_analysis": [{"param_name": "Topic", "best_values": ["OS"]}]}
+    signal = _build_content_alignment_signal(
+        {"category": "x"}, patterns, {"Topic": ["DSA", "OS"], "Format": "Listicle"}
+    )
+    assert signal is not None
+    assert signal["params_matching_best_values"] == 1
+    assert signal["total_params"] == 2
