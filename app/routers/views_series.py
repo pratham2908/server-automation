@@ -2,7 +2,8 @@
 
 Hourly ranges (24h, 48h, 7d) are built from our sync readings, in hour or
 quarter-hour bars, and can chart any counted metric; daily ranges (28d, 90d) chart views from the platform's own
-per-day numbers. See ``app/services/view_series.py``.
+per-day numbers, with today's bar summed from today's hours while the day runs. Any range can be a custom
+"Nh"/"Nd" window and ask for the other kind of bar (hourly up to 28 days). See ``app/services/view_series.py``.
 """
 
 from __future__ import annotations
@@ -24,10 +25,11 @@ from app.services.instagram_reel_snapshot import MEASURED_ONLY
 from app.services.view_series import (
     DAY,
     LEVEL_SNAPSHOT_FIELDS,
-    RANGES,
+    MAX_QUARTER_HOURS,
     STEPS,
     Align,
     Curve,
+    Granularity,
     Measure,
     SeriesPoint,
     Step,
@@ -36,8 +38,11 @@ from app.services.view_series import (
     daily_points,
     hourly_points,
     last_known,
+    parse_range,
     series_total,
+    today_so_far,
     window_starts,
+    with_running_today,
 )
 from app.services.views_top_videos import MEDIA_FIELDS, ViewsTopVideosOut, get_channel_top_videos
 from app.services.views_trending import TrendingVideosOut, get_trending_videos
@@ -59,6 +64,7 @@ class SeriesPointOut(BaseModel):
     value: float | None = None
     rough: bool = False
     offset_hours: float | None = None
+    running: bool = False
 
 
 class ViewsSeriesOut(BaseModel):
@@ -81,6 +87,8 @@ class ViewsSeriesOut(BaseModel):
     last_updated: str | None = None
     # The platform's daily numbers arrive late; what that means for the newest days.
     note: str | None = None
+    # The end of the last hour summed into today's running bar (IST), when today's bar is built from hours.
+    running_through: str | None = None
 
 
 def _out(point: SeriesPoint) -> SeriesPointOut:
@@ -243,16 +251,24 @@ async def _views_series(
     step: Step = "1h",
     align: Align = "clock",
     measure: Measure = "gain",
+    granularity_override: Granularity | None = None,
 ) -> ViewsSeriesOut:
-    if range_key not in RANGES:
-        raise HTTPException(status_code=422, detail=f"range must be one of {', '.join(RANGES)}")
+    parsed = parse_range(range_key, granularity_override)
+    if parsed is None:
+        raise HTTPException(
+            status_code=422,
+            detail="range must be 24h, 48h, 7d, 28d, 90d or a custom Nh/Nd window; hourly bars reach 28 days at most",
+        )
     if align == "posted" and video_id is None:
         raise HTTPException(status_code=422, detail="Since posted applies to one video, not the whole channel")
-    granularity, size = RANGES[range_key]
+    granularity, size = parsed
+    if granularity == "hour" and step == "15m" and size > MAX_QUARTER_HOURS:
+        raise HTTPException(status_code=422, detail="15-minute bars reach 7 days at most")
     channel = await _channel(db, channel_id)
     platform = get_channel_platform(channel)
     now = now_ist()
 
+    running_through: str | None = None
     is_level = metric in LEVEL_SNAPSHOT_FIELDS
     if is_level:
         if platform != "instagram":
@@ -273,7 +289,8 @@ async def _views_series(
             else None
         )
     elif granularity == "hour":
-        readings, published = await _hourly_readings(db, channel_id, platform, video_id, metric)
+        since = now - timedelta(hours=size) - timedelta(hours=24)
+        readings, published = await _hourly_readings(db, channel_id, platform, video_id, metric, since=since)
         points = hourly_points(published, readings, metric, now, size, STEPS[step])
         last = readings[-1].at.astimezone(IST).isoformat() if readings else None
         source = "readings"
@@ -284,6 +301,15 @@ async def _views_series(
         values, rough, note = await _daily_views(db, channel_id, platform, video_id)
         today: date = now.astimezone(IST).date()
         points = daily_points(values, rough, today, size)
+        # Today's bar while the day runs: the platform's count if it has one, else the sum of today's hours.
+        midnight = datetime.combine(today, datetime.min.time(), tzinfo=IST)
+        hour_readings, published = await _hourly_readings(
+            db, channel_id, platform, video_id, metric, since=midnight - timedelta(hours=4)
+        )
+        so_far = today_so_far(published, hour_readings, metric, now)
+        if points and points[-1].value is None and so_far:
+            running_through = so_far[1]
+        points = with_running_today(points, today, so_far)
         reported = [d for d, v in values.items() if v is not None]
         last = max(reported) if reported else None
         source = "readings" if platform in ("instagram", "threads") and video_id else "platform"
@@ -306,20 +332,26 @@ async def _views_series(
         known_points=known,
         last_updated=last,
         note=note,
+        running_through=running_through,
     )
+
+
+_RANGE_DOC = "24h | 48h | 7d (hourly), 28d | 90d (daily), or a custom Nh / Nd window"
+_GRANULARITY_DOC = "hour | day to override the range's own bars (hourly up to 28 days)"
 
 
 @router.get("/views/top-videos", response_model=ViewsTopVideosOut)
 async def get_views_top_videos(
     channel_id: str,
-    range: str = Query("48h", description="24h | 48h | 7d (hourly) or 28d | 90d (daily)"),
+    range: str = Query("48h", description=_RANGE_DOC),
+    granularity: Granularity | None = Query(None, description=_GRANULARITY_DOC),
     bucket: str | None = Query(None, description="ISO hour/quarter-hour start or date for a single candle"),
     limit: int = Query(6, ge=1, le=20),
     step: Step = Query("1h", description="Bar width of an hourly range: 1h | 15m"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> ViewsTopVideosOut:
     """Top videos that gained the most views in the selected duration or specific candle."""
-    return await get_channel_top_videos(db, channel_id, range, bucket, limit, step)
+    return await get_channel_top_videos(db, channel_id, range, bucket, limit, step, granularity)
 
 
 @router.get("/views/trending", response_model=TrendingVideosOut)
@@ -336,7 +368,8 @@ async def get_views_trending(
 @router.get("/views", response_model=ViewsSeriesOut)
 async def get_channel_views(
     channel_id: str,
-    range: str = Query("48h", description="24h | 48h | 7d (hourly) or 28d | 90d (daily)"),
+    range: str = Query("48h", description=_RANGE_DOC),
+    granularity: Granularity | None = Query(None, description=_GRANULARITY_DOC),
     metric: Metric = Query("views"),
     video_id: str | None = Query(None, description="A video's platform id; omit for the whole channel"),
     step: Step = Query("1h", description="Bar width of an hourly range: 1h | 15m"),
@@ -345,4 +378,4 @@ async def get_channel_views(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> ViewsSeriesOut:
     """Views (or likes, comments, shares, saves) per hour, quarter-hour or day — gained, or as a running total."""
-    return await _views_series(db, channel_id, video_id, range, metric, step, align, measure)
+    return await _views_series(db, channel_id, video_id, range, metric, step, align, measure, granularity)

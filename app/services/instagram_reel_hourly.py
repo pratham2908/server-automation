@@ -88,8 +88,10 @@ def hourly_gains(published_at: datetime | None, readings: Sequence[MetricReading
     return bucket_gains(published_at, readings, HOUR)
 
 
-def bucket_gains(published_at: datetime | None, readings: Sequence[MetricReading], step: timedelta) -> list[HourGains]:
-    """Each complete IST bucket's gain per metric, oldest first, covering at most the last ``MAX_HOURS``.
+def bucket_gains(
+    published_at: datetime | None, readings: Sequence[MetricReading], step: timedelta, max_hours: int = MAX_HOURS
+) -> list[HourGains]:
+    """Each complete IST bucket's gain per metric, oldest first, covering at most the last *max_hours*.
 
     *step* is ``HOUR`` or ``QUARTER``. The publish moment counts as a reading of
     zero for every metric, which is what lets a reel read often from the start
@@ -102,7 +104,7 @@ def bucket_gains(published_at: datetime | None, readings: Sequence[MetricReading
     last_at = ordered[-1].at
     # Complete buckets only: the one the last reading falls in is still running.
     end_hour = floor_to(last_at, step)
-    start_hour = end_hour - MAX_HOURS * HOUR
+    start_hour = end_hour - max_hours * HOUR
 
     series: dict[str, dict[datetime, float | None]] = {}
     for metric in HOURLY_METRICS:
