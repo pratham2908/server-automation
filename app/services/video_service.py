@@ -55,7 +55,7 @@ from app.services.youtube import YouTubeService
 from app.services.youtube_analytics_sync import refresh_youtube_analytics
 from app.services.youtube_schedule import check_snippet_limits, error_reason, merged_tags, publish_at_for
 from app.services.youtube_snapshots import record_youtube_snapshots
-from app.timezone import IST, now_ist, to_ist_iso
+from app.timezone import IST, now_ist, parse_ist, to_ist_iso
 
 logger = get_logger(__name__)
 
@@ -1088,7 +1088,7 @@ class VideoService:
         params = json.loads(content_params) if content_params else None
         platform = get_channel_platform(channel)
         parsed_tags = [t.strip() for t in tags.split(",")] if tags else []
-        sch_at = isoparse(scheduled_at).replace(tzinfo=IST) if scheduled_at else None
+        sch_at = parse_ist(scheduled_at) if scheduled_at else None
         vid_id = str(uuid.uuid4())
         key = f"{channel_id}/{vid_id}.mp4"
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
@@ -1185,7 +1185,7 @@ class VideoService:
         sch_at: datetime | None = None
         if scheduled_at:
             try:
-                sch_at = isoparse(scheduled_at).replace(tzinfo=IST)
+                sch_at = parse_ist(scheduled_at)
             except Exception as exc:
                 # sch_at stays None, so the caller asked for a scheduled video and
                 # silently gets an unscheduled one that never publishes.
@@ -1362,7 +1362,7 @@ class VideoService:
             sch_at: datetime | None = None
             if ch_cfg.get("scheduled_at"):
                 try:
-                    sch_at = isoparse(ch_cfg["scheduled_at"]).replace(tzinfo=IST)
+                    sch_at = parse_ist(ch_cfg["scheduled_at"])
                 except Exception as exc:
                     # As above: the video lands unscheduled with no error surfaced.
                     logger.error(

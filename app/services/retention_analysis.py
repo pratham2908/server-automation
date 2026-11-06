@@ -13,7 +13,6 @@ import subprocess
 from datetime import datetime
 from typing import Any
 
-from dateutil.parser import isoparse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_channel_platform
@@ -23,7 +22,7 @@ from app.services.gemini import GeminiService
 from app.services.pacing_templates import PacingTemplateService
 from app.services.r2 import R2Service
 from app.services.schedule_operation import QUEUED_PLATFORMS, schedule_on_platform
-from app.timezone import IST, now_ist
+from app.timezone import assume_utc, now_ist, parse_ist
 
 logger = get_logger(__name__)
 
@@ -162,11 +161,13 @@ async def promote_processing_to_ready(
     scheduled_at = video.get("scheduled_at")
     if isinstance(scheduled_at, str):
         try:
-            scheduled_at = isoparse(scheduled_at)
+            scheduled_at = parse_ist(scheduled_at)
         except (ValueError, TypeError):
             scheduled_at = None
-    if isinstance(scheduled_at, datetime) and scheduled_at.tzinfo is None:
-        scheduled_at = scheduled_at.replace(tzinfo=IST)
+    elif isinstance(scheduled_at, datetime):
+        # MongoDB hands datetimes back naive and in UTC. Relabelling one as IST (as this did until
+        # 6 Nov 2026) scheduled every upload-time Instagram schedule 5h30m early (Mehr refs 117, 122).
+        scheduled_at = assume_utc(scheduled_at)
 
     is_scheduled = isinstance(scheduled_at, datetime) and scheduled_at > now
     if is_scheduled:
