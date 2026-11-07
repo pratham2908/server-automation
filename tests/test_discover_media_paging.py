@@ -203,3 +203,27 @@ def test_the_feed_asks_for_view_counts_and_stats_ask_for_nothing_heavy():
     svc.discover_all_media("own", "target", limit=1, media_fields=STATS_MEDIA_FIELDS)
     assert "view_count" in calls[0] and "children" in calls[0]
     assert "view_count" in calls[1] and "caption" not in calls[1] and "children" not in calls[1]
+
+
+# --- a page Meta is too slow to build is shrunk like a refused one -------------
+
+
+def test_a_timed_out_page_is_retried_smaller_and_the_smaller_size_sticks():
+    """Carousel-heavy accounts can run past the read timeout at 50: halve, as for
+    the 500, and keep the smaller page for the rest of the listing."""
+    svc, rec = _service([
+        requests.ReadTimeout("read timed out"),
+        _page(["a", "b"], after="c1"),
+        _page(["c"]),
+    ])
+    items = svc.discover_all_media("own", "target", limit=250)
+    assert [i["id"] for i in items] == ["a", "b", "c"]
+    assert rec.sizes == [50, 25, 25]
+    assert rec.cursors == [None, None, "c1"]
+
+
+def test_a_timeout_at_the_floor_is_raised():
+    svc, rec = _service([requests.ReadTimeout("slow")] * 4)
+    with pytest.raises(requests.Timeout):
+        svc.discover_all_media("own", "target", limit=250)
+    assert rec.sizes == [50, 25, 12, MIN_MEDIA_PAGE_SIZE]
