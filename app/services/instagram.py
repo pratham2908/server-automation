@@ -888,6 +888,12 @@ class InstagramService:
         body = self._get(f"{media_id}/comments", {"fields": "id,text,timestamp,username,from", "limit": str(limit)})
         return list(body.get("data", []))
 
+    def get_comment_like_counts(self, comment_ids: list[str]) -> dict[str, int]:
+        """Likes on each of up to 50 comments, read in one call. Raises if any id is gone (Graph refuses
+        the whole multi-id read then), so the caller can read that batch one comment at a time."""
+        body = self._get("", {"ids": ",".join(comment_ids), "fields": "id,like_count"})
+        return {cid: int(node.get("like_count") or 0) for cid, node in body.items() if isinstance(node, dict)}
+
     def account_user_id(self) -> str:
         """The professional-account id Meta addresses webhooks to (Instagram Login's ``user_id``)."""
         return str(self._get("me", {"fields": "user_id"}).get("user_id", ""))
