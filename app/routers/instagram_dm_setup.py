@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 import requests
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
@@ -258,6 +258,10 @@ class CityDemandOut(BaseModel):
     count: int
     people: int
     last_at: str | None
+    # Likes on the comments that named it (read by the comment poll; 0 until it has run): the sum, and
+    # the most any one of them got, for "the most-liked city is our next video".
+    likes: int = 0
+    top_likes: int = 0
 
 
 class CityAnswerOut(BaseModel):
@@ -270,6 +274,10 @@ class CityAnswerOut(BaseModel):
     reply_kind: str
     peer_id: str
     answered_at: str | None
+    source: str = ""
+    media_id: str = ""
+    username: str = ""
+    like_count: int | None = None
 
 
 class CityAnswersOut(BaseModel):
@@ -278,10 +286,17 @@ class CityAnswersOut(BaseModel):
 
 
 @router.get("/city-answers", response_model=CityAnswersOut)
-async def city_answers(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> CityAnswersOut:
-    """Cities typed in the meet flow: a tally by city (most asked first), and the latest answers."""
+async def city_answers(
+    channel_id: str,
+    media_id: str | None = Query(None, description="Only the comments on this reel (a city vote's reel)"),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> CityAnswersOut:
+    """Cities asked for in DMs and comments: a tally by city (most asked first), and the latest answers."""
     await _channel(db, channel_id)
-    rows = await db.dm_city_answers.find({"channel_id": channel_id}).to_list(length=None)
+    query: dict[str, Any] = {"channel_id": channel_id}
+    if media_id:
+        query["media_id"] = media_id
+    rows = await db.dm_city_answers.find(query).to_list(length=None)
     groups: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         if r.get("outcome") != "ignored":
@@ -299,11 +314,14 @@ async def city_answers(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_d
             last_at=_iso(
                 max((r["answered_at"] for r in g if isinstance(r.get("answered_at"), datetime)), default=None)
             ),
+            likes=sum(int(r.get("like_count") or 0) for r in g),
+            top_likes=max((int(r.get("like_count") or 0) for r in g), default=0),
         )
         for g in groups.values()
     ]
     demand.sort(key=lambda d: (-d.people, -d.count, d.normalised))
-    recent = sorted(rows, key=lambda r: assume_utc(r["created_at"]), reverse=True)[:100]
+    # One reel's vote is shown whole; the channel-wide list is the latest 100.
+    recent = sorted(rows, key=lambda r: assume_utc(r["created_at"]), reverse=True)[: None if media_id else 100]
     return CityAnswersOut(
         demand=demand,
         recent=[
@@ -317,6 +335,10 @@ async def city_answers(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_d
                 reply_kind=str(r.get("reply_kind") or ""),
                 peer_id=str(r.get("peer_id") or ""),
                 answered_at=_iso(r.get("answered_at")),
+                source=str(r.get("source") or ""),
+                media_id=str(r.get("media_id") or ""),
+                username=str(r.get("username") or ""),
+                like_count=r.get("like_count"),
             )
             for r in recent
         ],

@@ -8,10 +8,20 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
+import requests
 
+from app.routers.instagram_dm_setup import city_answers
+from app.services import city_tally, meet_city
 from app.services import comment_dm_store as store
-from app.services import meet_city
-from app.services.comment_dm import MAX_ATTEMPTS, SKIP_ALREADY_MESSAGED, CommentEvent, DmRule, stored_rule
+from app.services.comment_dm import (
+    MAX_ATTEMPTS,
+    SKIP_ALREADY_MESSAGED,
+    SKIP_OWN,
+    SKIP_TALLY_ONLY,
+    CommentEvent,
+    DmRule,
+    stored_rule,
+)
 from app.services.comment_dm_worker import send_one
 from app.services.meet_city import (
     CityMap,
@@ -338,3 +348,129 @@ class TestCityComments:
         doc = _event_doc(db)
         assert doc["dm_text"] == "hi" and "city_check" not in doc and db.dm_city_answers.docs == []
         assert meet_city.TYPED_ANSWER_CHANNEL == "TryAlgoViz"
+
+
+# --- tally only: a city vote, nothing sent (@themapworld, 2026-11-07) ---
+
+TALLY = DmRule(city_map=TMW, reply_texts=["Sent, check your DMs 📩"], tally_only=True)
+
+
+def _tally_db(rule: DmRule = TALLY) -> DB:
+    stored = stored_rule(rule, None, NOW - timedelta(hours=1)).model_dump()
+    return DB(channels=[{**CHANNEL, store.DEFAULT_FIELD: stored}])
+
+
+class FakeLikes:
+    """Graph's multi-id like read: refuses the whole batch (code 100) when any id in it is gone."""
+
+    def __init__(self, likes: dict[str, int], fail_code: int | None = None) -> None:
+        self.likes = likes
+        self.fail_code = fail_code
+        self.calls: list[list[str]] = []
+
+    def get_comment_like_counts(self, comment_ids: list[str]) -> dict[str, int]:
+        self.calls.append(list(comment_ids))
+        code = self.fail_code if self.fail_code is not None else (100 if set(comment_ids) - set(self.likes) else None)
+        if code is not None:
+            response = requests.Response()
+            response.status_code = 400
+            response._content = json.dumps({"error": {"code": code}}).encode()
+            raise requests.HTTPError(response=response)
+        return {cid: self.likes[cid] for cid in comment_ids}
+
+
+def test_a_tally_only_rule_needs_nothing_to_send() -> None:
+    rule = DmRule(tally_only=True)
+    assert rule.reads_cities and rule.city_map is None
+
+
+@pytest.mark.asyncio
+class TestTallyOnly:
+    async def test_a_named_city_is_tallied_and_never_sent_or_replied_to(self) -> None:
+        db = _tally_db()
+        assert await _enqueue(db, _comment("London 🔥")) == SKIP_TALLY_ONLY
+        doc = _event_doc(db)
+        assert (doc["status"], doc["reply_text"], doc["cards"]) == ("skipped", None, [])
+        [row] = db.dm_city_answers.docs
+        assert (row["slug"], row["replied"]) == ("london", False)
+
+    async def test_a_place_the_model_reads_is_tallied_and_never_sent(self) -> None:
+        db = _tally_db()
+        assert await _enqueue(db, _comment("do Lagos next")) == store.QUEUED
+        service = FakeService()
+        assert await _send(db, FakeGemini({"do Lagos next": "Lagos"}), service) == "skipped"
+        assert service.dms == [] and service.replies == []
+        assert _event_doc(db)["skip_reason"] == SKIP_TALLY_ONLY
+        [row] = db.dm_city_answers.docs
+        assert (row["normalised"], row["replied"]) == ("lagos", False)
+
+    async def test_every_vote_counts_but_our_own(self) -> None:
+        db = _tally_db()
+        before_rule = _comment("Paris", cid="c1").model_copy(update={"created_at": NOW - timedelta(days=3)})
+        assert await _enqueue(db, before_rule) == SKIP_TALLY_ONLY
+        # A second comment from the same person on the same reel is another vote.
+        assert await _enqueue(db, _comment("London", cid="c2", who="u1")) == SKIP_TALLY_ONLY
+        assert await _enqueue(db, _comment("Tokyo", cid="c3", who="me")) == SKIP_OWN
+        assert sorted(r["slug"] for r in db.dm_city_answers.docs) == ["london", "paris"]
+
+    async def test_without_a_city_map_cities_are_still_read(self) -> None:
+        db = _tally_db(DmRule(tally_only=True))
+        assert await _enqueue(db, _comment("Mumbai please!!")) == SKIP_TALLY_ONLY
+        assert await _enqueue(db, _comment("🔥🔥", cid="c2")) == store.NO_CITY
+        assert await _enqueue(db, _comment("do Lagos next", cid="c3")) == store.QUEUED
+        assert await _send(db, FakeGemini({"do Lagos next": "Lagos"}), FakeService(), "c3") == "skipped"
+        assert sorted(r["normalised"] for r in db.dm_city_answers.docs) == ["lagos", "mumbai please"]
+
+    async def test_a_queued_tally_event_never_sends_whatever_its_state(self) -> None:
+        db = _tally_db()
+        await _enqueue(db, _comment("do Lagos next"))
+        db.comment_dm_events.docs[0]["city_check"] = "done"  # as if read elsewhere
+        service = FakeService()
+        assert await _send(db, None, service) == "skipped" and service.dms == []
+
+
+@pytest.mark.asyncio
+class TestCityLikes:
+    async def _rows(self, *ids: str) -> DB:
+        db = _tally_db()
+        for i, cid in enumerate(ids):
+            await _enqueue(db, _comment("London", cid=cid, who=f"u{i}"))
+        return db
+
+    async def test_likes_are_read_onto_each_row_then_not_again_for_a_while(self) -> None:
+        db = await self._rows("c1", "c2")
+        reader = FakeLikes({"c1": 7, "c2": 0})
+        assert await city_tally.refresh_likes(db, reader, "DreamScenicAi", NOW) == 2
+        assert {r["message_id"]: r["like_count"] for r in db.dm_city_answers.docs} == {
+            "comment:c1": 7,
+            "comment:c2": 0,
+        }
+        assert await city_tally.refresh_likes(db, reader, "DreamScenicAi", NOW + timedelta(minutes=5)) == 0
+        assert await city_tally.refresh_likes(db, reader, "DreamScenicAi", NOW + timedelta(minutes=31)) == 2
+
+    async def test_a_deleted_comment_is_marked_gone_and_the_rest_still_read(self) -> None:
+        db = await self._rows("c1", "c2")
+        reader = FakeLikes({"c1": 3})  # c2 deleted
+        assert await city_tally.refresh_likes(db, reader, "DreamScenicAi", NOW) == 1
+        rows = {r["message_id"]: r for r in db.dm_city_answers.docs}
+        assert rows["comment:c1"]["like_count"] == 3 and rows["comment:c2"]["comment_gone"] is True
+        reader.calls.clear()
+        await city_tally.refresh_likes(db, reader, "DreamScenicAi", NOW + timedelta(hours=1))
+        assert reader.calls == [["c1"]]
+
+    async def test_a_rate_limit_marks_nothing_gone(self) -> None:
+        db = await self._rows("c1")
+        with pytest.raises(requests.HTTPError):
+            await city_tally.refresh_likes(db, FakeLikes({}, fail_code=4), "DreamScenicAi", NOW)
+        assert "comment_gone" not in db.dm_city_answers.docs[0]
+
+    async def test_the_tally_sums_likes_and_filters_to_one_reel(self) -> None:
+        db = await self._rows("c1", "c2")
+        await _enqueue(db, CommentEvent(comment_id="c9", media_id="999", text="Paris", username="z", created_at=NOW))
+        await city_tally.refresh_likes(db, FakeLikes({"c1": 7, "c2": 2, "c9": 50}), "DreamScenicAi", NOW)
+        out = await city_answers("DreamScenicAi", media_id="181", db=db)
+        [london] = out.demand
+        assert (london.slug, london.count, london.likes, london.top_likes) == ("london", 2, 9, 7)
+        assert {r.like_count for r in out.recent} == {7, 2}
+        everything = await city_answers("DreamScenicAi", media_id=None, db=db)
+        assert {d.slug: d.likes for d in everything.demand} == {"london": 9, "paris": 50}

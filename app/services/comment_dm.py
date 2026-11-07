@@ -80,14 +80,24 @@ class DmRule(BaseModel):
     # Set: the DM is built from the city each comment names (see ``meet_city``), and the text, buttons,
     # cards and chips above are unused. A comment that names no place gets no DM and no public reply.
     city_map: CityMap | None = None
+    # Set: nothing is ever sent. Each comment's city is read (the model reads the ones a plain match
+    # can't) and kept in the tally, ``dm_city_answers``, with no DM and no public reply. For a city vote
+    # ("comment your city") once the map is no longer given away (owner via @themapworld, 2026-11-07).
+    tally_only: bool = False
 
     @model_validator(mode="after")
     def _is_one_message(self) -> DmRule:
+        if self.tally_only:
+            return self
         if self.buttons and len(self.dm_text) > BUTTON_TEXT_LIMIT:
             raise ValueError(f"with buttons, the message must be at most {BUTTON_TEXT_LIMIT} characters")
         # A private reply is exactly one message, so it carries no media; everything else must build.
         self.message()
         return self
+
+    @property
+    def reads_cities(self) -> bool:
+        return self.city_map is not None or self.tally_only
 
     def message(self) -> DmMessage:
         """The DM this rule sends, as the shared content model. A city rule's DM depends on the comment,
@@ -199,6 +209,7 @@ SKIP_OWN = "our own comment"
 SKIP_BEFORE_RULE = "written before the rule was switched on"
 SKIP_TOO_OLD = "too old for Instagram to allow a private reply"
 SKIP_ALREADY_MESSAGED = "already messaged on this reel"
+SKIP_TALLY_ONLY = "tally only: the city is kept, nothing is sent"
 # Only this one is worth a line in the log: the others are either noise (our own comments) or
 # would flood it the moment a rule is switched on for a busy reel.
 LOGGED_SKIPS = frozenset({SKIP_ALREADY_MESSAGED})

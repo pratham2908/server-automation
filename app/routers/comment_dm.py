@@ -155,6 +155,8 @@ async def _channel(db: AsyncIOMotorDatabase, channel_id: str) -> dict[str, Any]:
 def _check_sendable(channel: dict[str, Any], rule: DmRule) -> None:
     """Refuse a rule now that would fail at every send: a profile button with no handle on record, an
     uploaded picture with no storage. Building it here is the same build the worker does."""
+    if rule.tally_only:
+        return  # sends nothing
     message = rule.message()
     try:
         ctx = context_for(channel, message, r2_signer())

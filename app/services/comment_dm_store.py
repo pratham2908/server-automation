@@ -26,6 +26,8 @@ from app.services import city_tally, meet_city
 from app.services.comment_dm import (
     LOGGED_SKIPS,
     SKIP_ALREADY_MESSAGED,
+    SKIP_OWN,
+    SKIP_TALLY_ONLY,
     STATUS_FAILED,
     STATUS_PENDING,
     STATUS_SENDING,
@@ -248,10 +250,14 @@ async def enqueue(
         now=now,
         already_messaged=await _already_messaged(db, channel_id, event.media_id, person),
     )
+    rule = active.rule
+    if rule.tally_only:
+        # Nothing is sent, so only our own comments are passed over: the rest (written before the rule
+        # was on, too old for a private reply, a second comment from someone) are all votes.
+        reason = SKIP_OWN if reason == SKIP_OWN else None
     if reason is not None and reason not in LOGGED_SKIPS:
         return reason
-    city_map = active.rule.city_map
-    rule = active.rule
+    city_map = rule.city_map
     content: dict[str, Any] = {
         "dm_text": rule.dm_text,
         "buttons": [b.model_dump(mode="json") for b in rule.buttons],
@@ -260,12 +266,15 @@ async def enqueue(
     }
     city: meet_city.CityAnswer | None = None
     city_fields: dict[str, Any] = {}
-    if city_map is not None:
+    if rule.reads_cities:
         slug = meet_city.quick_city(event.text)
         if slug is not None:
             city = meet_city.answer_for_slug(slug, event.text)
-            content = message_fields(meet_city.comment_dm(city, city_map))
+            if city_map is not None and not rule.tally_only:
+                content = message_fields(meet_city.comment_dm(city, city_map))
             city_fields = {CITY_CHECK_FIELD: CITY_DONE, "city": city.model_dump()}
+            if rule.tally_only:
+                reason = SKIP_TALLY_ONLY
         elif not meet_city.has_words(event.text):
             return NO_CITY
         else:
@@ -274,7 +283,8 @@ async def enqueue(
                 # Already messaged on this reel, but what they asked for is still demand ("taipei" was lost
                 # this way): the worker reads it, tallies it, and skips the DM itself.
                 reason = None
-        city_fields["city_map"] = city_map.model_dump(mode="json")
+        if city_map is not None:
+            city_fields["city_map"] = city_map.model_dump(mode="json")
     doc = {
         "comment_id": event.comment_id,
         "channel_id": channel_id,
@@ -289,7 +299,8 @@ async def enqueue(
         "source": source,
         **content,
         **city_fields,
-        "reply_text": pick_reply(active.rule, rng),
+        "tally_only": rule.tally_only,
+        "reply_text": None if rule.tally_only else pick_reply(rule, rng),
         "status": STATUS_SKIPPED if reason else STATUS_PENDING,
         "skip_reason": reason,
         "send_after": now + send_delay(active.rule, rng),

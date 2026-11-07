@@ -26,6 +26,7 @@ from app.services.comment_dm import (
     PRIVATE_REPLY_WINDOW,
     RETRY_BACKOFF,
     SKIP_ALREADY_MESSAGED,
+    SKIP_TALLY_ONLY,
     STATUS_FAILED,
     STATUS_PENDING,
     STATUS_SENDING,
@@ -173,8 +174,8 @@ async def resolve_city(
         fields = {"status": STATUS_SKIPPED, "skip_reason": reason, CITY_CHECK_FIELD: CITY_NONE, "city_place": place}
         await update_event(db, comment_id, fields, now)
         return None
-    city_map = meet_city.CityMap.model_validate(event.get("city_map") or {})
-    again = await _messaged_on_reel(db, event)
+    tally_only = bool(event.get("tally_only"))
+    again = not tally_only and await _messaged_on_reel(db, event)
     await city_tally.record_comment(
         db,
         channel_id=str(event["channel_id"]),
@@ -184,17 +185,21 @@ async def resolve_city(
         username=str(event.get("username") or ""),
         text=text,
         answer=answer,
-        dm_queued=not again,
+        dm_queued=not (again or tally_only),
         commented_at=event.get("commented_at"),
         now=now,
         place=read.place if read is not None else None,
     )
     city = {CITY_CHECK_FIELD: CITY_DONE, "city": answer.model_dump(), "city_place": place}
+    if tally_only:
+        await update_event(db, comment_id, {"status": STATUS_SKIPPED, "skip_reason": SKIP_TALLY_ONLY, **city}, now)
+        return None
     if again:
         await update_event(
             db, comment_id, {"status": STATUS_SKIPPED, "skip_reason": SKIP_ALREADY_MESSAGED, **city}, now
         )
         return None
+    city_map = meet_city.CityMap.model_validate(event.get("city_map") or {})
     content = message_fields(meet_city.comment_dm(answer, city_map))
     await update_event(db, comment_id, {**content, **city}, now)
     return {**event, **content, **city}
@@ -215,6 +220,10 @@ async def send_one(
             stored = await db.comment_dm_events.find_one({"comment_id": comment_id}, {"status": 1})
             return str((stored or {}).get("status") or STATUS_SKIPPED)
         event = resolved_event
+    if event.get("tally_only"):
+        # Never sends, whatever state it reached the queue in.
+        await update_event(db, comment_id, {"status": STATUS_SKIPPED, "skip_reason": SKIP_TALLY_ONLY}, now)
+        return STATUS_SKIPPED
     # Instagram Login can send a private reply with the comment permission alone; Facebook Login also
     # needs instagram_manage_messages, which the shared token lacks — so prefer Instagram Login.
     resolved = await manager.get_service_and_user_id(channel_id, prefer=PROVIDER_INSTAGRAM)
@@ -309,6 +318,10 @@ async def poll_channel(db: AsyncIOMotorDatabase, manager: Any, channel: dict[str
             await comment_log.record_safely(db, channel, event, source=comment_log.SOURCE_POLL, now=now)
             outcome = await enqueue(db, channel, event, source="poll", now=now, rng=rng)
             queued += outcome == QUEUED
+    try:
+        await city_tally.refresh_likes(db, reader, channel_id, now)
+    except Exception:  # noqa: BLE001 - likes are a nicety; never let them stop the poll
+        logger.exception("[CommentDM] Reading likes on %s's city comments failed", channel_id)
     return queued
 
 
