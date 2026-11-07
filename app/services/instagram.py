@@ -396,7 +396,8 @@ class InstagramService:
         """One page of business_discovery media, shrinking the ask if Meta balks.
 
         A 500 here means "Please reduce the amount of data you're asking for" —
-        the page was too big, not wrong. So the same page is retried at half the
+        the page was too big, not wrong; a read timeout means the same thing, said
+        by Meta running out of time instead. So the same page is retried at half the
         size (50 → 25 → 12 → 6) before giving up, rather than failing a request
         that would have worked slightly smaller.
 
@@ -410,6 +411,23 @@ class InstagramService:
             fields = f"business_discovery.username({target_username}){{media.limit({size}){cursor}{{{media_fields}}}}}"
             try:
                 data = self._get(own_ig_user_id, {"fields": fields})
+            except requests.Timeout as exc:
+                # Meta can also just be too slow to build a big page: carousel-heavy
+                # accounts (every frame under ``children``) ran past the 30 s read
+                # timeout at 50 on every try (aira_rawat_, okay.adiiti, sassy.maaya,
+                # ariyaaa571, Nov 2026). Same cause as the 500, same remedy.
+                if size > MIN_MEDIA_PAGE_SIZE:
+                    smaller = max(MIN_MEDIA_PAGE_SIZE, size // 2)
+                    logger.warning(
+                        "business_discovery page of %d timed out for %s (%s) — retrying at %d",
+                        size,
+                        target_username,
+                        exc,
+                        smaller,
+                    )
+                    size = smaller
+                    continue
+                raise
             except requests.HTTPError as exc:
                 status = getattr(getattr(exc, "response", None), "status_code", None)
                 if status == 500 and size > MIN_MEDIA_PAGE_SIZE:
