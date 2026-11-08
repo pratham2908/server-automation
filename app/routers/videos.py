@@ -254,8 +254,9 @@ async def _active_r2_keys(service: VideoService) -> set[str]:
     """R2 keys the storage purge must keep.
 
     Published videos have been uploaded to the platform so their R2 copy is
-    safe to delete.  Everything else (ready, queued, processing, scheduled,
-    todo) must be kept.
+    safe to delete, and archived ones are finished with (owner's call, 9 Nov
+    2026: a purge includes them, even though the file may be the only copy left).
+    Everything else (ready, queued, processing, scheduled, todo) must be kept.
 
     Instagram post slides live under the same ``{channel_id}/`` prefix
     (``{channel_id}/posts/...``) but are referenced from ``posts``, not
@@ -265,7 +266,7 @@ async def _active_r2_keys(service: VideoService) -> set[str]:
     keys = {
         doc["r2_object_key"]
         async for doc in service.db.videos.find(
-            {"r2_object_key": {"$ne": None}, "status": {"$ne": "published"}},
+            {"r2_object_key": {"$ne": None}, "status": {"$nin": ["published", "archived"]}},
             {"r2_object_key": 1},
         )
         if doc.get("r2_object_key")
