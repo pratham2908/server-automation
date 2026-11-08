@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from app.logger import get_logger
 from app.services.metrics import metrics_service
+from app.services.reel_collaborators import collaborators_param
 from app.services.trial_reel import TrialReelNotAvailableError, explain_refusal, trial_params_json
 from app.timezone import now_ist
 
@@ -1197,6 +1198,7 @@ class InstagramService:
         upload_type: str = "resumable",
         thumb_offset: int | None = None,
         cover_url: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> dict[str, str]:
         """Create a Reel media container for resumable upload.
 
@@ -1212,6 +1214,8 @@ class InstagramService:
             params["cover_url"] = cover_url
         elif thumb_offset is not None:
             params["thumb_offset"] = str(thumb_offset)
+        if collaborators:
+            params["collaborators"] = collaborators_param(collaborators)
 
         data = self._post(f"{self._user_node(ig_user_id)}/media", params)
         container_id = data.get("id", "")
@@ -1352,6 +1356,7 @@ class InstagramService:
         cover_url: str | None = None,
         trial_graduation: str | None = None,
         location_id: str | None = None,
+        collaborators: list[str] | None = None,
         poll_interval: float = 10.0,
         max_polls: int = 40,
     ) -> str:
@@ -1382,6 +1387,9 @@ class InstagramService:
         # A Facebook place ID; Instagram checks it and refuses one that isn't a location page.
         if location_id:
             params["location_id"] = location_id
+        # Invites to co-author; each shows only once accepted in the app.
+        if collaborators:
+            params["collaborators"] = collaborators_param(collaborators)
 
         try:
             data = self._post(f"{self._user_node(ig_user_id)}/media", params)
@@ -1442,6 +1450,7 @@ class InstagramService:
         is_carousel_item: bool = False,
         alt_text: str | None = None,
         location_id: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> str:
         """Container for a single image post, or one image slide of a carousel.
 
@@ -1456,6 +1465,9 @@ class InstagramService:
         # A location belongs to the post, never to one slide of a carousel.
         if location_id and not is_carousel_item:
             params["location_id"] = location_id
+        # Collaborators too: a carousel carries them on its parent container.
+        if collaborators and not is_carousel_item:
+            params["collaborators"] = str(collaborators_param(collaborators))
         if alt_text:
             params["alt_text"] = alt_text
         return self._create_container(ig_user_id, params)
@@ -1468,7 +1480,12 @@ class InstagramService:
         )
 
     def create_carousel_container(
-        self, ig_user_id: str, children: list[str], caption: str, location_id: str | None = None
+        self,
+        ig_user_id: str,
+        children: list[str],
+        caption: str,
+        location_id: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> str:
         """Parent container for a carousel; *children* are finished item containers, in order."""
         params: dict[str, str] = {"media_type": "CAROUSEL", "children": ",".join(children)}
@@ -1476,6 +1493,8 @@ class InstagramService:
             params["caption"] = caption
         if location_id:
             params["location_id"] = location_id
+        if collaborators:
+            params["collaborators"] = str(collaborators_param(collaborators))
         return self._create_container(ig_user_id, params)
 
     def create_story_container(

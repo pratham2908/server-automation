@@ -443,3 +443,16 @@ async def test_location_and_go_live_are_editable_and_clearable():
     assert out.go_live_at == "2030-01-02T18:00:00+05:30"
     out = await svc.update_post("c", "p", PostUpdate(location_name="", location_id=None, go_live_at=""))
     assert out.location_name is None and out.location_id is None and out.go_live_at is None
+
+
+@pytest.mark.asyncio
+async def test_collaborators_are_cleaned_editable_clearable_and_checked():
+    svc, *_ = make([post_doc()])
+    out = await svc.update_post("c", "p", PostUpdate(collaborators=[" @MehrKaul", "mehrkaul"]))
+    assert out.collaborators == ["mehrkaul"]
+    out = await svc.update_post("c", "p", PostUpdate(caption="still there"))
+    assert out.collaborators == ["mehrkaul"]
+    out = await svc.update_post("c", "p", PostUpdate(collaborators=[]))
+    assert out.collaborators == []
+    with pytest.raises(PostError, match="at most 3"):
+        await svc.update_post("c", "p", PostUpdate(collaborators=["a", "b", "c", "d"]))

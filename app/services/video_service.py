@@ -39,6 +39,7 @@ from app.services.instagram_reel_hourly import HOURLY_METRICS
 from app.services.instagram_reel_metrics import reel_metadata
 from app.services.instagram_reel_snapshot import MEASURED_ONLY, graduation_fields, snapshot_values
 from app.services.r2 import R2Service
+from app.services.reel_collaborators import collaborator_fields
 from app.services.reel_duration_sync import refresh_reel_durations
 from app.services.reel_location import location_fields
 from app.services.retention_analysis import promote_processing_to_ready, run_retention_analysis
@@ -1442,6 +1443,7 @@ class VideoService:
         trial_check: TrialCheck | None = None,
         location_id: str | None = None,
         location_name: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> dict[str, Any]:
 
         settings = get_settings()
@@ -1450,10 +1452,13 @@ class VideoService:
             raise ValueError("Channel not found")
         platform = get_channel_platform(channel)
         comment = validate_comment(first_comment, platform)
-        place = location_fields(location_id, location_name, platform)
+        place = {
+            **location_fields(location_id, location_name, platform),
+            **collaborator_fields(collaborators, platform, str(channel.get("instagram_username") or "")),
+        }
         if any(place.values()) and video_id.lower() == "all":
-            # The same place on a whole queue is far more likely a mistake than an intention.
-            raise ValueError("A location can only be set when scheduling a single video")
+            # The same place (or co-author) on a whole queue is far more likely a mistake than an intention.
+            raise ValueError("A location or collaborators can only be set when scheduling a single video")
         if comment and video_id.lower() == "all":
             # One comment across a whole queue is far more likely to be a
             # mistake than an intention, and it would be tedious to undo.
@@ -1597,6 +1602,7 @@ class VideoService:
         trial_check: TrialCheck | None = None,
         location_id: str | None = None,
         location_name: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> dict[str, Any]:
         video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
         if not video:
@@ -1607,6 +1613,7 @@ class VideoService:
         trial = {
             **trial_fields(trial_graduation, trial_check, video.get("trial_graduation"), platform),
             **location_fields(location_id, location_name, platform),
+            **collaborator_fields(collaborators, platform, str((channel or {}).get("instagram_username") or "")),
         }
         if video.get("status") == "scheduled":
             return await self._reschedule_on_youtube(channel_id, video, platform, new_time, first_comment, comment)
@@ -1703,6 +1710,7 @@ class VideoService:
         trial_check: TrialCheck | None = None,
         location_id: str | None = None,
         location_name: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> dict[str, Any]:
         """Change any of a queued or scheduled video's details in one call; whatever is left out stays as it is.
 
@@ -1726,6 +1734,7 @@ class VideoService:
         upd: dict[str, Any] = {
             **trial_fields(trial_graduation, trial_check, video.get("trial_graduation"), platform),
             **location_fields(location_id, location_name, platform),
+            **collaborator_fields(collaborators, platform, str((channel or {}).get("instagram_username") or "")),
         }
         for key, value in (
             ("title", title),

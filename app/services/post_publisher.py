@@ -504,6 +504,7 @@ async def _step(
                 [c.container_id for c in children],
                 post.caption,
                 location_id=rules.api_location_id(post),
+                collaborators=rules.api_collaborators(post),
             )
             state.container_created_at = now
             await _save_state(db, post, state, now)
@@ -522,6 +523,7 @@ async def _step(
                 caption=post.caption,
                 alt_text=slide.alt_text,
                 location_id=rules.api_location_id(post),
+                collaborators=rules.api_collaborators(post),
             )
         state.container_created_at = now
         await _save_state(db, post, state, now)

@@ -273,3 +273,14 @@ def test_a_title_over_the_limit_is_refused_before_anything_is_saved():
     with pytest.raises(ValueError, match="at most 100"):
         asyncio.run(service.update_pending_video("c1", "v1", title="x" * 101))
     assert db.videos.sets == []
+
+
+def test_a_queued_reels_collaborators_are_set_cleaned_and_cleared_and_left_alone_when_omitted():
+    _, db = _run(QUEUED, platform="instagram", collaborators=["@MehrKaul"])
+    assert db.videos.sets == [{"collaborators": ["mehrkaul"], "updated_at": db.videos.sets[0]["updated_at"]}]
+    _, db = _run(QUEUED, platform="instagram", collaborators=[])
+    assert db.videos.sets[0]["collaborators"] == []
+    _, db = _run(QUEUED, platform="instagram", description="x")
+    assert "collaborators" not in db.videos.sets[0]
+    with pytest.raises(ValueError, match="Instagram"):
+        _run(QUEUED, platform="youtube", collaborators=["mehrkaul"])

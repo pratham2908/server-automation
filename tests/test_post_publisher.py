@@ -431,3 +431,20 @@ async def test_a_location_name_alone_is_not_sent_to_the_api():
     db, ig, r2, mgr = setup([doc(location_name="London")])
     await tick(db, ig, r2, mgr)
     assert "location_id" not in ig.created[0][1]
+
+
+@pytest.mark.asyncio
+async def test_collaborators_go_on_the_image_and_on_the_carousel_parent_only():
+    db, ig, r2, mgr = setup([doc(collaborators=["mehrkaul"])])
+    await tick(db, ig, r2, mgr)
+    assert ig.created[0][1]["collaborators"] == ["mehrkaul"]
+
+    db, ig, r2, mgr = setup([doc(kind="carousel", slides=[img(1), img(2)], collaborators=["mehrkaul"])])
+    await tick(db, ig, r2, mgr)
+    items, parent = ig.created[:2], ig.created[-1]
+    assert all("collaborators" not in params for _, params in items)
+    assert parent[1]["collaborators"] == ["mehrkaul"]
+
+    db, ig, r2, mgr = setup([doc(kind="carousel", slides=[img(1), img(2)])])
+    await tick(db, ig, r2, mgr)
+    assert all("collaborators" not in params for _, params in ig.created)

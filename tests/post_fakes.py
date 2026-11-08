@@ -222,10 +222,20 @@ class FakeInstagram:
         return cid
 
     def create_image_container(
-        self, ig_user_id, image_url, *, caption=None, is_carousel_item=False, alt_text=None, location_id=None
+        self,
+        ig_user_id,
+        image_url,
+        *,
+        caption=None,
+        is_carousel_item=False,
+        alt_text=None,
+        location_id=None,
+        collaborators=None,
     ):
-        # location_id is recorded only when sent, so existing exact-params asserts keep holding.
+        # location_id and collaborators are recorded only when sent, so existing exact-params asserts keep holding.
         extra = {"location_id": location_id} if location_id else {}
+        if collaborators:
+            extra["collaborators"] = collaborators
         return self._new(
             "img", image_url=image_url, caption=caption, is_carousel_item=is_carousel_item, alt_text=alt_text, **extra
         )
@@ -233,8 +243,10 @@ class FakeInstagram:
     def create_carousel_video_item(self, ig_user_id, video_url):
         return self._new("vid", video_url=video_url)
 
-    def create_carousel_container(self, ig_user_id, children, caption, location_id=None):
+    def create_carousel_container(self, ig_user_id, children, caption, location_id=None, collaborators=None):
         extra = {"location_id": location_id} if location_id else {}
+        if collaborators:
+            extra["collaborators"] = collaborators
         return self._new("car", children=list(children), caption=caption, **extra)
 
     def create_story_container(self, ig_user_id, *, image_url=None, video_url=None):
