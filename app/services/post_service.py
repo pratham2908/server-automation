@@ -44,6 +44,7 @@ from app.models.post import (
     SlideUploadOut,
 )
 from app.services import post_rules as rules
+from app.services.reel_collaborators import clean_collaborators
 from app.timezone import IST, now_ist, to_ist_iso
 
 logger = get_logger(__name__)
@@ -100,6 +101,13 @@ def _clean_comment(text: str | None) -> str | None:
         return None
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     return cleaned or None
+
+
+def _clean_collaborators(value: list[str] | None) -> list[str]:
+    try:
+        return clean_collaborators(value) or []
+    except ValueError as exc:
+        raise PostError(str(exc)) from exc
 
 
 def _clean_note(text: str | None) -> str | None:
@@ -178,6 +186,7 @@ class PostService:
             music_note=post.music_note,
             location_name=post.location_name,
             location_id=post.location_id,
+            collaborators=post.collaborators,
             go_live_at=to_ist_iso(post.go_live_at),
             slides=[self._slide_out(s) for s in post.slides],
             scheduled_at=to_ist_iso(post.scheduled_at),
@@ -246,6 +255,7 @@ class PostService:
             music_note=_clean_note(body.music_note),
             location_name=_clean_note(body.location_name),
             location_id=_clean_note(body.location_id),
+            collaborators=_clean_collaborators(body.collaborators),
             go_live_at=_parse_go_live(body.go_live_at),
             status="draft",
             created_at=now,
@@ -267,6 +277,7 @@ class PostService:
             "music_note",
             "location_name",
             "location_id",
+            "collaborators",
             "go_live_at",
         } & sent
         slide_fields = {"kind", "slide_order", "alt_texts"} & sent
@@ -287,6 +298,8 @@ class PostService:
         for key in ("location_name", "location_id"):
             if key in sent:
                 fields[key] = _clean_note(getattr(body, key))
+        if "collaborators" in sent:
+            fields["collaborators"] = _clean_collaborators(body.collaborators)
         if "go_live_at" in sent:
             fields["go_live_at"] = _parse_go_live(body.go_live_at)
         if "kind" in sent and body.kind is not None:

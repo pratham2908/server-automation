@@ -125,6 +125,11 @@ class ScheduleRequest(BaseModel):
     location_name: str | None = Field(
         None, description="The place's name, shown in the app; Instagram is only sent the ID"
     )
+    collaborators: list[str] | None = Field(
+        None,
+        description="Instagram only. Up to 3 usernames invited to co-author the reel (each accepts in the app); "
+        "an empty list clears them; omit to leave them as they are",
+    )
     trial_check: TrialCheck | None = Field(
         None,
         description="With MANUAL: check the reel's numbers every hour after it publishes, until "
@@ -580,6 +585,7 @@ async def schedule_video(
             body.trial_check if body else None,
             location_id=body.location_id if body else None,
             location_name=body.location_name if body else None,
+            collaborators=body.collaborators if body else None,
         )
     except Exception as e:
         error_service = get_error_service(service.db)
@@ -683,6 +689,7 @@ async def reschedule_video(
             body.trial_check,
             location_id=body.location_id,
             location_name=body.location_name,
+            collaborators=body.collaborators,
         )
     except Exception as e:
         error_service = get_error_service(service.db)
@@ -716,6 +723,7 @@ class VideoUpdateRequest(BaseModel):
     trial_check: TrialCheck | None = None
     location_id: str | None = Field(None, description="Instagram only; empty string clears it")
     location_name: str | None = None
+    collaborators: list[str] | None = Field(None, description="Instagram only, up to 3; an empty list clears them")
 
 
 @router.patch("/{video_id}")

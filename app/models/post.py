@@ -97,6 +97,8 @@ class PostDoc(BaseModel):
     # Facebook place ID) can be attached through the API.
     location_name: str | None = None
     location_id: str | None = None
+    # Usernames invited to co-author the post (up to 3); each accepts in the Instagram app.
+    collaborators: list[str] = Field(default_factory=list)
     # When a post finished in the Instagram app should go live. Kept apart from
     # scheduled_at, which for those posts drives when the hand-off is sent —
     # "send to my phone now" must not wipe the time it is meant to go out.
@@ -129,6 +131,7 @@ class PostCreate(BaseModel):
     music_note: str | None = None
     location_name: str | None = None
     location_id: str | None = None
+    collaborators: list[str] | None = None
     # ISO datetime; naive means IST, as for scheduled_at.
     go_live_at: str | None = None
 
@@ -141,6 +144,8 @@ class PostUpdate(BaseModel):
     music_note: str | None = None
     location_name: str | None = None
     location_id: str | None = None
+    # An empty list clears them.
+    collaborators: list[str] | None = None
     go_live_at: str | None = None
     slide_order: list[str] | None = None
     alt_texts: dict[str, str] | None = None
@@ -195,6 +200,7 @@ class PostOut(BaseModel):
     music_note: str | None
     location_name: str | None
     location_id: str | None
+    collaborators: list[str] = []
     go_live_at: str | None
     slides: list[SlideOut]
     scheduled_at: str | None

@@ -269,8 +269,12 @@ def validate(post: PostDoc) -> Validation:
             result.warnings.append(
                 "The API can only tag a location by its place ID; without one this post goes out with no location"
             )
+        if post.kind == "story" and post.collaborators:
+            result.warnings.append("Stories can't have collaborators; they will be left off")
         if post.go_live_at is not None:
             result.warnings.append("Go-live time only applies to posts finished in the Instagram app")
+    elif post.collaborators and post.kind != "story":
+        result.warnings.append("Finished in the Instagram app: add the collaborators there, the API won't")
 
     return result
 
@@ -280,6 +284,13 @@ def api_location_id(post: PostDoc) -> str | None:
     if post.kind == "story" or not post.location_id or not post.location_id.isdigit():
         return None
     return post.location_id
+
+
+def api_collaborators(post: PostDoc) -> list[str] | None:
+    """The usernames to invite as co-authors, or ``None``. Stories take none."""
+    if post.kind == "story" or not post.collaborators:
+        return None
+    return list(post.collaborators)
 
 
 def go_live_time(post: PostDoc) -> datetime | None:
