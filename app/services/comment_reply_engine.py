@@ -15,6 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
 from app.services import comment_reply_guard as guard
+from app.services.ai_channel_context import with_ai_channel
 from app.services.comment_reply_review import (
     MODE_REVIEW,
     build_pending_row,
@@ -62,6 +63,7 @@ def _pick_template(templates: list[str]) -> str:
     return random.choice(templates) if templates else _DEFAULT_TEMPLATES[0]
 
 
+@with_ai_channel("channel_id")
 async def run_comment_reply_cycle(
     channel_id: str,
     db: AsyncIOMotorDatabase,

@@ -17,6 +17,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_channel_platform
 from app.logger import get_logger
+from app.services.ai_channel_context import with_ai_channel
 from app.services.error_reporting import report_error
 from app.services.gemini import GeminiService
 from app.services.pacing_templates import PacingTemplateService
@@ -202,6 +203,7 @@ async def promote_processing_to_ready(
     wake_auto_scheduler()
 
 
+@with_ai_channel("channel_id")
 async def run_retention_analysis(
     channel_id: str,
     video_id: str,

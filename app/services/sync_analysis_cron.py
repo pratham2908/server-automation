@@ -27,6 +27,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.database import get_channel_platform, not_paused_query, update_channel_task_status
 from app.exceptions import ChannelNotConnectedError
 from app.logger import get_logger
+from app.services.ai_channel_context import with_ai_channel
 from app.services.analysis_engine import ANALYSIS_MIN_AGE_DAYS, run_analysis
 from app.services.auto_sync_schedule import AUTO_SYNC_TASK, FRESH_REEL_DAYS, is_auto_sync_due, seconds_to_next_minute
 from app.services.channel_stats import refresh_channel_stats
@@ -80,6 +81,7 @@ async def _channels_with_fresh_reels(db: AsyncIOMotorDatabase, now: datetime) ->
     return set(await db.videos.distinct("channel_id", {"status": "published", "published_at": {"$gte": since}}))
 
 
+@with_ai_channel("channel_id")
 async def run_sync_analysis_for_channel(
     channel_id: str,
     channel: dict,
