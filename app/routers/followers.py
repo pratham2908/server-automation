@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -12,6 +12,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.services import follower_export as fx
+from app.services import follower_metrics as fm
 from app.services.comment_dm_delivery import record_delivery
 from app.services.ig_export import ExportArchive
 from app.timezone import IST, assume_utc, now_ist
@@ -26,6 +27,8 @@ router = APIRouter(
 # member by member from the spooled upload, never into memory whole.
 MAX_UPLOAD_BYTES = 480 * 1024 * 1024
 SERIES_DAYS = 30
+# The period picker's range; Instagram keeps account insights 30 days back, but ours are stored for good.
+MIN_DAYS, MAX_DAYS = 7, 90
 NOT_FOLLOWING_LIMIT = 15
 
 
@@ -139,18 +142,60 @@ async def list_followers(
     return {"total": len(docs), "rows": rows, "next_offset": offset + limit if offset + limit < len(docs) else None}
 
 
+async def _follower_counts(db: AsyncIOMotorDatabase, channel_id: str, days: list[str]) -> dict[str, int]:
+    """The follower count from each day's growth snapshot, the day before the period included."""
+    before = (datetime.fromisoformat(days[0]) - timedelta(days=1)).date().isoformat()
+    rows = await db.growth_snapshots.find(
+        {"channel_id": channel_id, "snapshot_date": {"$gte": before, "$lte": days[-1]}},
+        {"snapshot_date": 1, "subscribers": 1},
+    ).to_list(length=None)
+    return {r["snapshot_date"]: int(r["subscribers"]) for r in rows if isinstance(r.get("subscribers"), int | float)}
+
+
+async def _reels_in(db: AsyncIOMotorDatabase, channel_id: str, first_day: str) -> list[dict[str, Any]]:
+    """Reels posted from the period's first (Pacific) day on, one row per Instagram post."""
+    # Stored times are naive UTC.
+    start = datetime.fromisoformat(first_day).replace(tzinfo=fx.INSTAGRAM_DAY_TZ).astimezone(UTC).replace(tzinfo=None)
+    videos = await db.videos.find(
+        {
+            "channel_id": channel_id,
+            "status": "published",
+            "instagram_media_id": {"$nin": [None, ""]},
+            "published_at": {"$gte": start},
+        },
+        {
+            "instagram_media_id": 1,
+            "title": 1,
+            "published_at": 1,
+            "metadata.follows": 1,
+            "metadata.follows_as_of": 1,
+            "metadata.views": 1,
+        },
+    ).to_list(length=None)
+    # A post stored twice (an old re-import) is one reel: the copy with follows wins.
+    by_media: dict[str, dict[str, Any]] = {}
+    for v in videos:
+        kept = by_media.get(v["instagram_media_id"])
+        if kept is None or ((kept.get("metadata") or {}).get("follows") is None):
+            by_media[v["instagram_media_id"]] = v
+    return fm.reel_rows(list(by_media.values()), _iso)
+
+
 @router.get("/summary")
-async def follower_summary(channel_id: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> dict[str, Any]:
-    """The last import and what it changed, daily follows/unfollows, and commenters who don't follow."""
+async def follower_summary(
+    channel_id: str,
+    days: int = Query(SERIES_DAYS, ge=MIN_DAYS, le=MAX_DAYS, description="How many days back the numbers cover"),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> dict[str, Any]:
+    """Follows and unfollows for the period (per day and in total), its reels' follows, and the last export."""
     channel = await _channel(db, channel_id)
     latest = await fx.latest_snapshot(db, channel_id)
     now = now_ist()
-    first_day = (now.astimezone(fx.INSTAGRAM_DAY_TZ) - timedelta(days=SERIES_DAYS - 1)).date()
-    days = [(first_day + timedelta(days=i)).isoformat() for i in range(SERIES_DAYS)]
+    day_list = fm.day_labels(now.astimezone(fx.INSTAGRAM_DAY_TZ).date(), days)
     insights = {
         r["date"]: r
         for r in await db.instagram_account_daily.find(
-            {"channel_id": channel_id, "date": {"$in": days}}, {"date": 1, "follows": 1, "unfollows": 1}
+            {"channel_id": channel_id, "date": {"$in": day_list}}, {"date": 1, "follows": 1, "unfollows": 1}
         ).to_list(length=None)
     }
     followers = await db.followers.find({"channel_id": channel_id}).to_list(length=None)
@@ -160,20 +205,16 @@ async def follower_summary(channel_id: str, db: AsyncIOMotorDatabase = Depends(g
         for d in followers
         if d.get("status") == fx.STATUS_FOLLOWING and isinstance(d.get("followed_at"), datetime)
     )
-    series = [
-        {
-            "date": day,
-            "follows": (insights.get(day) or {}).get("follows"),
-            "unfollows": (insights.get(day) or {}).get("unfollows"),
-            # From the export: current followers by the day they followed (people who since left aren't in it).
-            "followed_still_following": followed_by_day.get(day, 0),
-        }
-        for day in days
-    ]
+    counts = await _follower_counts(db, channel_id, day_list)
+    # followed_still_following is from the export: current followers by the day they followed.
+    series = fm.series(day_list, insights, counts, followed_by_day)
     base: dict[str, Any] = {
         "has_import": latest is not None,
         "api_followers": channel.get("subscriber_count"),
+        "days": days,
         "series": series,
+        "totals": fm.totals(series, counts),
+        "reels": await _reels_in(db, channel_id, day_list[0]),
     }
     if latest is None:
         return base
