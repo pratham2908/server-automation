@@ -33,10 +33,15 @@ class AnswerReader(Protocol):
     async def collect_answers(self, prompt: str) -> dict[str, Any]: ...
 
 
-async def _properties(db: AsyncIOMotorDatabase, channel_id: str, media_id: str, cache: dict[str, Any]) -> Any:
+async def _reel(
+    db: AsyncIOMotorDatabase, channel_id: str, media_id: str, cache: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """The reel's property tags and title, read once per pass."""
     if media_id not in cache:
-        video = await db.videos.find_one({"channel_id": channel_id, "instagram_media_id": media_id}, {"properties": 1})
-        cache[media_id] = (video or {}).get("properties") or {}
+        video = await db.videos.find_one(
+            {"channel_id": channel_id, "instagram_media_id": media_id}, {"properties": 1, "title": 1}
+        )
+        cache[media_id] = {"properties": (video or {}).get("properties") or {}, "title": (video or {}).get("title")}
     return cache[media_id]
 
 
@@ -62,6 +67,7 @@ async def read_comment(
     collectors: Sequence[cc.Collector],
     properties: Any,
     now: datetime,
+    reel_title: str | None = None,
 ) -> int:
     """Answer one comment for every collector it is due. Returns how many answers were kept."""
     asked = _due_for(comment, collectors, properties)
@@ -78,7 +84,7 @@ async def read_comment(
         await store.mark_read(db, comment_id, [c.id for c in asked], now)
         return 0
     try:
-        reply = await reader.collect_answers(cc.build_prompt(text, asked))
+        reply = await reader.collect_answers(cc.build_prompt(text, asked, reel_title))
     except Exception as exc:  # noqa: BLE001 - a model failure is retried, then given up on, never read as "no answer"
         attempts = int(comment.get("collect_attempts", 0)) + 1
         fields: dict[str, Any] = {"collect_attempts": attempts}
@@ -94,11 +100,11 @@ async def read_channel(db: AsyncIOMotorDatabase, reader: AnswerReader, channel_i
     collectors = [c for c in await store.list_collectors(db, channel_id) if c.enabled]
     if not collectors:
         return 0
-    cache: dict[str, Any] = {}
+    cache: dict[str, dict[str, Any]] = {}
     kept = 0
     for comment in await store.unread_comments(db, channel_id, collectors, PER_PASS):
-        props = await _properties(db, channel_id, str(comment.get("media_id") or ""), cache)
-        kept += await read_comment(db, reader, comment, collectors, props, now)
+        reel = await _reel(db, channel_id, str(comment.get("media_id") or ""), cache)
+        kept += await read_comment(db, reader, comment, collectors, reel["properties"], now, reel["title"])
     return kept
 
 

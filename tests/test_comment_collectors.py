@@ -336,3 +336,80 @@ class TestRoutes:
             http.post("/api/v1/channels/nochannel/collectors", json={"name": "x", "question": "Which?"}).status_code
             == 404
         )
+
+
+def _graph_error(code: int, transient: bool = False):
+    import json as _json
+
+    import requests
+
+    response = requests.Response()
+    response.status_code = 400
+    response._content = _json.dumps({"error": {"code": code, "is_transient": transient}}).encode()
+    return requests.HTTPError("400", response=response)
+
+
+class _PickyLikes:
+    """Refuses any batch over 2 ids as Graph does a too-big one, and one id as deleted."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def get_comment_like_counts(self, ids: list[str]) -> dict[str, int]:
+        self.calls.append(list(ids))
+        if len(ids) > 2:
+            raise _graph_error(2, transient=True)
+        if "gone" in ids:
+            raise _graph_error(100)
+        return {i: int(i) for i in ids}
+
+
+class TestLikeBatches:
+    def test_a_batch_refused_as_too_big_is_read_in_halves(self):
+        from app.services.city_tally import read_like_counts
+
+        likes, gone = run(read_like_counts(_PickyLikes(), ["1", "2", "3", "4", "5"]))
+        assert likes == {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5} and gone == []
+
+    def test_a_deleted_comment_doesnt_hide_the_rest(self):
+        from app.services.city_tally import read_like_counts
+
+        likes, gone = run(read_like_counts(_PickyLikes(), ["1", "gone"]))
+        assert likes == {"1": 1} and gone == ["gone"]
+
+    def test_batches_stay_under_what_graph_refuses(self):
+        from app.services.city_tally import LIKES_PER_CALL
+
+        assert LIKES_PER_CALL <= 40
+
+
+class TestReelContext:
+    def test_the_prompt_names_the_reel(self):
+        prompt = cc.build_prompt("chatelet", [make()], "4 Friends Across Paris: Where Should They Meet? 📍\n#maps")
+        assert '"4 Friends Across Paris: Where Should They Meet? 📍"' in prompt and "#maps" not in prompt
+        assert "reel's own question" in prompt
+
+    def test_the_worker_passes_the_reels_title(self):
+        db = _db_with(
+            [make()],
+            [comment("1", "chatelet")],
+            videos=[{"channel_id": "map", "instagram_media_id": "reel1", "title": "Where should they meet in Paris?"}],
+        )
+        reader = Reader([{"q1": []}])
+        run(worker.read_channel(db, reader, "map", NOW))
+        assert "Where should they meet in Paris?" in reader.prompts[0]
+
+
+class TestAnswerOrder:
+    def test_most_liked_first_unread_last(self):
+        c = make()
+        db = _db_with([c], [])
+        rows = [
+            store.answer_row(c, comment("1", "Tokyo"), "Tokyo", NOW, like_count=2),
+            store.answer_row(c, comment("2", "tokyo pls"), "Tokyo", NOW),
+            store.answer_row(c, comment("3", "TOKYO"), "Tokyo", NOW, like_count=40),
+            store.answer_row(c, comment("4", "do tokyo"), "Tokyo", NOW, like_count=0),
+        ]
+        run(store.insert_rows(db, rows))
+        liked = run(store.answers_for(db, c.id, answer="tokyo", sort="likes"))
+        assert [r["comment_id"] for r in liked] == ["3", "1", "4", "2"]

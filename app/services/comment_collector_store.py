@@ -21,11 +21,10 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError
 
 from app.services import comment_collectors as cc
-from app.services.city_tally import GONE_CODE
+from app.services.city_tally import LIKES_PER_CALL, read_like_counts
 from app.services.comment_log import author_key
-from app.services.instagram import graph_error_code
+from app.timezone import assume_utc
 
-LIKES_PER_CALL = 50  # Graph's multi-id read takes at most 50 ids
 LIKES_PER_PASS = 500
 
 
@@ -236,30 +235,18 @@ async def answers_for(
     since: datetime | None = None,
     until: datetime | None = None,
     limit: int = 200,
+    sort: str = "recent",
 ) -> list[dict[str, Any]]:
-    """The comments behind the list (or behind one answer), newest first."""
+    """The comments behind the list (or behind one answer): newest first, or most liked first."""
     query = _row_query(collector_id, media_id, since, until)
     if answer:
         query["answer_key"] = cc.fold(answer)
-    return await db.collector_answers.find(query, {"_id": 0}).sort("commented_at", -1).limit(limit).to_list(limit)
-
-
-async def _read_likes(reader: LikeReader, ids: list[str]) -> tuple[dict[str, int], list[str]]:
-    """Likes per comment id, and the ids that could not be read (deleted, or hidden from us)."""
-    try:
-        return await asyncio.to_thread(reader.get_comment_like_counts, ids), []
-    except requests.RequestException as exc:
-        if graph_error_code(exc) != GONE_CODE:
-            raise  # rate limit, outage: try again next pass, mark nothing
-        if len(ids) == 1:
-            return {}, ids
-    likes: dict[str, int] = {}
-    gone: list[str] = []
-    for cid in ids:
-        found, lost = await _read_likes(reader, [cid])
-        likes.update(found)
-        gone.extend(lost)
-    return likes, gone
+    rows = await db.collector_answers.find(query, {"_id": 0}).to_list(None)
+    newest = sorted(rows, key=lambda r: assume_utc(r["commented_at"]), reverse=True)
+    if sort == "likes":
+        # Stable: equal likes stay newest first; a comment whose likes aren't read yet goes last.
+        newest.sort(key=lambda r: -1 if r.get("like_count") is None else int(r["like_count"]), reverse=True)
+    return newest[:limit]
 
 
 async def likes_due(db: AsyncIOMotorDatabase, channel_id: str, now: datetime) -> list[str]:
@@ -280,7 +267,7 @@ async def refresh_likes(db: AsyncIOMotorDatabase, reader: LikeReader, channel_id
     ids = await likes_due(db, channel_id, now)
     read = 0
     for start in range(0, len(ids), LIKES_PER_CALL):
-        likes, gone = await _read_likes(reader, ids[start : start + LIKES_PER_CALL])
+        likes, gone = await read_like_counts(reader, ids[start : start + LIKES_PER_CALL])
         for cid, count in likes.items():
             await db.collector_answers.update_many(
                 {"comment_id": cid}, {"$set": {"like_count": count, "likes_at": now}}

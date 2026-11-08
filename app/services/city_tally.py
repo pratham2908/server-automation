@@ -29,7 +29,11 @@ GONE_CODE = 100
 LIKES_WINDOW = timedelta(days=14)
 # How often one comment's likes are read again.
 LIKES_EVERY = timedelta(minutes=30)
-LIKES_PER_CALL = 50  # Graph's multi-id read takes at most 50 ids
+# Graph's multi-id read takes up to 50 ids, but for comments 50 is refused as "(#2) Service temporarily
+# unavailable" every time (40 is served): 25 leaves room, and a refused batch is split (``read_like_counts``).
+LIKES_PER_CALL = 25
+# Meta's "try again" code, which it also gives a request that asks too much at once.
+TRANSIENT_CODE = 2
 LIKES_PER_PASS = 500
 
 
@@ -85,19 +89,38 @@ async def record_comment(
     return result.upserted_id is not None
 
 
-async def _read_likes(reader: LikeReader, ids: list[str]) -> tuple[dict[str, int], list[str]]:
-    """Likes per comment id, and the ids that could not be read (deleted, or hidden from us)."""
+def _is_transient(exc: requests.RequestException) -> bool:
+    if graph_error_code(exc) == TRANSIENT_CODE:
+        return True
+    try:
+        return bool(((exc.response.json() if exc.response is not None else {}).get("error") or {}).get("is_transient"))
+    except ValueError:
+        return False
+
+
+async def read_like_counts(reader: LikeReader, ids: list[str]) -> tuple[dict[str, int], list[str]]:
+    """Likes per comment id, and the ids that could not be read (deleted, or hidden from us).
+
+    A batch Graph refuses as too much at once is read in halves; one it refuses because a comment is gone
+    is read a comment at a time, so one deleted comment doesn't hide the rest. Anything else (a rate
+    limit, an outage, or a single comment still "unavailable") raises: try again on the next pass.
+    """
     try:
         return await asyncio.to_thread(reader.get_comment_like_counts, ids), []
     except requests.RequestException as exc:
+        if len(ids) > 1 and _is_transient(exc):
+            mid = len(ids) // 2
+            first, lost_first = await read_like_counts(reader, ids[:mid])
+            second, lost_second = await read_like_counts(reader, ids[mid:])
+            return {**first, **second}, lost_first + lost_second
         if graph_error_code(exc) != GONE_CODE:
-            raise  # rate limit, outage: try again next poll, mark nothing
+            raise
         if len(ids) == 1:
             return {}, ids
     likes: dict[str, int] = {}
     gone: list[str] = []
     for cid in ids:
-        found, lost = await _read_likes(reader, [cid])
+        found, lost = await read_like_counts(reader, [cid])
         likes.update(found)
         gone.extend(lost)
     return likes, gone
@@ -116,7 +139,7 @@ async def refresh_likes(db: AsyncIOMotorDatabase, reader: LikeReader, channel_id
     ids = [str(r["message_id"]).removeprefix("comment:") for r in rows]
     read = 0
     for start in range(0, len(ids), LIKES_PER_CALL):
-        likes, gone = await _read_likes(reader, ids[start : start + LIKES_PER_CALL])
+        likes, gone = await read_like_counts(reader, ids[start : start + LIKES_PER_CALL])
         for cid, count in likes.items():
             await db.dm_city_answers.update_one(
                 {"message_id": comment_key(cid)}, {"$set": {"like_count": count, "likes_at": now}}
