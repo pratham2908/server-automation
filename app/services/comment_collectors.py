@@ -128,8 +128,12 @@ def _key(index: int) -> str:
     return f"q{index + 1}"
 
 
-def build_prompt(comment: str, collectors: Sequence[Collector]) -> str:
-    """One prompt asking every collector's question of one comment, answered as one JSON object."""
+def build_prompt(comment: str, collectors: Sequence[Collector], reel_title: str | None = None) -> str:
+    """One prompt asking every collector's question of one comment, answered as one JSON object.
+
+    The reel's title says what the comment is replying to: on "Where should 4 friends meet in Paris?" a
+    "Châtelet" answers the reel, it doesn't ask for a city.
+    """
     blocks = []
     for i, c in enumerate(collectors):
         lines = [f'"{_key(i)}": {c.question}']
@@ -142,14 +146,17 @@ def build_prompt(comment: str, collectors: Sequence[Collector]) -> str:
         lines.append("  Several answers allowed." if c.multiple else "  At most one answer: the first they give.")
         blocks.append("\n".join(lines))
     keys = ", ".join(f'"{_key(i)}"' for i in range(len(collectors)))
+    title = reel_title.strip().split("\n")[0][:200] if reel_title else ""
+    context = f"\nThe comment was written on a reel titled {json.dumps(title, ensure_ascii=False)}.\n" if title else ""
     return f"""Read one Instagram comment and answer each question about it.
-
+{context}
 {chr(10).join(blocks)}
 
 Rules:
 - Answer only from what the comment itself says. A comment that doesn't answer a question gets an empty list for it.
 - Praise, emoji, jokes and replies to other people answer nothing unless they really do answer the question.
 - Something mentioned in passing is not an answer: only count what the commenter is asking for or telling us.
+- A reply to the reel's own question (its title) is not an answer to these questions unless it really answers them.
 
 Comment: {json.dumps(comment, ensure_ascii=False)}
 

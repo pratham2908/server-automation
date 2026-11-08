@@ -6,7 +6,7 @@ See ``app.services.comment_collectors`` for what a collector is and how answers 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -188,6 +188,7 @@ async def collector_answers(
     since: str | None = Query(None),
     until: str | None = Query(None),
     limit: int = Query(200, ge=1, le=1000),
+    sort: Literal["recent", "likes"] = Query("likes", description="Most liked first, or newest first"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> list[dict[str, Any]]:
     collector = await _collector(db, channel_id, collector_id)
@@ -199,6 +200,7 @@ async def collector_answers(
         since=_when(since, "since"),
         until=_when(until, "until"),
         limit=limit,
+        sort=sort,
     )
     return [
         {
