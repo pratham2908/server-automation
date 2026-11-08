@@ -141,6 +141,14 @@ class Channel(BaseModel):
     instagram_user_id: str | None = Field(None, description="Instagram Graph API user ID (instagram only)")
     instagram_tokens: InstagramTokens | None = Field(None, description="Instagram tokens (excluded from API responses)")
 
+    email: str | None = Field(
+        None,
+        description=(
+            "Login email of the account that owns this channel, kept by hand. Handles and usernames "
+            "change; this is the stable way to tell which account is which."
+        ),
+    )
+
     paused: bool = Field(
         False,
         description=(
