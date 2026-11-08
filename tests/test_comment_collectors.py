@@ -413,3 +413,19 @@ class TestAnswerOrder:
         run(store.insert_rows(db, rows))
         liked = run(store.answers_for(db, c.id, answer="tokyo", sort="likes"))
         assert [r["comment_id"] for r in liked] == ["3", "1", "4", "2"]
+
+
+class _SilentLikes:
+    """Like Graph: a batch leaves a deleted comment out; asked alone, it doesn't exist."""
+
+    def get_comment_like_counts(self, ids: list[str]) -> dict[str, int]:
+        if ids == ["deleted"]:
+            raise _graph_error(100)
+        return {i: 3 for i in ids if i != "deleted"}
+
+
+def test_a_comment_left_out_of_a_batch_is_marked_gone():
+    from app.services.city_tally import read_like_counts
+
+    likes, gone = run(read_like_counts(_SilentLikes(), ["a", "deleted", "b"]))
+    assert likes == {"a": 3, "b": 3} and gone == ["deleted"]

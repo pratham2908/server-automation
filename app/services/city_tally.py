@@ -104,9 +104,12 @@ async def read_like_counts(reader: LikeReader, ids: list[str]) -> tuple[dict[str
     A batch Graph refuses as too much at once is read in halves; one it refuses because a comment is gone
     is read a comment at a time, so one deleted comment doesn't hide the rest. Anything else (a rate
     limit, an outage, or a single comment still "unavailable") raises: try again on the next pass.
+
+    A batch can also succeed and simply leave a deleted comment out (asked alone, Graph says it doesn't
+    exist), so an id missing from the answer is asked again alone, and counts as gone if it is still missing.
     """
     try:
-        return await asyncio.to_thread(reader.get_comment_like_counts, ids), []
+        found = await asyncio.to_thread(reader.get_comment_like_counts, ids)
     except requests.RequestException as exc:
         if len(ids) > 1 and _is_transient(exc):
             mid = len(ids) // 2
@@ -117,6 +120,20 @@ async def read_like_counts(reader: LikeReader, ids: list[str]) -> tuple[dict[str
             raise
         if len(ids) == 1:
             return {}, ids
+    else:
+        missing = [cid for cid in ids if cid not in found]
+        if not missing:
+            return found, []
+        if len(ids) == 1:
+            return found, missing
+        ids = missing
+        likes_so_far = dict(found)
+        gone_so_far: list[str] = []
+        for cid in ids:
+            got, lost = await read_like_counts(reader, [cid])
+            likes_so_far.update(got)
+            gone_so_far.extend(lost)
+        return likes_so_far, gone_so_far
     likes: dict[str, int] = {}
     gone: list[str] = []
     for cid in ids:
