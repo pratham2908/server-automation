@@ -6,6 +6,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.logger import get_logger
+from app.services.ai_channel_context import channel_from_path, set_ai_channel
 from app.services.metrics import metrics_service
 
 logger = get_logger("http")
@@ -36,6 +37,8 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         # Basic metadata
         method = request.method
         path = request.url.path
+        # Gemini calls made while serving /channels/{id}/… are billed to that channel.
+        set_ai_channel(channel_from_path(path) or request.query_params.get("channel_id"))
         query = str(request.query_params)
 
         # Metadata for exclusion (don't track system/internal monitoring in business metrics)

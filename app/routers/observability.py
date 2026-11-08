@@ -775,10 +775,43 @@ async def get_metrics_api(_api_key: str = Depends(verify_api_key)):
     return summary
 
 
+UNATTRIBUTED_CHANNEL = "unattributed"
+
+
+def _ai_log_match(
+    *,
+    channels: list[str] | None = None,
+    tasks: list[str] | None = None,
+    models: list[str] | None = None,
+) -> dict:
+    """``ai_call_logs`` filter for the multi-select channel/task/model pickers.
+
+    The ``unattributed`` pseudo-channel matches calls logged with no channel at all
+    (older rows, and calls made outside any channel's work).
+    """
+
+    match: dict = {}
+    if channels:
+        real = [c for c in channels if c != UNATTRIBUTED_CHANNEL]
+        clauses: list[dict] = []
+        if real:
+            clauses.append({"channel_id": {"$in": real}})
+        if UNATTRIBUTED_CHANNEL in channels:
+            clauses.append({"channel_id": None})  # also matches a missing field
+        match["$or"] = clauses
+    if tasks:
+        match["task"] = {"$in": tasks}
+    if models:
+        match["model"] = {"$in": models}
+    return match
+
+
 @router.get("/api/v1/observability/ai-calls")
 async def get_ai_calls(
     model: str | None = Query(None),
     task: str | None = Query(None),
+    channels: list[str] | None = Query(None, description="Channel ids; 'unattributed' for calls with none"),
+    tasks: list[str] | None = Query(None, description="Several tasks at once; adds to ``task``"),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     page: int = Query(1, ge=1),
@@ -789,12 +822,10 @@ async def get_ai_calls(
     from datetime import datetime, timezone
 
     db = get_db()
-    match: dict = {}
+    match = _ai_log_match(channels=channels, tasks=([task] if task else []) + (tasks or []))
 
     if model:
         match["model"] = model
-    if task:
-        match["task"] = task
 
     date_filter: dict = {}
     if date_from:
@@ -825,17 +856,29 @@ async def get_ai_calls(
 @router.get("/api/v1/observability/ai-costs/summary")
 async def get_ai_cost_summary(
     days: int = Query(30, ge=1, le=365),
+    channels: list[str] | None = Query(None, description="Only these channel ids; 'unattributed' for none"),
+    tasks: list[str] | None = Query(None, description="Only these tasks"),
     _api_key: str = Depends(verify_api_key),
 ):
-    """Aggregated AI cost summary: totals, by-model, by-task, and daily breakdown."""
+    """Aggregated AI cost summary: totals, by-model, by-task, by-channel and daily breakdown.
+
+    ``channels`` and ``tasks`` narrow every figure on the page. ``by_channel`` and
+    ``by_task`` are each computed with the *other* filter only, so picking channels
+    still lists every task's share of those channels (and vice versa) rather than
+    collapsing the breakdown that is being filtered.
+    """
     from datetime import datetime, timedelta, timezone
 
     db = get_db()
     date_from = datetime.now(timezone.utc) - timedelta(days=days)
 
+    full_match = _ai_log_match(channels=channels, tasks=tasks)
+    by_task_match = _ai_log_match(channels=channels)
+    by_channel_match = _ai_log_match(tasks=tasks)
+
     # ── totals ────────────────────────────────────────────────────────────────
     totals_pipeline = [
-        {"$match": {"timestamp": {"$gte": date_from}}},
+        {"$match": {"timestamp": {"$gte": date_from}, **full_match}},
         {
             "$group": {
                 "_id": None,
@@ -851,7 +894,7 @@ async def get_ai_cost_summary(
 
     # ── by model ──────────────────────────────────────────────────────────────
     by_model_pipeline = [
-        {"$match": {"timestamp": {"$gte": date_from}}},
+        {"$match": {"timestamp": {"$gte": date_from}, **full_match}},
         {
             "$group": {
                 "_id": "$model",
@@ -867,7 +910,7 @@ async def get_ai_cost_summary(
 
     # ── by task ───────────────────────────────────────────────────────────────
     by_task_pipeline = [
-        {"$match": {"timestamp": {"$gte": date_from}}},
+        {"$match": {"timestamp": {"$gte": date_from}, **by_task_match}},
         {
             "$group": {
                 "_id": "$task",
@@ -879,9 +922,39 @@ async def get_ai_cost_summary(
         {"$sort": {"cost_usd": -1}},
     ]
 
+    # ── by channel ────────────────────────────────────────────────────────────
+    by_channel_pipeline = [
+        {"$match": {"timestamp": {"$gte": date_from}, **by_channel_match}},
+        {
+            "$group": {
+                "_id": {"$ifNull": ["$channel_id", UNATTRIBUTED_CHANNEL]},
+                "calls": {"$sum": 1},
+                "cost_usd": {"$sum": "$cost_usd"},
+                "unpriced_calls": {"$sum": {"$cond": [{"$eq": ["$cost_usd", None]}, 1, 0]}},
+                "input_tokens": {"$sum": "$input_tokens"},
+                "output_tokens": {"$sum": "$output_tokens"},
+                "success_count": {"$sum": {"$cond": ["$success", 1, 0]}},
+            }
+        },
+        {"$sort": {"cost_usd": -1}},
+    ]
+
+    # Every task/channel seen in the window, unfiltered by the pickers, so the
+    # selectors can offer options the current selection has hidden.
+    options_pipeline = [
+        {"$match": {"timestamp": {"$gte": date_from}}},
+        {
+            "$group": {
+                "_id": None,
+                "tasks": {"$addToSet": "$task"},
+                "channels": {"$addToSet": {"$ifNull": ["$channel_id", UNATTRIBUTED_CHANNEL]}},
+            }
+        },
+    ]
+
     # ── daily breakdown ───────────────────────────────────────────────────────
     daily_pipeline = [
-        {"$match": {"timestamp": {"$gte": date_from}}},
+        {"$match": {"timestamp": {"$gte": date_from}, **full_match}},
         {
             "$group": {
                 "_id": {
@@ -899,9 +972,30 @@ async def get_ai_cost_summary(
         {"$sort": {"_id": 1}},
     ]
 
-    totals_res, by_model_res, by_task_res, daily_res = await _run_agg_parallel(
-        db, totals_pipeline, by_model_pipeline, by_task_pipeline, daily_pipeline
+    totals_res, by_model_res, by_task_res, by_channel_res, options_res, daily_res = await _run_agg_parallel(
+        db,
+        totals_pipeline,
+        by_model_pipeline,
+        by_task_pipeline,
+        by_channel_pipeline,
+        options_pipeline,
+        daily_pipeline,
     )
+
+    channel_ids = [r["_id"] for r in by_channel_res if r["_id"] != UNATTRIBUTED_CHANNEL]
+    options = options_res[0] if options_res else {}
+    channel_ids = sorted(set(channel_ids) | {c for c in options.get("channels", []) if c != UNATTRIBUTED_CHANNEL})
+    names: dict[str, dict] = {}
+    if channel_ids:
+        async for ch in db.channels.find(
+            {"channel_id": {"$in": channel_ids}}, {"channel_id": 1, "name": 1, "platform": 1}
+        ):
+            names[ch["channel_id"]] = ch
+
+    def _channel_label(cid: str) -> str:
+        if cid == UNATTRIBUTED_CHANNEL:
+            return "Unattributed"
+        return (names.get(cid) or {}).get("name") or cid
 
     totals = totals_res[0] if totals_res else {}
     total_calls = totals.get("total_calls", 0)
@@ -942,6 +1036,30 @@ async def get_ai_cost_summary(
             }
             for r in by_task_res
         ],
+        "by_channel": [
+            {
+                "channel_id": r["_id"],
+                "name": _channel_label(r["_id"]),
+                "platform": (names.get(r["_id"]) or {}).get("platform"),
+                "calls": r["calls"],
+                "cost_usd": round(r["cost_usd"] or 0.0, 8),
+                "unpriced_calls": r.get("unpriced_calls", 0),
+                "input_tokens": r["input_tokens"],
+                "output_tokens": r["output_tokens"],
+                "success_rate_pct": round(r["success_count"] / r["calls"] * 100, 2) if r["calls"] else 0.0,
+            }
+            for r in by_channel_res
+        ],
+        "filter_options": {
+            "channels": sorted(
+                (
+                    {"value": c, "label": _channel_label(c)}
+                    for c in set(channel_ids) | ({UNATTRIBUTED_CHANNEL} & set(options.get("channels", [])))
+                ),
+                key=lambda o: (o["value"] == UNATTRIBUTED_CHANNEL, o["label"].lower()),
+            ),
+            "tasks": sorted(options.get("tasks", [])),
+        },
         "daily": [
             {
                 "date": r["_id"],

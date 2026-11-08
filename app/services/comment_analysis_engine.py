@@ -17,6 +17,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.services.ai_channel_context import with_ai_channel
 from app.services.gemini import GeminiService
 from app.services.instagram import InstagramService
 from app.services.youtube import YouTubeService
@@ -255,6 +256,7 @@ async def run_comment_analysis(
 # ------------------------------------------------------------------
 
 
+@with_ai_channel("channel_id")
 async def run_cron_cycle(
     db: AsyncIOMotorDatabase,
     youtube_service_manager: Any,

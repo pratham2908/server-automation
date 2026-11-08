@@ -15,6 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
 from app.services import comment_reply_guard as guard
+from app.services.ai_channel_context import with_ai_channel
 from app.services.comment_ai_reply import STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED
 from app.services.comment_ai_reply_store import claim_due, fail_interrupted, load_config, update_item
 from app.services.comment_reply_review import MODE_REVIEW, build_pending_row, is_reviewable, normalise_mode
@@ -60,6 +61,7 @@ def row_flags(row: dict[str, Any]) -> dict[str, Any]:
     return {k: row[k] for k in ("hidden", "hide_error") if k in row}
 
 
+@with_ai_channel(lambda item=None, **_: str(item["channel_id"]) if item else None)
 async def answer_one(
     db: AsyncIOMotorDatabase, manager: Any, gemini: GeminiService, item: dict[str, Any], now: datetime
 ) -> str:

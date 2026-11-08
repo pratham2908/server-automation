@@ -24,6 +24,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.logger import get_logger
+from app.services.ai_channel_context import current_ai_channel
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,7 @@ async def log_ai_call(
     duration_ms: float,
     success: bool,
     cost_usd: float | None,
+    channel_id: str | None = None,
 ) -> None:
     """Append one call record to ``ai_call_logs``.
 
@@ -64,6 +66,9 @@ async def log_ai_call(
     if db is None:
         return
 
+    # An explicit id wins; otherwise take whatever channel the caller is working for.
+    channel_id = channel_id or current_ai_channel()
+
     doc: dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc),
         "task": task,
@@ -76,6 +81,7 @@ async def log_ai_call(
         "priced": cost_usd is not None,
         "duration_ms": round(duration_ms, 2),
         "success": success,
+        "channel_id": channel_id,
     }
 
     try:
