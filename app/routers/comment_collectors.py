@@ -210,6 +210,7 @@ async def collector_answers(
             "text": r.get("text"),
             "answer": r.get("answer"),
             "like_count": r.get("like_count"),
+            "comment_gone": bool(r.get("comment_gone")),
             "commented_at": to_ist_iso(r.get("commented_at")),
         }
         for r in rows
