@@ -9,10 +9,6 @@ def test_every_headline_count_has_a_filter_scoped_to_the_channel() -> None:
     assert all(f["channel_id"] == "zara kapoor" for f in filters.values())
 
 
-def test_unverified_counts_a_missing_verification_status() -> None:
-    assert pulse_filters("c")["unverified"]["verification_status"] == {"$ne": "verified"}
-
-
 def test_attention_ignores_archived_videos() -> None:
     assert pulse_filters("c")["attention"]["status"] == {"$ne": "archived"}
 

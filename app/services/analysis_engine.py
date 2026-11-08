@@ -20,7 +20,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.logger import get_logger
 from app.services.gemini import GeminiService
 from app.services.todo_engine import update_categories_from_analysis
-from app.services.video_properties import labelled, prompt_schema
+from app.services.video_properties import known_dimensions, labelled, prompt_schema
 from app.services.youtube import YouTubeService
 from app.timezone import now_ist
 
@@ -391,7 +391,7 @@ async def run_analysis(
             platform=platform,
         )
 
-    updated = running_analysis or {}
+    updated = known_dimensions(running_analysis or {}, property_defs)
     version = (existing_analysis.get("version", 0) + 1) if existing_analysis else 1
 
     analysis_doc = {

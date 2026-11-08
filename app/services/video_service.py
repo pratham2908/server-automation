@@ -17,7 +17,6 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config import get_settings
 from app.database import (
     get_channel_platform,
-    get_content_schema_for_prompt,
     update_channel_task_status,
 )
 from app.exceptions import ChannelNotConnectedError
@@ -1007,42 +1006,6 @@ class VideoService:
                     )
 
             create_monitored_task(_job(), feature="Repost download job", context={"new_video_id": new_video_id})
-
-    async def extract_content_params(self, channel_id: str, video_id: str) -> dict[str, Any]:
-        if not self.gemini:
-            raise ValueError("Gemini not initialised")
-        video = await self.db.videos.find_one({"channel_id": channel_id, "video_id": video_id})
-        if not video:
-            raise ValueError("Video not found")
-        schema = await get_content_schema_for_prompt(self.db, channel_id)
-        if not schema:
-            # mypy: disable-error-code: attr-defined
-            raise ValueError("No schema defined")
-        prompt = (
-            f"Extract params:\nSchema: {json.dumps(schema)}\n"
-            f"Video: {video.get('title')}\n{video.get('description')[:1000]}"
-        )
-
-        try:
-            params = json.loads(await self.gemini._generate(prompt, task="content_param_extraction"))
-            await self.db.videos.update_one(
-                {"_id": video["_id"]},
-                {
-                    "$set": {
-                        "content_params": params,
-                        "verification_status": "unverified",
-                        "updated_at": now_ist(),
-                    }
-                },
-            )
-            return {
-                "ok": True,
-                "video_id": video_id,
-                "content_params": params,
-                "verification_status": "unverified",
-            }
-        except Exception:
-            raise ValueError("Gemini extraction failed")
 
     def _store_custom_thumbnail(self, channel_id: str, video_id: str, thumbnail: Any) -> tuple[str, str] | None:
         """Put an uploader-supplied thumbnail in R2. Returns ``(key, url)``.

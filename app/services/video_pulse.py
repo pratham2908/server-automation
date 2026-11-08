@@ -1,7 +1,7 @@
-"""The four headline counts for a channel's videos, as database filters.
+"""The three headline counts for a channel's videos, as database filters.
 
 The dashboard's cross-channel rollup only needs these counts. Fetching every video document to count
-four statuses on the client moved hundreds of kilobytes per channel, so the database counts instead.
+three statuses on the client moved hundreds of kilobytes per channel, so the database counts instead.
 The filters mirror what the rollup used to compute from the full list (archived videos excluded, as
 in the default video list).
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-PULSE_KEYS = ("scheduled", "ready", "attention", "unverified")
+PULSE_KEYS = ("scheduled", "ready", "attention")
 
 
 def pulse_filters(channel_id: str) -> dict[str, dict[str, Any]]:
@@ -27,6 +27,4 @@ def pulse_filters(channel_id: str) -> dict[str, dict[str, Any]]:
                 {"platform_missing_since": {"$exists": True, "$ne": None}},
             ],
         },
-        # Published but not confirmed live on the platform (a missing field counts as unconfirmed).
-        "unverified": {"channel_id": channel_id, "status": "published", "verification_status": {"$ne": "verified"}},
     }
