@@ -59,3 +59,11 @@ def test_reels_are_most_follows_first_with_a_rate_per_1k_views() -> None:
     assert [r["title"] for r in rows] == ["Tokyo", "Paris", "Rome"]
     assert rows[0]["follows_per_1k_views"] == 2.81 and rows[1]["follows_per_1k_views"] is None
     assert rows[1]["published_at"] == "2026-11-01T00:00:00"
+
+
+def test_an_old_unreported_day_is_unavailable_not_pending() -> None:
+    days = fm.day_labels(date(2026, 11, 8), 6)  # 3..8 Nov; 3 Nov never reported (under 100 followers)
+    insights = {d: {"follows": 5, "unfollows": 0} for d in days[1:4]}
+    t = fm.totals(fm.series(days, insights, {}, {}), {})
+    assert t["days_unavailable"] == ["2026-11-03"]
+    assert t["days_pending"] == ["2026-11-07", "2026-11-08"]
