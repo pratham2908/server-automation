@@ -1212,6 +1212,18 @@ Answer with the JSON object only."""
             return None
         return PlaceRead(place=place, city=city, asks=raw.get("asks") is not False)
 
+    async def collect_answers(self, prompt: str) -> dict[str, Any]:
+        """A comment's answers to its channel's collector questions (``comment_collectors.build_prompt``).
+
+        Raises when the call fails or the reply isn't JSON, so the caller retries rather than read a
+        failure as "answered nothing".
+        """
+        text = await self._generate_preferring(prompt, self._COMMENT_SENTIMENT_MODEL, task="comment_collect")
+        try:
+            return _loads_json_object(text)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(f"collector answer is not JSON: {text[:200]!r}") from exc
+
     async def generate_comment_reply(
         self,
         comment_text: str,
