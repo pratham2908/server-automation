@@ -129,19 +129,33 @@ class TestCounting:
         )
         assert (lagos["votes"], lagos["likes"]) == (1, 30)
 
-    def test_likes_are_read_often_while_young_then_rarely(self):
-        young = NOW - timedelta(hours=2)
-        assert cc.likes_due(young, None, NOW)
-        assert not cc.likes_due(young, NOW - timedelta(minutes=10), NOW)
-        assert cc.likes_due(young, NOW - timedelta(minutes=31), NOW)
-        two_days = NOW - timedelta(days=2)
-        assert not cc.likes_due(two_days, NOW - timedelta(hours=2), NOW)
-        assert cc.likes_due(two_days, NOW - timedelta(hours=3), NOW)
-        assert not cc.likes_due(NOW - timedelta(days=5), NOW - timedelta(hours=20), NOW)
-        assert not cc.likes_due(NOW - timedelta(days=15), None, NOW)
+    def test_likes_are_read_at_a_few_ages_then_left(self):
+        def due(age: timedelta, read_at_age: timedelta | None) -> bool:
+            written = NOW - age
+            return cc.likes_due(written, None if read_at_age is None else written + read_at_age, NOW)
+
+        assert not due(timedelta(hours=2), None)  # too young: the first read is at 6 hours
+        assert due(timedelta(hours=7), None)
+        assert not due(timedelta(hours=7), timedelta(hours=6, minutes=30))  # read past the 6h mark already
+        assert due(timedelta(days=2), timedelta(hours=7))  # passed the 1-day mark since
+        assert not due(timedelta(days=2), timedelta(days=1, hours=1))
+        assert due(timedelta(days=8), timedelta(days=3, hours=2))  # the 7-day read
+        assert due(timedelta(days=14, hours=3), timedelta(days=7, hours=1))  # the last read
+        assert not due(timedelta(days=16), timedelta(days=7))  # past the window: left alone
+
+    def test_five_reads_over_a_comments_life(self):
+        written = NOW - timedelta(days=20)
+        read_at = None
+        reads = 0
+        t = written
+        while t < NOW:
+            if cc.likes_due(written, read_at, t):
+                read_at, reads = t, reads + 1
+            t += timedelta(minutes=10)
+        assert reads == 5
 
     def test_naive_mongo_times_compare(self):
-        naive = (NOW - timedelta(hours=2)).replace(tzinfo=None)
+        naive = (NOW - timedelta(hours=8)).replace(tzinfo=None)
         assert cc.likes_due(naive, None, NOW)
 
 
@@ -246,8 +260,13 @@ class TestStore:
     def test_likes_are_read_only_when_due(self):
         c = make()
         db = _db_with([c], [])
-        fresh = store.answer_row(c, comment("1", "Tokyo"), "Tokyo", NOW, likes_at=NOW - timedelta(minutes=5))
-        stale = store.answer_row(c, comment("2", "Lagos"), "Lagos", NOW, likes_at=NOW - timedelta(hours=1))
+        eight_hours = NOW - timedelta(hours=8)
+        fresh = store.answer_row(
+            c, comment("1", "Tokyo", commented_at=eight_hours), "Tokyo", NOW, likes_at=NOW - timedelta(hours=1)
+        )
+        stale = store.answer_row(
+            c, comment("2", "Lagos", commented_at=eight_hours), "Lagos", NOW, likes_at=NOW - timedelta(hours=6)
+        )
         run(store.insert_rows(db, [fresh, stale]))
         reader = _Likes({"2": 7})
         assert run(store.refresh_likes(db, reader, "map", NOW)) == 1
@@ -429,3 +448,90 @@ def test_a_comment_left_out_of_a_batch_is_marked_gone():
 
     likes, gone = run(read_like_counts(_SilentLikes(), ["a", "deleted", "b"]))
     assert likes == {"a": 3, "b": 3} and gone == ["deleted"]
+
+
+class TestKinds:
+    def test_the_kind_is_asked_with_the_collectors_in_one_prompt(self):
+        prompt = cc.build_prompt("@sam look 😭", [make()], "Tokyo meet", caption="Tokyo meet. Who wins?", ask_kind=True)
+        assert '"kind": What kind of comment' in prompt and '"tag"' in prompt and '"q1": Which city' in prompt
+        assert 'The reel\'s caption: "Who wins?"' in prompt
+
+    def test_unknown_kinds_are_other(self):
+        assert cc.parse_kind({"kind": "Humour"}) == "humour"
+        assert cc.parse_kind({"kind": "sarcasm"}) == "other"
+        assert cc.parse_kind({}) == "other"
+
+    def _db(self, **more: Any) -> DB:
+        return _db_with(
+            [],
+            [comment("1", "@sam look"), comment("2", "bro 😭", commented_at=NOW - timedelta(days=3))],
+            channels=[{"channel_id": "map", "comment_kinds": {"enabled": True, "since": NOW - timedelta(days=1)}}],
+            videos=[
+                {"channel_id": "map", "instagram_media_id": "reel1", "title": "Tokyo", "description": "Tokyo meet"}
+            ],
+            **more,
+        )
+
+    def test_comments_are_sorted_into_kinds_since_the_switch(self):
+        db = self._db()
+        reader = Reader([{"kind": "tag"}])
+        run(worker.read_channel(db, reader, "map", NOW))
+        kinds = {r["comment_id"]: r.get("kind") for r in db.comment_log.docs}
+        assert kinds == {"1": "tag", "2": None}  # the older one was written before the read-back window
+        assert '"Tokyo"' in reader.prompts[0]
+        run(worker.read_channel(db, Reader([]), "map", NOW))  # read once
+
+    def test_one_call_answers_both_kind_and_collector(self):
+        db = self._db()
+        db.comment_collectors.docs.append(make().model_dump())
+        reader = Reader([{"kind": "request", "q1": ["Tokyo"]}])
+        db.comment_log.docs[1]["commented_at"] = NOW - timedelta(days=5)
+        run(worker.read_channel(db, reader, "map", NOW))
+        assert len(reader.prompts) == 1
+        assert db.comment_log.docs[0]["kind"] == "request"
+        assert [r["answer"] for r in db.collector_answers.docs] == ["Tokyo"]
+
+    def test_switching_on_with_a_read_back(self):
+        db = DB(channels=[{"channel_id": "map"}])
+        out = run(store.set_kinds(db, "map", True, 14, NOW))
+        assert out["since"] == NOW - timedelta(days=14)
+        assert run(store.kinds_since(db, "map")) == NOW - timedelta(days=14)
+        run(store.set_kinds(db, "map", False, 0, NOW))
+        assert run(store.kinds_since(db, "map")) is None
+        assert run(store.channels_to_read(db)) == []
+
+    def test_the_mix_and_most_liked(self):
+        rows = [
+            comment("1", "lol", kind="humour", like_count=40),
+            comment("2", "haha", kind="humour", like_count=3),
+            comment("3", "do Rome", kind="request", like_count=None),
+            comment("4", "mine", kind="humour", own=True),
+        ]
+        db = DB(comment_log=rows)
+        summary = run(store.kinds_summary(db, "map"))
+        humour = next(k for k in summary["kinds"] if k["kind"] == "humour")
+        assert summary["total"] == 3 and humour["comments"] == 2 and humour["likes"] == 43
+        assert humour["share"] == round(2 / 3, 4) and humour["top"]["text"] == "lol"
+        assert summary["reels"] == [{"media_id": "reel1", "total": 3, "mix": {"humour": 2, "request": 1}}]
+        liked = run(store.kind_comments(db, "map", kind="humour"))
+        assert [r["comment_id"] for r in liked] == ["1", "2"]
+
+    def test_kind_comments_get_their_likes_read(self):
+        written = NOW - timedelta(hours=8)
+        db = DB(comment_log=[comment("1", "lol", kind="humour", commented_at=written)])
+        reader = _Likes({"1": 9})
+        assert run(store.refresh_likes(db, reader, "map", NOW)) == 1
+        assert db.comment_log.docs[0]["like_count"] == 9
+
+
+def test_kind_routes(client):
+    http, db = client
+    on = http.put("/api/v1/channels/map/comment-kinds/settings", json={"enabled": True, "read_back_days": 14})
+    assert on.status_code == 200 and on.json()["enabled"] is True and len(on.json()["kinds"]) == 9
+    db.comment_log.docs.append(comment("1", "lol", kind="humour", like_count=5))
+    summary = http.get("/api/v1/channels/map/comment-kinds").json()
+    assert summary["total"] == 1 and summary["reels"][0]["title"] == "Tokyo vote"
+    assert (
+        http.get("/api/v1/channels/map/comment-kinds/comments", params={"kind": "humour"}).json()[0]["like_count"] == 5
+    )
+    assert http.get("/api/v1/channels/map/comment-kinds/comments", params={"kind": "nope"}).status_code == 422
