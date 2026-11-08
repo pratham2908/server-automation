@@ -40,6 +40,7 @@ _post_publisher_task = None
 _threads_publisher_task = None
 _threads_token_task = None
 _comment_dm_task = None
+_comment_collector_task = None
 _city_catalog_task = None
 _fallback_video_task = None
 _comment_log_task = None
@@ -335,6 +336,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background comment-to-DM worker started")
 
+    # ---- Collectors: the owner's questions asked of every comment, counted into lists ----
+    from app.services.comment_collector_worker import run_comment_collector_worker
+
+    global _comment_collector_task
+    _comment_collector_task = create_monitored_task(
+        run_comment_collector_worker(db, instagram_service_manager, gemini_service),
+        feature="Background: Comment collectors",
+    )
+
     # ---- City catalog: the DMs' city list, read from the site's meet tool every hour ----
     from app.services.city_catalog import run_city_catalog
 
@@ -381,6 +391,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _threads_publisher_task,
         _threads_token_task,
         _comment_dm_task,
+        _comment_collector_task,
         _city_catalog_task,
         _comment_ai_reply_task,
         _fallback_video_task,
@@ -435,6 +446,7 @@ from app.routers import (
     channel_groups,
     channels,
     comment_analysis,
+    comment_collectors,
     comment_dm,
     comment_inbox,
     comment_replies,
@@ -518,6 +530,7 @@ app.include_router(comment_dm.config_router)
 app.include_router(fallback_video.router)
 app.include_router(commenters.router)
 app.include_router(followers.router)
+app.include_router(comment_collectors.router)
 app.include_router(meta_webhooks.router)
 
 

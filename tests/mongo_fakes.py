@@ -44,6 +44,8 @@ def _match_value(value: Any, cond: Any) -> bool:
                 return False
             if op == "$gte" and not (present and value is not None and value >= arg):
                 return False
+            if op == "$lt" and not (present and value is not None and value < arg):
+                return False
             if op == "$exists" and present != bool(arg):
                 return False
             if op == "$nin" and present and value in arg:
@@ -104,6 +106,7 @@ class Result:
     def __init__(self, matched: int = 0, inserted_id: Any = None, upserted_id: Any = None) -> None:
         self.matched_count = matched
         self.modified_count = matched
+        self.deleted_count = matched
         self.inserted_id = inserted_id
         self.upserted_id = upserted_id
 
@@ -178,6 +181,12 @@ class Collection:
                 del self.docs[i]
                 return Result(1)
         return Result(0)
+
+    async def delete_many(self, query: dict[str, Any]) -> Result:
+        kept = [d for d in self.docs if not matches(d, query)]
+        gone = len(self.docs) - len(kept)
+        self.docs = kept
+        return Result(gone)
 
     async def distinct(self, key: str, query: dict[str, Any] | None = None) -> list[Any]:
         out: list[Any] = []
