@@ -8,12 +8,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
+from app.config import get_settings
 from app.database import get_db
 from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.models.post import PostDoc
 from app.services.errors import get_error_service
 from app.services.post_rules import protected_slide_keys
+from app.services.storage_usage import refresh_storage_usage
 from app.services.trial_graduation import TrialCheck
 from app.services.video_pulse import pulse_filters
 from app.services.video_service import PLAYBACK_URL_TTL_SECONDS, VideoService
@@ -309,6 +311,11 @@ async def storage_purge(
     purged, errs = await asyncio.to_thread(
         service.r2.purge_prefix_older_than, prefix, days_old, protected_keys=protected
     )
+    # The daily reading is now stale (and the banner would keep warning), so re-measure at once.
+    try:
+        await refresh_storage_usage(service.db, service.r2, get_settings())
+    except Exception:
+        logger.warning("Storage usage refresh after purge failed", exc_info=True)
     return {"ok": True, "purged_count": purged, "errors": errs, "days_old": days_old}
 
 

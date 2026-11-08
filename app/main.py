@@ -30,6 +30,7 @@ _comment_analysis_task = None
 _comment_reply_task = None
 _sync_analysis_task = None
 _growth_tracking_task = None
+_storage_usage_task = None
 _metrics_persistence_task = None
 _batch_analysis_task = None
 _retention_analysis_task = None
@@ -286,6 +287,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background Threads publisher and token refresher started")
 
+    # ---- Storage usage: measured once a day, emails when above the limit ----
+    from app.services.storage_usage_cron import run_storage_usage_cron
+
+    global _storage_usage_task
+    _storage_usage_task = create_monitored_task(
+        run_storage_usage_cron(db, r2_service),
+        feature="Background: Storage usage cron",
+    )
+    logger.info("Background storage usage cron started")
+
     # ---- Fallback videos: checks reels hourly, publishes the picked fallback when one misses its bar ----
     from app.services.fallback_video_cron import run_fallback_video_cron
 
@@ -373,6 +384,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _city_catalog_task,
         _comment_ai_reply_task,
         _fallback_video_task,
+        _storage_usage_task,
         _comment_log_task,
         _dm_catch_up_task,
     ):
@@ -445,6 +457,7 @@ from app.routers import (
     retention_analysis,
     scorecard,
     source_callbacks,
+    storage_usage,
     story_kit,
     sync_analysis,
     system,
@@ -465,6 +478,7 @@ app.include_router(competitor_feed.router)
 app.include_router(source_callbacks.router)
 app.include_router(errors.router)
 app.include_router(videos.router)
+app.include_router(storage_usage.router)
 app.include_router(story_kit.api_router)
 app.include_router(story_kit.page_router)
 app.include_router(posts.router)
