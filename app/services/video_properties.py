@@ -149,3 +149,26 @@ def prompt_schema(defs: Sequence[PropertyDef]) -> list[dict[str, Any]]:
         for p in defs
         if p.values
     ]
+
+
+def known_dimensions(analysis: Mapping[str, Any], defs: Sequence[PropertyDef]) -> dict[str, Any]:
+    """The AI summary with only the channel's own properties left in its property findings.
+
+    With no properties to go on the model has named a "dimension" after a field in its input
+    (``content_params``); anything that isn't one of the channel's property names is dropped.
+    """
+    names = {p.name for p in defs}
+    out = dict(analysis)
+    out["content_param_analysis"] = [
+        p
+        for p in analysis.get("content_param_analysis") or []
+        if isinstance(p, Mapping) and p.get("param_name") in names
+    ]
+    combos = []
+    for combo in analysis.get("best_combinations") or []:
+        params = combo.get("params") if isinstance(combo, Mapping) else None
+        kept = {k: v for k, v in (params or {}).items() if k in names}
+        if kept:
+            combos.append({**combo, "params": kept})
+    out["best_combinations"] = combos
+    return out

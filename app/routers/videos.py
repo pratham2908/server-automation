@@ -187,7 +187,7 @@ async def list_videos(
 
 @router.get("/pulse")
 async def videos_pulse(channel_id: str, service: VideoService = Depends(get_video_service)) -> dict[str, int]:
-    """Counts of scheduled / ready / needs-attention / unverified videos, without sending the videos."""
+    """Counts of scheduled / ready / needs-attention videos, without sending the videos."""
     filters = pulse_filters(channel_id)
     counts = await asyncio.gather(*(service.db.videos.count_documents(f) for f in filters.values()))
     return dict(zip(filters, counts, strict=True))
@@ -334,29 +334,6 @@ async def instagram_account_daily(
     return [InstagramAccountDayOut.model_validate(doc) async for doc in cursor]
 
 
-@router.post("/extract-params/all")
-async def extract_content_params_all(
-    channel_id: str,
-    limit: int = Query(100, ge=1, le=500),
-    service: VideoService = Depends(get_video_service),
-):
-    """Run Gemini content-param extraction for up to *limit* videos."""
-    cursor = service.db.videos.find({"channel_id": channel_id}).limit(limit)
-    videos = await cursor.to_list(length=limit)
-    extracted = 0
-    errors = 0
-    for v in videos:
-        vid = v.get("video_id")
-        if not vid:
-            continue
-        try:
-            await service.extract_content_params(channel_id, vid)
-            extracted += 1
-        except Exception:
-            errors += 1
-    return {"ok": True, "extracted": extracted, "total": len(videos), "errors": errors}
-
-
 @router.patch("/{video_id}/status")
 async def update_video_status(
     channel_id: str,
@@ -450,19 +427,6 @@ async def restore_video(
         return await service.restore_video(channel_id, video_id)
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e))
-
-
-@router.post("/{video_id}/extract-params")
-async def extract_content_params(
-    channel_id: str,
-    video_id: str,
-    service: VideoService = Depends(get_video_service),
-):
-    """Use Gemini to extract content parameters from a video's metadata."""
-    try:
-        return await service.extract_content_params(channel_id, video_id)
-    except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 class VerifyParamsRequest(BaseModel):

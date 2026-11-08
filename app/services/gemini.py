@@ -459,7 +459,7 @@ performance data and produce a comprehensive channel summary.
 
 Each video includes:
 - **title**: Use this to identify titling patterns that drive performance.
-- **content_params**: Custom content dimensions that define what the video is about.
+- **content_params**: The video's properties, by property name (the dimensions listed in the schema below). Empty when the channel has none.
 - **stats**: {stats_desc}
 - **ai_insight**: A per-video AI analysis with `performance_rating`, `what_worked`, `what_didnt`, and `key_learnings`. Use these to identify channel-wide patterns.
 
@@ -514,11 +514,11 @@ Guidelines:
 - **category_analysis**: For each content category:
   - Identify the most effective **title patterns** only (no description/tags analysis).
   - Score each category from 0-100 based on engagement, retention, AND subscriber growth impact.
-- **content_param_analysis**: For each content parameter dimension:
+- **content_param_analysis**: For each property in the schema (use only those names; with no schema, return an empty list):
   - `best_values`: which parameter values correlate with highest performance.
   - `worst_values`: which values underperform.
   - `insight`: a concise explanation of the trend.
-- **best_combinations**: The top 3-5 combinations of content_params values that yield the best results.
+- **best_combinations**: The top 3-5 combinations of content_params values that yield the best results (an empty list when there is no schema).
 - **Follower/subscriber-aware analysis**:
   - {"For YouTube: `subscribers_gained` shows how many new subscribers each video brought." if platform == "youtube" else "For Instagram: `reach` and `shares` indicate how far each reel spreads beyond followers."}
   - `views_per_subscriber` above 1.0 means the video reached beyond the existing audience — a strong viral signal.

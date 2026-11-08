@@ -112,7 +112,7 @@ async def get_latest_analysis(
     else:
         doc = {}
 
-    # 2. Calculate analysis_status (ready/unverified/waiting)
+    # 2. Calculate analysis_status (ready/waiting); the old Verify step no longer holds a video back
     already_analysed_ids: set[str] = set()
     async for v_doc in db.videos.find({"channel_id": channel_id, "performance": {"$ne": None}}, {"video_id": 1}):
         already_analysed_ids.add(v_doc["video_id"])
@@ -126,11 +126,10 @@ async def get_latest_analysis(
             "status": "published",
             "video_id": {"$nin": list(already_analysed_ids)},
         },
-        {"created_at": 1, "verification_status": 1},
+        {"created_at": 1},
     ).to_list(length=None)
 
     ready_for_analysis = 0
-    unverified = 0
     not_ready_yet = 0
 
     for v in unanalysed:
@@ -145,8 +144,6 @@ async def get_latest_analysis(
 
         if not is_old_enough:
             not_ready_yet += 1
-        elif v.get("verification_status") == "unverified":
-            unverified += 1
         else:
             ready_for_analysis += 1
 
@@ -155,7 +152,6 @@ async def get_latest_analysis(
         "analysis_status": {
             "analyzed_count": len(already_analysed_ids),
             "ready_for_analysis": ready_for_analysis,
-            "unverified": unverified,
             "not_ready_yet": not_ready_yet,
         },
     }

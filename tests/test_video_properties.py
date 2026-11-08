@@ -15,6 +15,7 @@ from app.services.video_properties import (
     PropertyValueIn,
     clean_assignment,
     define_properties,
+    known_dimensions,
     labelled,
     parse_property_filter,
     prompt_schema,
@@ -180,3 +181,28 @@ def test_scorecard_alignment_counts_a_best_value_among_several() -> None:
     assert signal is not None
     assert signal["params_matching_best_values"] == 1
     assert signal["total_params"] == 2
+
+
+class TestKnownDimensions:
+    AI = {
+        "category_analysis": [{"category": "reel"}],
+        "content_param_analysis": [
+            {"param_name": "Niche", "best_values": ["DSA"]},
+            {"param_name": "content_params", "best_values": ["{}"]},
+        ],
+        "best_combinations": [
+            {"params": {"Niche": "DSA", "content_params": "x"}, "reasoning": "a"},
+            {"params": {"content_params": "x"}, "reasoning": "b"},
+        ],
+    }
+
+    def test_keeps_only_the_channels_own_properties(self):
+        out = known_dimensions(self.AI, [NICHE])
+        assert [p["param_name"] for p in out["content_param_analysis"]] == ["Niche"]
+        assert out["best_combinations"] == [{"params": {"Niche": "DSA"}, "reasoning": "a"}]
+        assert out["category_analysis"] == [{"category": "reel"}]
+
+    def test_a_channel_without_properties_gets_no_property_findings(self):
+        """Zara and Mehr have no properties; the model had invented one named after its input field."""
+        out = known_dimensions(self.AI, [])
+        assert out["content_param_analysis"] == [] and out["best_combinations"] == []
