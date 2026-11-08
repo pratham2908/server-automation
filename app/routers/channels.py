@@ -4,6 +4,7 @@ On registration, channel metadata is automatically fetched from YouTube.
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Any
@@ -112,6 +113,18 @@ class ChannelUpdate(BaseModel):
     # no-op'd the pause toggle; `starred` backs the admin-view favourites.
     paused: bool | None = None
     starred: bool | None = None
+    # Empty string clears it (exclude_none keeps "" but drops None).
+    email: str | None = None
+
+    @field_validator("email")
+    @classmethod
+    def _clean_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().lower()
+        if value and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+            raise ValueError("Not a valid email address")
+        return value
 
     @field_validator("automation_config")
     @classmethod
