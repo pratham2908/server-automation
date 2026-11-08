@@ -193,6 +193,10 @@ def test_import_list_and_summary(wired):
     assert [p["username"] for p in summary["changes"]["unfollowed"]] == ["neha"]
     assert summary["commenters_not_following"] == [{"username": "stranger", "comments": 1, "dmed": False}]
     assert summary["followers_who_comment"] == 1 and len(summary["series"]) == 30
+    assert summary["days"] == 30 and summary["totals"]["days"] == 30 and summary["reels"] == []
+    week = client.get("/api/v1/channels/zk/followers/summary", params={"days": 7}).json()
+    assert len(week["series"]) == 7 and week["totals"]["days"] == 7
+    assert client.get("/api/v1/channels/zk/followers/summary", params={"days": 3}).status_code == 422
 
 
 def test_a_wrong_account_or_older_export_is_a_422(wired):
