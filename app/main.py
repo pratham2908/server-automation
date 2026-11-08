@@ -449,6 +449,7 @@ from app.routers import (
     comment_collectors,
     comment_dm,
     comment_inbox,
+    comment_kinds,
     comment_replies,
     comment_reply_metrics,
     commenters,
@@ -531,6 +532,7 @@ app.include_router(fallback_video.router)
 app.include_router(commenters.router)
 app.include_router(followers.router)
 app.include_router(comment_collectors.router)
+app.include_router(comment_kinds.router)
 app.include_router(meta_webhooks.router)
 
 

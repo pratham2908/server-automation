@@ -128,13 +128,55 @@ def _key(index: int) -> str:
     return f"q{index + 1}"
 
 
-def build_prompt(comment: str, collectors: Sequence[Collector], reel_title: str | None = None) -> str:
-    """One prompt asking every collector's question of one comment, answered as one JSON object.
+# What kind of comment it is: one per comment, for the mix per reel and the most liked of each kind.
+KINDS: tuple[tuple[str, str, str], ...] = (
+    ("appreciation", "Appreciation", 'praise, love, hype ("this is fire", "love it", "🔥🔥")'),
+    ("humour", "Humour", 'jokes, memes, teasing, laughing ("😭😭", "bro really said")'),
+    ("request", "Request", 'asking for content: a topic, place, part two ("do Tokyo next", "make one on Dijkstra")'),
+    ("question", "Question", 'asking something about the video or how it was made ("what app is this?")'),
+    ("tag", "Tagging a friend", 'mainly @-mentioning someone to show them ("@sam look", "@ana this is us")'),
+    ("personal", "Personal", 'their own story, opinion or where they\'re from ("I live there", "my commute is worse")'),
+    ("criticism", "Criticism", 'saying it is wrong, correcting it, or disliking it ("that\'s not the shortest path")'),
+    ("spam", "Spam", "self-promotion, bots, links, giveaways"),
+    ("other", "Other", "emoji alone, unclear, or none of these"),
+)
+KIND_IDS = tuple(k for k, _, _ in KINDS)
+KIND_LABELS = {k: label for k, label, _ in KINDS}
+CAPTION_MAX = 400
 
-    The reel's title says what the comment is replying to: on "Where should 4 friends meet in Paris?" a
-    "Châtelet" answers the reel, it doesn't ask for a city.
+
+def _context(reel_title: str | None, caption: str | None) -> str:
+    title = (reel_title or "").strip().split("\n")[0][:200]
+    about = re.sub(r"\s+", " ", caption or "").strip()[:CAPTION_MAX]
+    if about and title and about.startswith(title):
+        about = about[len(title) :].lstrip(" .,:;|-–—").strip()
+    lines = []
+    if title:
+        lines.append(f"The comment was written on a reel titled {json.dumps(title, ensure_ascii=False)}.")
+    if about:
+        lines.append(f"The reel's caption: {json.dumps(about, ensure_ascii=False)}")
+    return ("\n" + "\n".join(lines) + "\n") if lines else ""
+
+
+def build_prompt(
+    comment: str,
+    collectors: Sequence[Collector],
+    reel_title: str | None = None,
+    *,
+    caption: str | None = None,
+    ask_kind: bool = False,
+) -> str:
+    """One prompt asking every collector's question of one comment (and, if asked, what kind of comment it is).
+
+    The reel's title and caption say what the comment is replying to: on "Where should 4 friends meet in
+    Paris?" a "Châtelet" answers the reel, it doesn't ask for a city.
     """
     blocks = []
+    if ask_kind:
+        kinds = "\n".join(f'  - "{k}": {desc}' for k, _, desc in KINDS)
+        blocks.append(
+            f'"kind": What kind of comment is it? Exactly one of:\n{kinds}\n  Pick the main one if several fit.'
+        )
     for i, c in enumerate(collectors):
         lines = [f'"{_key(i)}": {c.question}']
         if c.guidance:
@@ -145,11 +187,16 @@ def build_prompt(comment: str, collectors: Sequence[Collector], reel_title: str 
             lines.append('  Answer with the thing\'s usual English name, short ("New York", not "nyc pls").')
         lines.append("  Several answers allowed." if c.multiple else "  At most one answer: the first they give.")
         blocks.append("\n".join(lines))
-    keys = ", ".join(f'"{_key(i)}"' for i in range(len(collectors)))
-    title = reel_title.strip().split("\n")[0][:200] if reel_title else ""
-    context = f"\nThe comment was written on a reel titled {json.dumps(title, ensure_ascii=False)}.\n" if title else ""
+    keys = (['"kind"'] if ask_kind else []) + [f'"{_key(i)}"' for i in range(len(collectors))]
+    shape = (
+        '"kind" a string and the others lists of strings'
+        if ask_kind and collectors
+        else '"kind" a string'
+        if ask_kind
+        else "each a list of strings"
+    )
     return f"""Read one Instagram comment and answer each question about it.
-{context}
+{_context(reel_title, caption)}
 {chr(10).join(blocks)}
 
 Rules:
@@ -160,7 +207,14 @@ Rules:
 
 Comment: {json.dumps(comment, ensure_ascii=False)}
 
-Return a JSON object with exactly the keys {keys}, each a list of strings. JSON only."""
+Return a JSON object with exactly the keys {", ".join(keys)}: {shape}. JSON only."""
+
+
+def parse_kind(reply: Mapping[str, Any]) -> str:
+    """The comment's kind from the model's reply; anything unknown is "other"."""
+    raw = reply.get("kind")
+    kind = raw.strip().lower() if isinstance(raw, str) else ""
+    return kind if kind in KIND_IDS else "other"
 
 
 def _canonical(collector: Collector, raw: str) -> str | None:
@@ -194,26 +248,31 @@ def parse_answers(reply: Mapping[str, Any], collectors: Sequence[Collector]) -> 
     return {c.id: answers_for(c, reply.get(_key(i))) for i, c in enumerate(collectors)}
 
 
-# Likes on a comment come mostly in its first day, so it is re-read often while young and rarely after.
-# For ~150 answers a day this is ~230 Graph calls a day instead of ~960 at a flat 30 minutes.
-LIKES_WINDOW = timedelta(days=14)
-LIKES_SCHEDULE: tuple[tuple[timedelta, timedelta], ...] = (
-    (timedelta(days=1), timedelta(minutes=30)),
-    (timedelta(days=3), timedelta(hours=3)),
-    (LIKES_WINDOW, timedelta(hours=24)),
+# Likes are read at a few ages and then left: early to catch a fast climber, later once they've settled.
+# Five reads per comment, 25 comments per Graph call: ~0.2 calls per comment, ~100 a day at 500 comments.
+LIKES_CHECKPOINTS: tuple[timedelta, ...] = (
+    timedelta(hours=6),
+    timedelta(days=1),
+    timedelta(days=3),
+    timedelta(days=7),
+    timedelta(days=14),
 )
+# A comment is looked at for its last read up to a day after its last checkpoint (the worker may be down).
+LIKES_WINDOW = LIKES_CHECKPOINTS[-1] + timedelta(days=1)
 
 
 def likes_due(commented_at: datetime, likes_at: datetime | None, now: datetime) -> bool:
-    """Whether a comment's likes should be read again now."""
-    now = assume_utc(now)
-    age = now - assume_utc(commented_at)
+    """Whether a comment has passed a checkpoint since its likes were last read."""
+    written = assume_utc(commented_at)
+    age = assume_utc(now) - written
     if age >= LIKES_WINDOW:
+        return False
+    passed = [c for c in LIKES_CHECKPOINTS if age >= c]
+    if not passed:
         return False
     if likes_at is None:
         return True
-    every = next(gap for limit, gap in LIKES_SCHEDULE if age < limit)
-    return now - assume_utc(likes_at) >= every
+    return assume_utc(likes_at) - written < passed[-1]
 
 
 def tally(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
