@@ -355,7 +355,10 @@ async def test_storage_purge_protects_slides_of_unpublished_posts():
 
     db = FakeDB(
         channels=[IG],
-        videos=[{"video_id": "v", "status": "ready", "r2_object_key": "c/v.mp4"}],
+        videos=[
+            {"video_id": "v", "status": "ready", "r2_object_key": "c/v.mp4"},
+            {"video_id": "a", "status": "archived", "r2_object_key": "c/archived.mp4"},
+        ],
         posts=[
             {**post_doc(status="draft", slides=[slide(1)]), "post_id": "a"},
             {**post_doc(status="scheduled", slides=[slide(2)]), "post_id": "b"},
