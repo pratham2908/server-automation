@@ -16,6 +16,10 @@ from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
 from typing import Any
 
+# Instagram reports a day about 48h after it ends; an older day still missing never comes (an account
+# under 100 followers gets no follow numbers), so it is "unavailable", not "pending".
+PENDING_DAYS = 3
+
 
 def day_labels(last_day: date, days: int) -> list[str]:
     first = last_day - timedelta(days=days - 1)
@@ -53,7 +57,9 @@ def series(
 def totals(rows: Sequence[Mapping[str, Any]], counts: Mapping[str, int]) -> dict[str, Any]:
     """The period in a few numbers. Follows and unfollows sum the days Instagram has reported."""
     reported = [r for r in rows if r.get("follows") is not None]
-    pending = [r for r in rows if r.get("follows") is None]
+    recent = {r["date"] for r in rows[-PENDING_DAYS:]}
+    pending = [r for r in rows if r.get("follows") is None and r["date"] in recent]
+    unavailable = [r for r in rows if r.get("follows") is None and r["date"] not in recent]
     follows = sum(int(r["follows"] or 0) for r in reported)
     unfollows = sum(int(r.get("unfollows") or 0) for r in reported)
     best = max(reported, key=lambda r: int(r["follows"] or 0), default=None)
@@ -68,6 +74,7 @@ def totals(rows: Sequence[Mapping[str, Any]], counts: Mapping[str, int]) -> dict
         "days_reported": len(reported),
         "days_pending": [r["date"] for r in pending],
         "pending_net_estimate": sum(int(r["net_estimate"]) for r in pending if r.get("net_estimate") is not None),
+        "days_unavailable": [r["date"] for r in unavailable],
         "best_day": {"date": best["date"], "follows": int(best["follows"] or 0)} if best else None,
         # The follower count just before the period and at its last known day, from our daily snapshots.
         "followers_start": start,
