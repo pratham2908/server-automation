@@ -182,3 +182,11 @@ async def test_failed_send_retries_then_gives_up(monkeypatch):
     for _ in range(6):
         await cron.run_due_digest(db, None)
     assert len(calls) == cron.MAX_ATTEMPTS
+
+
+def test_long_published_list_is_capped():
+    many = [{"title": f"Post {i}", "url": None} for i in range(12)]
+    digest = {**DIGEST, "channels": [{**DIGEST["channels"][0], "posts": many}]}
+    mail = format_digest_email(digest, "https://app.test")
+    assert "Published (12)" in mail.html and "and 7 more" in mail.html and "Post 6" not in mail.html
+    assert "and 7 more published" in mail.text
