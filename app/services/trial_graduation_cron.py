@@ -25,9 +25,11 @@ from app.logger import get_logger
 from app.services.email_service import resolve_owner_email, send_email
 from app.services.error_reporting import report_error
 from app.services.instagram_reel_metrics import reel_metadata
+from app.services.instagram_reel_snapshot import graduation_fields
 from app.services.story_reminder import send_story_emails
 from app.services.trial_graduation import (
     FAILED,
+    GRADUATED,
     MET,
     MISSED,
     PENDING,
@@ -54,6 +56,8 @@ class Snapshot:
     permalink: str | None
     metrics: dict[str, float]
     thumbnail_url: str | None = None
+    # On the profile grid: a trial reel joins it when it is graduated. None when Instagram did not say.
+    shared_to_feed: bool | None = None
 
 
 FetchSnapshot = Callable[[str, str], Awaitable[Snapshot]]
@@ -74,13 +78,35 @@ def fetch_snapshot_with(instagram_service_manager: Any) -> FetchSnapshot:
             permalink=basics.get("permalink"),
             metrics={k: float(v) for k, v in meta.items()},
             thumbnail_url=basics.get("thumbnail_url"),
+            shared_to_feed=basics.get("is_shared_to_feed"),
         )
 
     return fetch
 
 
+async def _mark_graduated(db: Any, video: dict[str, Any], now: datetime, snap: Snapshot | None) -> None:
+    """The reel is on the grid, so it was graduated: stop checking it and send no email.
+
+    The moment is stamped the way the sync stamps it (see ``graduation_fields``), so the two agree.
+    """
+    update: dict[str, Any] = {
+        **graduation_fields(video, True, now, None),
+        "trial_check_state": GRADUATED,
+        "trial_check_checked_at": now,
+        "trial_check_attempts": 0,
+    }
+    if snap is not None:
+        update.update({"trial_check_permalink": snap.permalink, "trial_check_metrics": snap.metrics})
+    await db.videos.update_one({"_id": video["_id"]}, {"$set": update})
+    logger.info("Trial %s is already on the grid (graduated); its checks are stopped", video.get("video_id"))
+
+
 async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot, now: datetime) -> None:
     key = {"_id": video["_id"]}
+    if video.get("graduated_at") or video.get("graduation_time_unknown"):
+        # A sync already saw it on the grid; no need to read it again.
+        await _mark_graduated(db, video, now, None)
+        return
     media_id = video.get("instagram_media_id")
     if not media_id:
         await db.videos.update_one(
@@ -102,6 +128,10 @@ async def _check_one(db: Any, video: dict[str, Any], fetch: FetchSnapshot, now: 
                 context={"video_id": video.get("video_id"), "channel_id": video.get("channel_id")},
             )
         await db.videos.update_one(key, {"$set": update})
+        return
+
+    if snap.shared_to_feed:
+        await _mark_graduated(db, video, now, snap)
         return
 
     outcome = evaluate(video["trial_check"], snap.metrics)
@@ -236,6 +266,9 @@ async def run_trial_checks(
         {
             "trial_check_state": MET,
             "trial_check_emailed": {"$ne": True},
+            # Graduated since the bar was met (a sync saw it on the grid): the email would be stale.
+            "graduated_at": None,
+            "graduation_time_unknown": {"$ne": True},
             "trial_check_email_attempts": {"$not": {"$gte": MAX_EMAIL_ATTEMPTS}},
         }
     ).to_list(length=limit)

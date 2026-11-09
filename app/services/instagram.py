@@ -1554,7 +1554,7 @@ class InstagramService:
     def get_media_snapshot(self, media_id: str) -> dict[str, Any]:
         """One media's link and public counts, for a reel we already know the id of."""
         return self._get(
-            media_id, {"fields": "id,permalink,thumbnail_url,like_count,comments_count,media_product_type"}
+            media_id, {"fields": "id,permalink,thumbnail_url,like_count,comments_count,media_product_type,is_shared_to_feed"}
         )
 
     def get_media_insights(

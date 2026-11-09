@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from app.services.trial_graduation import (
     FAILED,
+    GRADUATED,
     MET,
     MISSED,
     PENDING,
@@ -545,7 +546,11 @@ def test_the_email_goes_once_the_rate_collapses_and_says_where_it_peaked():
     docs = [_video(published_at=NOW - timedelta(hours=4), trial_check_readings=readings)]
     _, sent = _run(docs, Snapshot("https://ig/reel/1", {"views": 8558}))
     assert len(sent) == 1 and docs[0]["trial_check_state"] == MET
-    assert docs[0]["trial_check_peak_rate"] == 3500 and docs[0]["trial_check_peak_at_hours"] == 3 and docs[0]["trial_check_push_peaked"] is True
+    assert (
+        docs[0]["trial_check_peak_rate"] == 3500
+        and docs[0]["trial_check_peak_at_hours"] == 3
+        and docs[0]["trial_check_push_peaked"] is True
+    )
     assert docs[0]["trial_check_rate_at_email"] < 1100
 
 
@@ -571,3 +576,51 @@ def test_push_summary_reads_two_falls_in_a_row_or_a_collapse():
     assert push_summary(t0, hourly(2000, 4700, 8200, 8558)).peaked is True  # 358/h vs 3500/h peak
     flat = push_summary(t0, hourly(1000, 2000, 3000))
     assert flat.peaked is False and flat.peak_rate == 1000
+
+
+# --- already on the grid -----------------------------------------------------------------
+
+
+def test_a_reel_found_on_the_grid_is_graduated_and_not_emailed():
+    # Over the bar, but already graduated by hand: no email, and no more checks.
+    docs = [_video(shared_to_feed=False)]
+    _, sent = _run(docs, Snapshot("https://ig/reel/1", {"views": 9000}, shared_to_feed=True))
+    assert sent == []
+    assert docs[0]["trial_check_state"] == GRADUATED
+    assert docs[0]["graduated_at"] == NOW and docs[0]["shared_to_feed"] is True
+    stats, _ = _run(docs)
+    assert stats["checked"] == 0
+
+
+def test_a_reel_first_seen_on_the_grid_is_graduated_with_an_unknown_time():
+    docs = [_video()]
+    _run(docs, Snapshot("https://ig/reel/1", {"views": 5}, shared_to_feed=True))
+    assert docs[0]["trial_check_state"] == GRADUATED
+    assert docs[0]["graduation_time_unknown"] is True and "graduated_at" not in docs[0]
+
+
+def test_a_reel_off_the_grid_is_checked_as_before():
+    docs = [_video()]
+    _, sent = _run(docs, Snapshot("https://ig/reel/1", {"views": 5000}, shared_to_feed=False))
+    assert docs[0]["trial_check_state"] == MET and len(sent) == 1
+
+
+def test_a_sync_that_saw_it_graduate_stops_the_check_without_reading_it():
+    docs = [_video(graduated_at=NOW - timedelta(minutes=20))]
+    calls = []
+
+    async def fetch(_c, _m):
+        calls.append(1)
+        return Snapshot("x", {"views": 9000})
+
+    async def send(*_a):
+        return True
+
+    asyncio.run(run_trial_checks(_DB(docs), fetch, send, now=NOW))
+    assert calls == [] and docs[0]["trial_check_state"] == GRADUATED
+
+
+def test_a_met_reel_that_graduated_before_its_email_went_out_is_not_emailed():
+    docs = [_video(trial_check_state=MET, graduated_at=NOW - timedelta(hours=1))]
+    _, sent = _run(docs)
+    assert sent == []
