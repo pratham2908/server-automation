@@ -142,17 +142,25 @@ def _top_posts(posts: list[dict[str, Any]]) -> str:
     )
 
 
+MAX_LISTED = 5
+
+
 def _published(posts: list[dict[str, Any]]) -> str:
     if not posts:
         return ""
     rows = "".join(
         f'<div style="font:400 13px/1.5 {_FONT};color:{_MUTED};padding:2px 0;">'
         f"{_link(p['title'], p.get('url'), _MUTED)}</div>"
-        for p in posts
+        for p in posts[:MAX_LISTED]
     )
+    if len(posts) > MAX_LISTED:
+        rows += (
+            f'<div style="font:600 13px/1.5 {_FONT};color:{_MUTED};padding:2px 0;">'
+            f"and {len(posts) - MAX_LISTED} more</div>"
+        )
     return (
         f'<div style="font:600 10px/1.4 {_FONT};letter-spacing:.09em;text-transform:uppercase;color:{_MUTED};'
-        f'padding:14px 0 4px;">Published</div>{rows}'
+        f'padding:14px 0 4px;">Published ({len(posts)})</div>{rows}'
     )
 
 
@@ -247,8 +255,11 @@ def _text(digest: dict[str, Any], app_url: str) -> str:
         )
         for i, p in enumerate(c.get("top_posts") or [], 1):
             lines.append(f"  {i}. {p['title']} - {compact(p['views'])} views")
-        for p in c.get("posts") or []:
+        posts = c.get("posts") or []
+        for p in posts[:MAX_LISTED]:
             lines.append(f"  Published: {p['title']}")
+        if len(posts) > MAX_LISTED:
+            lines.append(f"  and {len(posts) - MAX_LISTED} more published")
         lines.append("")
     lines.append(f"Growth charts: {app_url}")
     return "\n".join(lines)
