@@ -99,9 +99,12 @@ class Collector(CollectorIn):
 
 
 def fold(text: str) -> str:
-    """The comparison key for an answer: no accents, case, punctuation or extra spaces ("São Paulo" = "sao paulo")."""
-    plain = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-z0-9]+", " ", plain.lower()).strip()
+    """The comparison key for an answer: no accents, case, punctuation or extra spaces ("São Paulo" = "sao paulo").
+
+    Other scripts are kept as they are ("香港" stays "香港"), so an answer in them still has a key to merge by.
+    """
+    plain = "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
+    return re.sub(r"[\W_]+", " ", plain.casefold()).strip()
 
 
 def clean_label(text: Any) -> str:

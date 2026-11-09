@@ -422,7 +422,17 @@ async def likes_due(db: AsyncIOMotorDatabase, channel_id: str, now: datetime) ->
 async def refresh_likes(db: AsyncIOMotorDatabase, reader: LikeReader, channel_id: str, now: datetime) -> int:
     """Read the likes that are due on this channel's comments. Returns how many comments were read."""
     ids = await likes_due(db, channel_id, now)
-    read = 0
+    likes, _ = await read_likes(db, reader, ids, now)
+    return len(likes)
+
+
+async def read_likes(
+    db: AsyncIOMotorDatabase, reader: LikeReader, ids: Sequence[str], now: datetime
+) -> tuple[dict[str, int], list[str]]:
+    """Read *ids*' likes from Instagram now and keep them on the comments. Returns (likes, gone ids)."""
+    all_likes: dict[str, int] = {}
+    all_gone: list[str] = []
+    ids = list(ids)
     for start in range(0, len(ids), LIKES_PER_CALL):
         likes, gone = await read_like_counts(reader, ids[start : start + LIKES_PER_CALL])
         for cid, count in likes.items():
@@ -433,8 +443,9 @@ async def refresh_likes(db: AsyncIOMotorDatabase, reader: LikeReader, channel_id
             fields = {"comment_gone": True, "likes_at": now}
             await db.collector_answers.update_many({"comment_id": cid}, {"$set": fields})
             await db.comment_log.update_one({"comment_id": cid}, {"$set": fields})
-        read += len(likes)
-    return read
+        all_likes.update(likes)
+        all_gone.extend(gone)
+    return all_likes, all_gone
 
 
 async def channels_to_read(db: AsyncIOMotorDatabase) -> list[str]:

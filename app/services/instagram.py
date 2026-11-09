@@ -747,6 +747,17 @@ class InstagramService:
 
         return new_comments
 
+    def get_permalinks(self, media_ids: list[str]) -> dict[str, str]:
+        """Each media item's permalink, 50 ids per call. Ids Graph leaves out (deleted posts) are left out."""
+        out: dict[str, str] = {}
+        for start in range(0, len(media_ids), self._IDS_PER_CALL):
+            chunk = media_ids[start : start + self._IDS_PER_CALL]
+            body = self._get("", {"ids": ",".join(chunk), "fields": "permalink"})
+            for mid, node in body.items():
+                if isinstance(node, dict) and node.get("permalink"):
+                    out[str(mid)] = str(node["permalink"])
+        return out
+
     def post_comment(self, media_id: str, message: str) -> str:
         """Post a top-level comment on a media item we own.
 
