@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from app.timezone import IST
 
 # Cumulative counts each snapshot records, in the order the chart offers them.
-HOURLY_METRICS = ("views", "likes", "comments", "shares", "saves")
+HOURLY_METRICS = ("views", "likes", "comments", "shares", "saves", "followers")
 # Rates and averages each snapshot records. Unlike the counts they are levels, not gains: the
 # chart shows where each stood at the end of the hour, never a sum of them.
 LEVEL_METRICS = ("skip_rate", "avg_view_duration_seconds")
