@@ -31,6 +31,7 @@ _comment_reply_task = None
 _sync_analysis_task = None
 _growth_tracking_task = None
 _storage_usage_task = None
+_daily_digest_task = None
 _metrics_persistence_task = None
 _batch_analysis_task = None
 _retention_analysis_task = None
@@ -299,6 +300,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background storage usage cron started")
 
+    # ---- Daily digest: yesterday's numbers for every active channel, emailed each morning ----
+    from app.services.daily_digest_cron import run_daily_digest_cron
+
+    global _daily_digest_task
+    _daily_digest_task = create_monitored_task(
+        run_daily_digest_cron(db),
+        feature="Background: Daily digest cron",
+    )
+    logger.info("Background daily digest cron started")
+
     # ---- Fallback videos: checks reels hourly, publishes the picked fallback when one misses its bar ----
     from app.services.fallback_video_cron import run_fallback_video_cron
 
@@ -407,6 +418,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _comment_ai_reply_task,
         _fallback_video_task,
         _storage_usage_task,
+        _daily_digest_task,
         _comment_log_task,
         _dm_catch_up_task,
     ):
@@ -466,6 +478,7 @@ from app.routers import (
     commenters,
     competitor_feed,
     content_intelligence,
+    daily_digest,
     discovery,
     errors,
     fallback_video,
@@ -504,6 +517,7 @@ app.include_router(source_callbacks.router)
 app.include_router(errors.router)
 app.include_router(videos.router)
 app.include_router(storage_usage.router)
+app.include_router(daily_digest.router)
 app.include_router(story_kit.api_router)
 app.include_router(story_kit.page_router)
 app.include_router(posts.router)
