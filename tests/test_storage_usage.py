@@ -113,3 +113,10 @@ async def test_failed_send_is_retried_next_check(monkeypatch):
 async def test_cached_usage_empty_before_first_check():
     out = await su.get_cached_usage(SimpleNamespace(config=FakeConfig()))
     assert out["total_bytes"] is None and out["over_threshold"] is False and out["threshold_bytes"] == int(7.5 * GB)
+
+
+def test_alert_email_names_the_overage_and_channels():
+    subject, text, html = su.build_alert_email(10 * GB, {"zara <x>": 6 * GB, "b": 4 * GB}, "https://app.test")
+    assert "10.00 GB" in subject and "2.50 GB over" in subject
+    assert "zara &lt;x&gt;" in html and "<x>" not in html
+    assert "https://app.test" in html and "https://app.test" in text

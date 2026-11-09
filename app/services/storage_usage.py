@@ -58,13 +58,17 @@ def should_alert(last_alert_at: datetime | None, now: datetime, is_over: bool) -
     return now - last_alert_at >= timedelta(days=REMINDER_DAYS)
 
 
+_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif"
+
+
 def build_alert_email(total: int, by_channel: dict[str, int], public_url: str) -> tuple[str, str, str]:
     """(subject, text, html) for the over-threshold email."""
 
     top = sorted(by_channel.items(), key=lambda kv: -kv[1])[:5]
-    subject = f"Storage is at {_gb(total)} (limit {_gb(THRESHOLD_BYTES)})"
+    over_by = total - THRESHOLD_BYTES
+    subject = f"Storage is at {_gb(total)}, {_gb(over_by)} over the limit"
     lines = [
-        f"R2 storage holds {_gb(total)}, above the {_gb(THRESHOLD_BYTES)} limit.",
+        f"R2 storage holds {_gb(total)}, {_gb(over_by)} above the {_gb(THRESHOLD_BYTES)} limit.",
         "",
         "Largest channels:",
         *[f"  {name or '(root)'}: {_gb(size)}" for name, size in top],
@@ -72,19 +76,45 @@ def build_alert_email(total: int, by_channel: dict[str, int], public_url: str) -
         f"Free space from the Storage tab: {public_url}",
         f"You will be reminded every {REMINDER_DAYS} days while it stays above the limit.",
     ]
+    biggest = top[0][1] if top else 1
     rows = "".join(
-        f'<tr><td style="padding:4px 16px 4px 0">{escape(name or "(root)")}</td>'
-        f'<td style="padding:4px 0;font-variant-numeric:tabular-nums">{_gb(size)}</td></tr>'
+        f'<tr><td style="padding:7px 12px 7px 0;font:500 14px/1.4 {_FONT};color:#12151c;white-space:nowrap;">'
+        f"{escape(name or '(root)')}</td>"
+        f'<td width="100%" style="padding:7px 12px 7px 0;">'
+        f'<div style="height:8px;border-radius:4px;background:#eceef3;">'
+        f'<div style="height:8px;border-radius:4px;background:#e9a93b;width:{max(3, round(size / biggest * 100))}%;"></div>'
+        f"</div></td>"
+        f'<td align="right" style="padding:7px 0;font:700 13px/1.4 {_FONT};color:#12151c;white-space:nowrap;">'
+        f"{_gb(size)}</td></tr>"
         for name, size in top
     )
+    used = min(100, round(total / THRESHOLD_BYTES * 100))
     html = (
-        '<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a;max-width:480px">'
-        f'<p style="font-size:16px;font-weight:600">Storage is at {_gb(total)}</p>'
-        f"<p>The limit is {_gb(THRESHOLD_BYTES)}. Largest channels:</p>"
-        f'<table style="border-collapse:collapse">{rows}</table>'
-        f'<p><a href="{escape(public_url)}" style="color:#2563eb">Open the app to purge old files</a></p>'
-        f'<p style="color:#64748b;font-size:13px">Reminders repeat every {REMINDER_DAYS} days while usage stays over the limit.</p>'
-        "</div>"
+        f'<div style="margin:0;padding:24px 12px;background:#eceef3;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center">'
+        f'<table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" '
+        f'style="width:100%;max-width:560px;background:#ffffff;border-radius:18px;overflow:hidden;">'
+        f'<tr><td style="background:#0e2a33;padding:26px 24px;">'
+        f'<div style="font:700 11px/1.4 {_FONT};letter-spacing:.16em;text-transform:uppercase;color:#e9a93b;">'
+        f"Storage warning</div>"
+        f'<div style="font:700 34px/1.15 {_FONT};color:#f4efe6;padding:8px 0 4px;">{_gb(total)}</div>'
+        f'<div style="font:400 14px/1.5 {_FONT};color:#8fb0b8;">{_gb(over_by)} over the {_gb(THRESHOLD_BYTES)} limit</div>'
+        f'<div style="height:8px;border-radius:4px;background:#1d4551;margin-top:18px;">'
+        f'<div style="height:8px;border-radius:4px;background:#e9a93b;width:{used}%;"></div></div>'
+        f"</td></tr>"
+        f'<tr><td style="padding:22px 24px 6px;">'
+        f'<div style="font:600 10px/1.4 {_FONT};letter-spacing:.09em;text-transform:uppercase;color:#6a7183;'
+        f'padding-bottom:6px;">Largest channels</div>'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{rows}</table>'
+        f"</td></tr>"
+        f'<tr><td style="padding:18px 24px 8px;">'
+        f'<a href="{escape(public_url, quote=True)}" style="display:inline-block;padding:12px 22px;border-radius:10px;'
+        f'background:#0e2a33;color:#f4efe6;font:700 14px/1.2 {_FONT};text-decoration:none;">Open Storage and purge</a>'
+        f"</td></tr>"
+        f'<tr><td style="padding:10px 24px 24px;font:400 12px/1.6 {_FONT};color:#6a7183;">'
+        f"Old published and archived videos can be purged. You will be reminded every {REMINDER_DAYS} days "
+        f"while storage stays over the limit.</td></tr>"
+        f"</table></td></tr></table></div>"
     )
     return subject, "\n".join(lines), html
 
