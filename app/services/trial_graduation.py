@@ -54,6 +54,8 @@ PENDING = "pending"
 MET = "met"
 MISSED = "missed"
 FAILED = "failed"
+# On the profile grid already (graduated by hand, or by an earlier check): nothing left to watch or email about.
+GRADUATED = "graduated"
 
 
 Operator = Literal["gte", "lte"]
