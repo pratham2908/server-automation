@@ -104,6 +104,7 @@ async def connect_db(
     # Auto-scheduler: one run doc per (day, channel); one summary latch per day.
     await _db.auto_scheduler_runs.create_index([("date", 1), ("channel_id", 1)], unique=True)
     await _db.auto_scheduler_summaries.create_index("date", unique=True)
+    await _db.daily_digests.create_index("date", unique=True)
     # Competitor profile cache: one doc per target account, read on every feed
     # request. Not a TTL index — an expired entry is kept so a failing Instagram
     # call can still be answered with a stale profile rather than nothing.
