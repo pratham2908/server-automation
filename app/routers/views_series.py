@@ -54,7 +54,9 @@ router = APIRouter(
     dependencies=[Depends(verify_api_key)],
 )
 
-Metric = Literal["views", "likes", "comments", "shares", "saves", "skip_rate", "avg_watch_seconds", "watch_through"]
+Metric = Literal[
+    "views", "likes", "comments", "shares", "saves", "followers", "skip_rate", "avg_watch_seconds", "watch_through"
+]
 # Hourly ranges reach back at most MAX_HOURS; a day more finds the reading before the first hour.
 _READ_BACK = timedelta(hours=MAX_HOURS + 24)
 
@@ -130,6 +132,16 @@ async def _hourly_readings(
     since: datetime | None = None,
 ) -> tuple[list[MetricReading], datetime | None]:
     since = since or now_ist() - _READ_BACK
+    if metric == "followers":
+        # The account's follower count at each sync; there is no per-video follower count.
+        if video_id is not None:
+            return [], None
+        cursor = db.channel_follower_snapshots.find({"channel_id": channel_id, "at": {"$gte": since}})
+        return [
+            MetricReading(at=assume_utc(doc["at"]), values={"followers": float(doc["followers"])})
+            async for doc in cursor.sort("at", 1)
+            if isinstance(doc.get("followers"), int | float)
+        ], None
     if video_id is None and metric in LEVEL_SNAPSHOT_FIELDS:
         # The channel's figure is stored as weighted sums with each sync's totals; the ratio is taken here.
         cursor = db.channel_view_snapshots.find({"channel_id": channel_id, "at": {"$gte": since}})

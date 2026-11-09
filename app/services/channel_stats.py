@@ -13,10 +13,12 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.database import get_channel_platform, update_channel_task_status
 from app.logger import get_logger
+from app.services.channel_follower_snapshots import record_follower_reading
 from app.services.channel_profile import build_profile_update, name_changed, persist_profile_update
 from app.services.growth_tracking import GrowthTrackingService
 from app.services.threads import ThreadsServiceManager
 from app.services.threads_insights_parse import account_totals
+from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
@@ -77,6 +79,8 @@ async def refresh_channel_stats(
     # One snapshot per day (upserted by date), so refreshing several times a day
     # keeps the latest reading rather than adding points to the growth chart.
     await growth_service.record_snapshot(channel_id, platform, subs, views, metadata)
+    # The daily row keeps only the day's last reading; this keeps every one for the hourly chart.
+    await record_follower_reading(db, channel_id, subs, now_ist())
 
     # The payload already carries the display name, avatar, and description, so
     # refreshing the cached profile costs no extra API call.

@@ -67,6 +67,9 @@ async def connect_db(
     await _db.instagram_reel_snapshots.create_index([("channel_id", 1), ("media_id", 1), ("at", 1)])
     await _db.instagram_reel_daily.create_index([("channel_id", 1), ("media_id", 1), ("date", 1)], unique=True)
     await _db.channel_view_snapshots.create_index([("channel_id", 1), ("at", 1)])
+    # Follower count at each sync (hourly follower chart); old readings expire on their own.
+    await _db.channel_follower_snapshots.create_index([("channel_id", 1), ("at", 1)])
+    await _db.channel_follower_snapshots.create_index("at", expireAfterSeconds=120 * 24 * 3600)
     await _db.threads_post_snapshots.create_index([("channel_id", 1), ("media_id", 1), ("at", 1)])
     await _db.threads_account_daily.create_index([("channel_id", 1), ("date", 1)], unique=True)
     await _db.threads_audience.create_index("channel_id", unique=True)
