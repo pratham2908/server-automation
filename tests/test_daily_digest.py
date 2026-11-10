@@ -39,7 +39,11 @@ def test_a_dip_is_not_reported_as_negative_gain():
 
 def test_video_urls():
     assert video_url("youtube", {"youtube_video_id": "abc"}) == "https://www.youtube.com/watch?v=abc"
-    assert video_url("instagram", {"instagram_media_id": "123"}) == "https://www.instagram.com/reel/123/"
+    # A Graph media id is not valid in an Instagram URL, so without a stored permalink there is no link.
+    assert video_url("instagram", {"instagram_media_id": "123"}) is None
+    assert video_url(
+        "instagram", {"instagram_media_id": "123", "instagram_permalink": "https://www.instagram.com/reel/X/"}
+    ).endswith("/reel/X/")
     assert video_url("instagram", {}) is None
 
 

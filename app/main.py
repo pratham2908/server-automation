@@ -473,6 +473,7 @@ from app.routers import (
     comment_dm,
     comment_inbox,
     comment_kinds,
+    comment_reels,
     comment_replies,
     comment_reply_metrics,
     commenters,
@@ -518,6 +519,7 @@ app.include_router(errors.router)
 app.include_router(videos.router)
 app.include_router(storage_usage.router)
 app.include_router(daily_digest.router)
+app.include_router(comment_reels.router)
 app.include_router(story_kit.api_router)
 app.include_router(story_kit.page_router)
 app.include_router(posts.router)
