@@ -225,7 +225,7 @@ class _Coll:
     def __init__(self, doc: dict[str, Any] | None = None, docs: list[dict[str, Any]] | None = None) -> None:
         self._doc, self._docs = doc, docs or []
 
-    async def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
+    async def find_one(self, query: dict[str, Any], projection: Any = None) -> dict[str, Any] | None:
         return self._doc
 
     def find(self, *args: Any, **kwargs: Any) -> Any:
@@ -281,6 +281,8 @@ class _Gemini:
         self._fail = fail_reply_for or set()
         self.reply_sentiments: list[str] = []
         self.contexts: list[str] = []
+        self.instructions: list[str] = []
+        self.replies: dict[str, str] = {}  # comment text -> the reply the model "writes"
 
     async def classify_comment_sentiment(
         self, batch: list[dict[str, Any]], video_context: str = ""
@@ -289,10 +291,19 @@ class _Gemini:
         return [{"comment_id": c["comment_id"], "sentiment": self._sentiments[c["comment_id"]]} for c in batch]
 
     async def generate_comment_reply(
-        self, comment_text: str, video_title: str, platform: str, sentiment: str, video_context: str = ""
+        self,
+        comment_text: str,
+        video_title: str,
+        platform: str,
+        sentiment: str,
+        video_context: str = "",
+        instructions: str = "",
     ) -> str:
         self.contexts.append(video_context)
         self.reply_sentiments.append(sentiment)
+        self.instructions.append(instructions)
+        if comment_text in self.replies:
+            return self.replies[comment_text]
         return "" if comment_text in self._fail else f"draft for: {comment_text}"
 
 
@@ -404,3 +415,46 @@ def test_the_engine_gives_the_model_the_videos_title_and_description():
     asyncio.run(run_comment_reply_cycle("ch", db, None, _Manager(ig), gemini))  # type: ignore[arg-type]
     assert gemini.contexts, "the model was never called"
     assert all("Cool reel" in c and "gyroscope" in c for c in gemini.contexts)
+
+
+# ---- Replies that invent plans or promise things are held for a person (T0858) ---------------------------
+
+_INVENTED = "haha thanks! it's a custom map tool we built, still figuring out if we should make it public 👀"
+
+
+def test_auto_mode_holds_a_reply_that_invents_plans_instead_of_posting_it():
+    """11-10, @themapworld Singapore reel: the model made up a tool and a launch decision."""
+    gemini = _Gemini(SENTIMENTS)
+    gemini.replies["love it"] = _INVENTED
+    stats, replies, ig = _run(MODE_AUTO, gemini)
+    assert ig.replied == []
+    held = {r["comment_id"]: r for r in replies.rows}["pos"]
+    assert held["status"] == STATUS_PENDING and held["held_for"].lower() == "tool"
+    assert stats["drafted"] == 1 and stats["replied"] == 0
+
+
+def test_a_plain_reply_still_posts_in_auto_mode():
+    gemini = _Gemini(SENTIMENTS)
+    gemini.replies["love it"] = "haha which city should they meet in next? 👀"
+    _, replies, ig = _run(MODE_AUTO, gemini)
+    assert ig.replied == [("pos", "haha which city should they meet in next? 👀")]
+    assert "held_for" not in {r["comment_id"]: r for r in replies.rows}["pos"]
+
+
+def test_the_engine_passes_the_owners_reply_instructions():
+    replies = _Replies()
+    channel = {
+        "channel_id": "ch",
+        "platform": "instagram",
+        "instagram_username": "physicsasmr",
+        "comment_ai_reply": {"enabled": False, "instructions": "never talk about how the maps are made"},
+    }
+    gemini = _Gemini(SENTIMENTS)
+    asyncio.run(run_comment_reply_cycle("ch", _CycleDb(channel, replies), None, _Manager(_Ig(_comments())), gemini))  # type: ignore[arg-type]
+    assert gemini.instructions == ["never talk about how the maps are made"]
+
+
+def test_the_engine_passes_no_instructions_when_the_owner_set_none():
+    gemini = _Gemini(SENTIMENTS)
+    _run(MODE_AUTO, gemini)
+    assert gemini.instructions == [""]

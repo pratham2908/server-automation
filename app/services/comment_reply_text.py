@@ -64,3 +64,39 @@ def humanise_reply(text: str) -> str:
         cleaned = cleaned[1:-1].strip()
     # A trailing dash leaves a dangling comma behind.
     return _WHITESPACE.sub(" ", cleaned).strip(" ,")
+
+
+# Words that, in a reply, usually mean the model is talking about the channel's plans or promising something.
+# The model is told never to; a reply that still does is held for a person instead of being posted.
+_HOLD_PATTERNS = (
+    r"\bapps?\b",
+    r"\btools?\b",
+    r"\bsoftware\b",
+    r"\bwebsite\b",
+    r"\bbuil(?:t|d|ding|ds)\b",
+    r"\blaunch\w*",
+    r"\bpublic\b",
+    r"\breleas\w*",
+    r"\bsoon\b",
+    r"\bworking on\b",
+    r"\b(?:been )?thinking about (?:it|making|doing|that)\b",
+    r"\bplanning\b",
+    r"\broadmap\b",
+    r"\bour team\b",
+    r"\bnext (?:video|reel|one|part|episode|city)\b",
+    r"\bon (?:my|our) list\b",
+    r"\bsend(?:ing)?\b.{0,30}\byour way\b",
+    r"\bsend(?:ing)? (?:it|you|the)\b",
+    r"\bdms?\b",
+)
+_HOLD = re.compile("|".join(_HOLD_PATTERNS), re.IGNORECASE)
+
+
+def hold_reason(reply: str) -> str | None:
+    """Why this reply must wait for a person rather than post: the phrase that hints at plans or a promise.
+
+    None when it is fine to post. Deliberately broad: a held reply costs a tap, a posted one can leak
+    plans that were never meant to be public.
+    """
+    found = _HOLD.search(reply or "")
+    return found.group(0) if found else None

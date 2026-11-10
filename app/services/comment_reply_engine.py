@@ -16,6 +16,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.logger import get_logger
 from app.services import comment_reply_guard as guard
 from app.services.ai_channel_context import with_ai_channel
+from app.services.comment_ai_reply_store import load_config as load_ai_reply_config
 from app.services.comment_reply_review import (
     MODE_REVIEW,
     build_pending_row,
@@ -24,7 +25,7 @@ from app.services.comment_reply_review import (
     normalise_mode,
     own_identities,
 )
-from app.services.comment_reply_text import video_context
+from app.services.comment_reply_text import hold_reason, video_context
 from app.services.gemini import GeminiService
 from app.services.instagram import InstagramService
 from app.services.instagram_tokens import PREFER_FOR_READING_COMMENTS, PREFER_FOR_REPLYING
@@ -91,6 +92,9 @@ async def run_comment_reply_cycle(
 
     platform = channel.get("platform", "youtube")
     review_mode = normalise_mode(channel.get("comment_reply_mode")) == MODE_REVIEW
+    # The owner's reply instructions for this channel (set with the AI auto-reply), used on this path too.
+    ai_config = await load_ai_reply_config(db, channel_id)
+    instructions = ai_config.instructions if ai_config else ""
     templates = config.get("reply_templates", _DEFAULT_TEMPLATES)
     max_replies = config.get("max_replies_per_run", _DEFAULT_MAX_REPLIES)
     max_videos = config.get("max_videos_per_run", _DEFAULT_MAX_VIDEOS)
@@ -292,6 +296,7 @@ async def run_comment_reply_cycle(
                     platform=platform,
                     sentiment=sent,
                     video_context=context,
+                    instructions=instructions,
                 )
             except Exception as exc:
                 logger.warning("AI reply generation failed: %s", exc)
@@ -304,7 +309,8 @@ async def run_comment_reply_cycle(
                     continue
                 reply_text = _pick_template(templates)
 
-            if review_mode:
+            held = hold_reason(reply_text)
+            if review_mode or held:
                 await db.comment_replies.insert_one(
                     build_pending_row(
                         channel_id=channel_id,
@@ -313,8 +319,11 @@ async def run_comment_reply_cycle(
                         comment=c,
                         sentiment=sent,
                         suggested_reply=reply_text,
+                        held_for=held,
                     )
                 )
+                if held:
+                    logger.info("Held reply to %s on %s for review (%r)", c["comment_id"], channel_id, held)
                 total_replies += 1
                 stats["drafted"] += 1
                 continue

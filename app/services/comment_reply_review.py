@@ -76,9 +76,15 @@ def build_pending_row(
     comment: dict[str, Any],
     sentiment: str,
     suggested_reply: str,
+    held_for: str | None = None,
 ) -> dict[str, Any]:
-    """The ``comment_replies`` document for a drafted-but-unsent reply."""
+    """The ``comment_replies`` document for a drafted-but-unsent reply.
+
+    *held_for* is the phrase that stopped an auto-reply from posting (``comment_reply_text.hold_reason``).
+    """
+    extra = {"held_for": held_for} if held_for else {}
     return {
+        **extra,
         "channel_id": channel_id,
         "video_id": video.get("video_id", ""),
         "video_title": video.get("title", ""),

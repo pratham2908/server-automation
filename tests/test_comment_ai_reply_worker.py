@@ -184,3 +184,14 @@ def test_over_cap_is_pure() -> None:
     assert not guard.over_cap([NOW - timedelta(days=1, hours=1)] * 6, NOW)
     assert guard.over_cap([NOW - timedelta(days=1, hours=1)] * 7, NOW)
     assert not guard.over_cap([NOW - timedelta(days=8)] * 9, NOW)
+
+
+def test_a_reply_that_invents_plans_is_held_for_review_not_posted() -> None:
+    """T0858: in auto mode a reply hinting at the channel's plans waits for a person."""
+    reply = "haha thanks! it's a custom map tool we built, still figuring out if we should make it public 👀"
+    db, service = Db(), Service()
+    assert _run(db, Gemini("positive", reply=reply), service) == "done"
+    assert service.posted == []
+    row = db.comment_replies.docs[0]
+    assert row["status"] == "pending_approval" and row["held_for"]
+    assert db.comment_ai_reply_queue.docs[0]["held_for"] == row["held_for"]
