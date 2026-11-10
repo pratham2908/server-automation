@@ -510,7 +510,9 @@ def test_routes_end_to_end(client):
     assert made.status_code == 201, made.text
     kit = made.json()
     assert kit["download_url"] and kit["top"]["deep_link"].endswith("/c/1/")
-    graph.media = [{**LIVE, "caption": kit["caption"]}]
+    # Posted just now: the route makes the kit at the real current time, and a post older than its kit is no match.
+    posted = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S+0000")
+    graph.media = [{**LIVE, "caption": kit["caption"], "timestamp": posted}]
     checked = http.post(f"{base}/kits/{kit['kit_id']}/check").json()
     assert checked["status"] == "live" and checked["steps"][0]["state"] == "done"
     assert [k["kit_id"] for k in http.get(f"{base}/kits").json()] == [kit["kit_id"]]

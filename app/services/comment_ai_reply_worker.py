@@ -19,7 +19,7 @@ from app.services.ai_channel_context import with_ai_channel
 from app.services.comment_ai_reply import STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED
 from app.services.comment_ai_reply_store import claim_due, fail_interrupted, load_config, update_item
 from app.services.comment_reply_review import MODE_REVIEW, build_pending_row, is_reviewable, normalise_mode
-from app.services.comment_reply_text import video_context
+from app.services.comment_reply_text import hold_reason, video_context
 from app.services.error_reporting import get_error_service
 from app.services.gemini import GeminiService
 from app.services.instagram import graph_error_message
@@ -128,7 +128,8 @@ async def answer_one(
             # No canned fallback: it would be a subscribe pitch under a comment that may not be praise.
             await update_item(db, comment_id, {"status": STATUS_FAILED, "error": "the AI returned no reply"}, now)
             return STATUS_FAILED
-        if review:
+        held = hold_reason(reply)
+        if review or held:
             row = build_pending_row(
                 channel_id=channel_id,
                 platform="instagram",
@@ -136,9 +137,14 @@ async def answer_one(
                 comment=comment,
                 sentiment=sentiment,
                 suggested_reply=reply,
+                held_for=held,
             )
             await db.comment_replies.insert_one(row)
-            await update_item(db, comment_id, {"status": STATUS_DONE, "reply_text": reply, "drafted": True}, now)
+            fields: dict[str, Any] = {"status": STATUS_DONE, "reply_text": reply, "drafted": True}
+            if held:
+                fields["held_for"] = held
+                logger.info("[AiReply] Held reply to %s on %s for review (%r)", comment_id, channel_id, held)
+            await update_item(db, comment_id, fields, now)
             return STATUS_DONE
         service = await manager.get_service(channel_id, PREFER_FOR_REPLYING)
         if service is None:

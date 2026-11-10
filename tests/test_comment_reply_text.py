@@ -155,3 +155,43 @@ def test_a_complaint_or_question_is_never_pitched_a_follow(sentiment: str, forbi
 def test_unparseable_model_output_gives_an_empty_reply_so_the_caller_can_fall_back():
     service, _ = _gemini("not json at all")
     assert asyncio.run(service.generate_comment_reply("x", "T")) == ""
+
+
+# ---- T0858: replies must not invent the channel's plans or promise anything -------------------------------
+
+from app.services.comment_reply_text import hold_reason  # noqa: E402
+
+# What the model actually posted (11-07 and 11-10, @themapworld), every one invented.
+INVENTED = [
+    "haha thanks! it's a custom map tool we built, still figuring out if we should make it public 👀",
+    "honestly been thinking about it, what would you want it to do",
+    "an app would be so fun",
+    "berlin's next on my list, sending the map your way soon",
+]
+FINE = [
+    "haha thanks! which city should they meet in?",
+    "glad it landed, where would you meet them?",
+    "ha yeah tokyo was a fun one",
+    "😌🔥",
+    "follow karo warna miss ho jayega 😌",
+    "Glad you enjoyed it! Hit subscribe for more!",
+]
+
+
+@pytest.mark.parametrize("reply", INVENTED)
+def test_replies_that_invent_plans_or_promise_are_held(reply):
+    assert hold_reason(reply), reply
+
+
+@pytest.mark.parametrize("reply", FINE)
+def test_ordinary_replies_are_not_held(reply):
+    assert hold_reason(reply) is None
+
+
+def test_the_reply_prompt_forbids_plans_and_promises():
+    service, rec = _gemini('{"reply": "ok"}')
+    asyncio.run(service.generate_comment_reply("I need this app bro", "Singapore", "instagram"))
+    prompt = rec.prompts[0]
+    assert "Never state or hint at the channel's plans" in prompt
+    assert "Never promise anything" in prompt
+    assert "If they ask for the app or tool" in prompt
