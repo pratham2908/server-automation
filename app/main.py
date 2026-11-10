@@ -32,6 +32,7 @@ _sync_analysis_task = None
 _growth_tracking_task = None
 _storage_usage_task = None
 _daily_digest_task = None
+_pin_email_task = None
 _metrics_persistence_task = None
 _batch_analysis_task = None
 _retention_analysis_task = None
@@ -310,6 +311,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     logger.info("Background daily digest cron started")
 
+    # ---- Pinned comments: emails the reels whose first comment still needs pinning by hand ----
+    from app.services.pin_email_cron import run_pin_email_cron
+
+    global _pin_email_task
+    _pin_email_task = create_monitored_task(
+        run_pin_email_cron(db, instagram_service_manager),
+        feature="Background: Pin email cron",
+    )
+    logger.info("Background pin email cron started")
+
     # ---- Fallback videos: checks reels hourly, publishes the picked fallback when one misses its bar ----
     from app.services.fallback_video_cron import run_fallback_video_cron
 
@@ -419,6 +430,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _fallback_video_task,
         _storage_usage_task,
         _daily_digest_task,
+        _pin_email_task,
         _comment_log_task,
         _dm_catch_up_task,
     ):
@@ -490,6 +502,7 @@ from app.routers import (
     instagram_insights,
     meta_webhooks,
     observability,
+    pins,
     posts,
     preview_analysis,
     retention_analysis,
@@ -520,6 +533,7 @@ app.include_router(videos.router)
 app.include_router(storage_usage.router)
 app.include_router(daily_digest.router)
 app.include_router(comment_reels.router)
+app.include_router(pins.router)
 app.include_router(story_kit.api_router)
 app.include_router(story_kit.page_router)
 app.include_router(posts.router)
