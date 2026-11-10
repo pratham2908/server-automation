@@ -34,6 +34,7 @@ from app.services import comment_collectors as cc
 from app.services import voted_city as vc
 from app.services.email_service import resolve_owner_email, send_email
 from app.services.errors import get_error_service
+from app.services.media_permalinks import permalinks
 from app.timezone import assume_utc, to_ist_iso
 
 logger = get_logger(__name__)
@@ -138,28 +139,6 @@ async def unmark_done(db: AsyncIOMotorDatabase, channel_id: str, city: str) -> b
     key, _ = await resolve_city(db, channel_id, city)
     result = await db.voted_cities.delete_one({"channel_id": channel_id, "city_key": key})
     return bool(result.deleted_count)
-
-
-async def permalinks(db: AsyncIOMotorDatabase, graph: Graph | None, media_ids: Sequence[str]) -> dict[str, str]:
-    """Permalink per media id: kept ones first, the rest read from Instagram (once) and kept."""
-    ids = sorted({m for m in media_ids if m})
-    known = {
-        str(d["media_id"]): str(d["permalink"])
-        async for d in db.media_permalinks.find({"media_id": {"$in": ids}}, {"media_id": 1, "permalink": 1})
-    }
-    missing = [m for m in ids if m not in known]
-    if missing and graph is not None:
-        try:
-            found = await asyncio.to_thread(graph.get_permalinks, missing)
-        except Exception as exc:  # noqa: BLE001 - deep links are a convenience; the vote stands without them
-            logger.warning("[VotedCity] Reading permalinks failed: %s", exc)
-            found = {}
-        for mid, link in found.items():
-            await db.media_permalinks.update_one(
-                {"media_id": mid}, {"$set": {"media_id": mid, "permalink": link}}, upsert=True
-            )
-        known.update(found)
-    return known
 
 
 def _with_links(comment: dict[str, Any], links: dict[str, str]) -> dict[str, Any]:
