@@ -2050,6 +2050,7 @@ class VideoService:
                         "description": r.get("caption", ""),
                         "published_at": (isoparse(r.get("timestamp")) if r.get("timestamp") else None),
                         "thumbnail_url": self._instagram_reel_thumbnail_url(r),
+                        "instagram_permalink": r.get("permalink"),
                         "metadata": metadata,
                     }
                 )
@@ -2076,6 +2077,8 @@ class VideoService:
                 set_doc.update(await self._graduation_update(channel_id, mid, existing or {}, shared, now))
                 if thumb and not self._has_thumbnail_url(existing):
                     set_doc["thumbnail_url"] = thumb
+                if r.get("permalink"):
+                    set_doc["instagram_permalink"] = r["permalink"]
                 await self.db.videos.update_one(
                     # No archived guard (see the YouTube path): a reel present in
                     # this fetch is live, so a previously-archived one returns to
@@ -2123,6 +2126,7 @@ class VideoService:
                         "status": "published",
                         "published_at": v["published_at"],
                         "thumbnail_url": v.get("thumbnail_url"),
+                        "instagram_permalink": v.get("instagram_permalink"),
                         "metadata": v.get("metadata", {}),
                         "insights_synced_at": now if v["instagram_media_id"] in stored else None,
                         "verification_status": "unverified",

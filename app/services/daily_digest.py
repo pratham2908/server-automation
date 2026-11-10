@@ -15,7 +15,7 @@ and the email shows a dash, never a zero.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -63,14 +63,15 @@ def gain_over_day(
     return max(0.0, at_end - at_start)
 
 
-def video_url(platform: str, video: dict[str, Any]) -> str | None:
+def video_url(platform: str, video: dict[str, Any], links: Mapping[str, str] | None = None) -> str | None:
+    """A link that opens the post. Instagram's Graph ids are not valid in a URL, so only a real permalink works."""
     media_id = video.get(MEDIA_FIELDS.get(platform, "youtube_video_id"))
     if platform == "youtube" and media_id:
         return f"https://www.youtube.com/watch?v={media_id}"
     if platform == "threads":
         return video.get("threads_permalink")
     if platform == "instagram" and media_id:
-        return video.get("instagram_permalink") or f"https://www.instagram.com/reel/{media_id}/"
+        return video.get("instagram_permalink") or (links or {}).get(str(media_id))
     return None
 
 
@@ -110,7 +111,13 @@ async def _published(db: AsyncIOMotorDatabase, channel_id: str, start: datetime,
 
 
 async def _top_posts(
-    db: AsyncIOMotorDatabase, channel_id: str, platform: str, start: datetime, end: datetime, born: set[str]
+    db: AsyncIOMotorDatabase,
+    channel_id: str,
+    platform: str,
+    start: datetime,
+    end: datetime,
+    born: set[str],
+    links: Mapping[str, str],
 ) -> list[dict[str, Any]]:
     by_media = await view_readings_by_media(db, channel_id, platform, start - EDGE_TOLERANCE)
     gains = {
@@ -130,7 +137,7 @@ async def _top_posts(
         {
             "title": (docs.get(media_id) or {}).get("title") or "Untitled post",
             "views": int(gain),
-            "url": video_url(platform, docs.get(media_id) or {field: media_id}),
+            "url": video_url(platform, docs.get(media_id) or {field: media_id}, links),
         }
         for media_id, gain in ranked
     ]
@@ -139,6 +146,8 @@ async def _top_posts(
 async def build_digest(db: AsyncIOMotorDatabase, day: date) -> dict[str, Any]:
     start, end = day_bounds(day)
     channels: list[dict[str, Any]] = []
+    # Permalinks the app has already read (for Instagram posts whose own record predates storing them).
+    links = {str(d["media_id"]): str(d["permalink"]) async for d in db.media_permalinks.find({})}
     for channel_id in await active_channel_ids(db, end):
         channel = await db.channels.find_one({"channel_id": channel_id})
         if not channel:
@@ -158,10 +167,11 @@ async def build_digest(db: AsyncIOMotorDatabase, day: date) -> dict[str, Any]:
                 "followers_change": change,
                 "views": await _channel_views(db, channel_id, start, end),
                 "posts": [
-                    {"title": v.get("title") or "Untitled post", "url": video_url(platform, v)} for v in published
+                    {"title": v.get("title") or "Untitled post", "url": video_url(platform, v, links)}
+                    for v in published
                 ],
                 "top_posts": await _top_posts(
-                    db, channel_id, platform, start, end, {str(v[field]) for v in published if v.get(field)}
+                    db, channel_id, platform, start, end, {str(v[field]) for v in published if v.get(field)}, links
                 ),
             }
         )
