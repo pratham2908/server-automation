@@ -26,7 +26,7 @@ from app.timezone import IST, assume_utc, now_ist, to_ist_iso
 DONE = "done"
 SKIPPED = "skipped"
 STATUSES = (DONE, SKIPPED)
-PIN_TRACKING_SINCE = datetime(2026, 11, 10, tzinfo=IST)
+PIN_TRACKING_SINCE = datetime(2026, 11, 8, tzinfo=IST)
 RECENT_FINISHED = 20
 
 
