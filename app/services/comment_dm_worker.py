@@ -19,7 +19,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import ValidationError
 
 from app.logger import get_logger
-from app.services import city_tally, comment_log, dm_outbox, dm_replies, meet_city
+from app.services import city_tally, comment_log, dm_outbox, dm_reel_share, dm_replies, meet_city
 from app.services.comment_dm import (
     HOURLY_CAP,
     MAX_ATTEMPTS,
@@ -341,6 +341,11 @@ async def _send_due(db: AsyncIOMotorDatabase, manager: Any, gemini: GeminiLike |
         if event is None:
             break
         await send_one(db, manager, event, now, gemini)
+    # Reels shared into our DMs get their rule's DM, queued in the outbox and sent just below.
+    try:
+        await dm_reel_share.answer_shared_reels(db, manager, now_ist())
+    except Exception:  # noqa: BLE001 - a failed look at shares must never hold up the DMs owed
+        logger.exception("[CommentDM] Answering shared reels failed")
     # Replies owed for taps on our buttons and chips ride the same tick.
     await dm_outbox.send_due(db, manager, now_ist)
 
