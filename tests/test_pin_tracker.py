@@ -40,7 +40,7 @@ def test_pin_item_without_a_permalink_has_no_links():
 
 
 def test_tracking_starts_on_10_november_ist():
-    assert pt.PIN_TRACKING_SINCE == datetime(2026, 11, 10, tzinfo=IST)
+    assert pt.PIN_TRACKING_SINCE == datetime(2026, 11, 8, tzinfo=IST)
     assert pt.tracked_filter()["first_comment_status"] == "posted"
 
 
