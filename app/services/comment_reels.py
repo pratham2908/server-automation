@@ -27,9 +27,17 @@ SAMPLES = 3
 MIN_SAMPLE_CHARS = 12
 
 
+def _says_something(text: str) -> bool:
+    """Long enough, and not mostly @-mentions (people tagging friends, which is not a comment worth pinning)."""
+    words = text.split()
+    if len(text.strip()) < MIN_SAMPLE_CHARS or not words:
+        return False
+    return sum(w.startswith("@") for w in words) / len(words) < 0.5
+
+
 def pick_samples(comments: Sequence[dict[str, Any]], limit: int = SAMPLES) -> list[dict[str, Any]]:
     """The longest comments, shown oldest first, skipping anything too short to be worth pinning."""
-    worth = [c for c in comments if len((c.get("text") or "").strip()) >= MIN_SAMPLE_CHARS]
+    worth = [c for c in comments if _says_something(c.get("text") or "")]
     longest = sorted(worth, key=lambda c: -len(c["text"]))[:limit]
     return sorted(longest, key=lambda c: c["commented_at"])
 
