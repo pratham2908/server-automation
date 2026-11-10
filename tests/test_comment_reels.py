@@ -157,3 +157,9 @@ def test_email_has_a_button_per_reel_and_escapes_text():
     assert "/reel/AbC123/c/c1/" in mail.html
     assert "&lt;fast&gt;" in mail.html and "<b>canal" not in mail.html
     assert "https://www.instagram.com/reel/AbC123/" in mail.text
+
+
+def test_comments_that_only_tag_friends_are_not_sampled():
+    tags = c(1, "@vedantkale10_, @omkar_hivrale, @heramb__pednekar, @advaitvanne51")
+    mixed = c(2, "@arjun this is so true for Pune honestly")
+    assert [p["comment_id"] for p in pick_samples([tags, mixed])] == ["c2"]
