@@ -44,6 +44,7 @@ _threads_token_task = None
 _comment_dm_task = None
 _comment_collector_task = None
 _voted_city_task = None
+_city_requester_task = None
 _city_catalog_task = None
 _fallback_video_task = None
 _comment_log_task = None
@@ -377,6 +378,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         feature="Background: Voted-city reels",
     )
 
+    # ---- City requesters: a new city meet reel tells everyone who asked for that city ----
+    from app.services.city_requester_worker import run_city_requester_worker
+
+    global _city_requester_task
+    _city_requester_task = create_monitored_task(
+        run_city_requester_worker(db, instagram_service_manager, settings),
+        feature="Background: City requester replies",
+    )
+
     # ---- City catalog: the DMs' city list, read from the site's meet tool every hour ----
     from app.services.city_catalog import run_city_catalog
 
@@ -425,6 +435,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         _comment_dm_task,
         _comment_collector_task,
         _voted_city_task,
+        _city_requester_task,
         _city_catalog_task,
         _comment_ai_reply_task,
         _fallback_video_task,
@@ -480,6 +491,7 @@ from app.routers import (
     categories,
     channel_groups,
     channels,
+    city_requesters,
     comment_analysis,
     comment_collectors,
     comment_dm,
@@ -575,6 +587,7 @@ app.include_router(commenters.router)
 app.include_router(followers.router)
 app.include_router(comment_collectors.router)
 app.include_router(voted_city.router)
+app.include_router(city_requesters.router)
 app.include_router(comment_kinds.router)
 app.include_router(meta_webhooks.router)
 
