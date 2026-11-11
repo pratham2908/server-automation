@@ -54,19 +54,31 @@ def _when(value: Any) -> datetime:
 def one_per_person(rows: Iterable[Mapping[str, Any]], own: Iterable[str] = ()) -> list[dict[str, Any]]:
     """Each person's comment to reply under: their most liked ask, the newest of equals. Oldest asker first.
 
+    ``ask_ids`` lists all their asks, that one first then oldest to newest: a reply we already gave may sit
+    under any of them (hand replies go under a person's first ask), so the told check reads each.
     Our own comments and comments with no username are left out.
     """
     skip = {u.lower().lstrip("@") for u in own if u}
     best: dict[str, Mapping[str, Any]] = {}
+    asks: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
         who = str(row.get("username") or "").lower().lstrip("@")
         if not who or who in skip:
             continue
+        asks.setdefault(who, []).append(row)
         held = best.get(who)
         rank = (int(row.get("like_count") or 0), _when(row.get("commented_at")))
         if held is None or rank > (int(held.get("like_count") or 0), _when(held.get("commented_at"))):
             best[who] = row
-    picked = [{**row, "username": who} for who, row in best.items()]
+    picked = []
+    for who, row in best.items():
+        chosen = str(row.get("comment_id"))
+        others = [
+            str(r.get("comment_id"))
+            for r in sorted(asks[who], key=lambda r: _when(r.get("commented_at")))
+            if str(r.get("comment_id")) != chosen
+        ]
+        picked.append({**row, "username": who, "ask_ids": [chosen, *dict.fromkeys(others)]})
     return sorted(picked, key=lambda r: _when(r.get("commented_at")))
 
 

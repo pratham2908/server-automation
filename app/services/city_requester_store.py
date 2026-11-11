@@ -9,7 +9,7 @@ Who asked comes from the channel's "City requests" collector (which reads cities
 every comment) plus any comment that names the city outright, from the comment log. Comments on the new
 reel itself, and on a reel about that same city (where naming it isn't a request), don't count.
 
-Before each reply the comment's thread is read: if we already answered it naming the city (by hand, or
+Before each reply the threads of all that person's asks are read: if we already answered one naming the city (by hand, or
 the voted-reel thank-you), the person is marked told and skipped. The same read settles a reply whose
 outcome we couldn't see (a timeout), so a retry never posts twice.
 """
@@ -203,6 +203,27 @@ async def _record(
     )
 
 
+async def _told_in_asks(graph: Graph, person: dict[str, Any], own: str, keys: list[str]) -> tuple[str | None, bool]:
+    """(our reply naming the city under any of their asks, whether the comment we'd reply under is deleted).
+
+    A deleted other ask is just skipped; any other read error is raised, which stops the run.
+    """
+    target = str(person["comment_id"])
+    gone = False
+    for comment_id in person.get("ask_ids") or [target]:
+        try:
+            thread = await asyncio.to_thread(graph.get_thread, comment_id)
+        except requests.RequestException as exc:
+            if graph_error_code(exc) != GONE_CODE:
+                raise
+            gone = gone or comment_id == target
+            continue
+        told = cr.already_told(thread.get("replies") or [], own, keys)
+        if told:
+            return told, gone
+    return None, gone
+
+
 async def run_job(
     db: AsyncIOMotorDatabase,
     graph: Graph,
@@ -225,14 +246,13 @@ async def run_job(
         if held and held.get("status") in (SENT, TOLD, GONE):
             continue
         try:
-            thread = await asyncio.to_thread(graph.get_thread, str(person["comment_id"]))
+            told, gone = await _told_in_asks(graph, person, own, keys)
         except requests.RequestException as exc:
-            if graph_error_code(exc) == GONE_CODE:
-                await _record(db, job, person, {"status": GONE, "at": now_fn()})
-                continue
             error = f"reading @{who}'s comment: {graph_error_message(exc)}"
             break
-        told = cr.already_told(thread.get("replies") or [], own, keys)
+        if gone and not told:
+            await _record(db, job, person, {"status": GONE, "at": now_fn()})
+            continue
         if told:
             await _record(db, job, person, {"status": TOLD, "reply_id": told, "at": now_fn()})
             continue

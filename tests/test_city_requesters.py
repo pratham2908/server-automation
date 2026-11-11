@@ -160,6 +160,15 @@ class TestRules:
         ]
         assert [(r["username"], r["comment_id"]) for r in cr.one_per_person(rows, ["themapworld"])] == [("ana", "2")]
 
+    def test_every_ask_of_a_person_is_kept_for_the_told_check(self):
+        rows = [
+            {"comment_id": "1", "username": "ana", "like_count": 0, "commented_at": NOW - timedelta(hours=9)},
+            {"comment_id": "2", "username": "Ana", "like_count": 5, "commented_at": NOW - timedelta(hours=3)},
+            {"comment_id": "3", "username": "ana", "like_count": 0, "commented_at": NOW},
+        ]
+        (person,) = cr.one_per_person(rows)
+        assert person["comment_id"] == "2" and person["ask_ids"] == ["2", "1", "3"]
+
     def test_already_told_reads_our_replies_naming_the_city(self):
         replies = [
             {"comment_id": "x", "author": "someone", "text": "jakarta is up"},
@@ -210,6 +219,23 @@ class TestRun:
         graph.media = [{**MEET, "id": "M20", "caption": "Where Should 4 Friends Meet? #20: Jakarta 📍"}]
         _run_all(db, graph)
         assert len(graph.posted) == 1
+
+    def test_told_under_another_of_their_asks_counts(self):
+        # Hand replies go under a person's FIRST ask; we'd reply under their most liked one.
+        db = make_db([answer("a1", "Jakarta", "ana", hours=9), answer("a2", "Jakarta", "ana", likes=4, hours=2)])
+        graph = Graph([MEET])
+        graph.threads["a1"] = [{"comment_id": "hand", "author": "themapworld", "text": "Jakarta is live now!"}]
+        _run_all(db, graph)
+        assert graph.posted == []
+        (row,) = db.city_requester_replies.docs
+        assert row["status"] == store.TOLD and row["reply_id"] == "hand"
+
+    def test_a_deleted_other_ask_does_not_stop_the_reply(self):
+        db = make_db([answer("a1", "Jakarta", "ana", hours=9), answer("a2", "Jakarta", "ana", likes=4, hours=2)])
+        graph = Graph([MEET])
+        graph.gone.add("a1")
+        (after,) = _run_all(db, graph)
+        assert after["status"] == store.JOB_DONE and [c for c, _ in graph.posted] == ["a2"]
 
     def test_reels_from_before_switching_on_and_other_reels_start_nothing(self):
         db = make_db([answer("a1", "Jakarta", "ana")])
