@@ -92,6 +92,8 @@ class Collector(CollectorIn):
     channel_id: str
     # Folded alias -> the answer it counts as. Applied to every answer from the moment it is set.
     merges: dict[str, str] = Field(default_factory=dict)
+    # Folded answers the owner has dealt with (a city already mapped). Shown ticked; they keep their place in the list.
+    done: list[str] = Field(default_factory=list)
     # Comments written before this are not read (unless copied in): a new question has no old answers.
     active_from: datetime
     created_at: datetime

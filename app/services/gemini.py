@@ -1231,6 +1231,14 @@ Answer with the JSON object only."""
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError(f"collector answer is not JSON: {text[:200]!r}") from exc
 
+    async def translate_comment(self, prompt: str) -> dict[str, Any]:
+        """The model's JSON reply to ``comment_translate.build_prompt``. Raises when the call fails or isn't JSON."""
+        text = await self._generate_preferring(prompt, self._COMMENT_SENTIMENT_MODEL, task="comment_translate")
+        try:
+            return _loads_json_object(text)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(f"translation is not JSON: {text[:200]!r}") from exc
+
     async def generate_comment_reply(
         self,
         comment_text: str,

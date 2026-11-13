@@ -168,6 +168,33 @@ async def unread_comments(
     return await db.comment_log.find(query).sort("commented_at", -1).limit(limit).to_list(limit)
 
 
+async def set_answer_done(
+    db: AsyncIOMotorDatabase, collector: cc.Collector, answer: str, done: bool, now: datetime
+) -> list[str]:
+    """Tick (or untick) an answer as dealt with. Returns the collector's ticked answers, folded."""
+    key = cc.fold(answer)
+    if not key:
+        raise ValueError("which answer?")
+    # Read the list fresh and write it back whole: a handful of ticks by one owner, no need for atomic set ops.
+    doc = await db.comment_collectors.find_one({"id": collector.id}, {"done": 1}) or {}
+    ticked = [k for k in doc.get("done") or [] if k != key]
+    if done:
+        ticked.append(key)
+    await db.comment_collectors.update_one({"id": collector.id}, {"$set": {"done": ticked, "updated_at": now}})
+    return ticked
+
+
+async def set_kind_by_hand(
+    db: AsyncIOMotorDatabase, channel_id: str, comment_id: str, kind: str, now: datetime
+) -> bool:
+    """The owner's correction of a comment's kind. The worker only sorts comments with no kind, so it stays."""
+    result = await db.comment_log.update_one(
+        {"channel_id": channel_id, "comment_id": comment_id, "kind": {"$exists": True}},
+        {"$set": {"kind": kind, "kind_at": now, "kind_by_hand": True}},
+    )
+    return result.matched_count > 0
+
+
 async def record_kind(db: AsyncIOMotorDatabase, comment_id: str, kind: str, now: datetime) -> None:
     await db.comment_log.update_one({"comment_id": comment_id}, {"$set": {"kind": kind, "kind_at": now}})
 
