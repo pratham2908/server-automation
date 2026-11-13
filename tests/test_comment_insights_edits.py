@@ -58,3 +58,44 @@ def test_kind_correction_sticks_to_a_sorted_comment_only():
     assert row["kind"] == "request" and row["kind_by_hand"] is True
     assert run(store.set_kind_by_hand(db, "map", "2", "request", NOW)) is False
     assert run(store.set_kind_by_hand(db, "other", "1", "request", NOW)) is False
+
+
+class _Graph:
+    def __init__(self, provider: str, refuse: set[str]) -> None:
+        self.provider = provider
+        self.refuse = refuse
+
+    def get_demographics(self, ig_user_id, metric, breakdown, timeframe):
+        if timeframe in self.refuse:
+            return None
+        row = {"dimension_values": ["IN"], "value": 7}
+        return {"data": [{"total_value": {"breakdowns": [{"results": [row]}]}}]}
+
+
+class _Manager:
+    def __init__(self, service: _Graph) -> None:
+        self.service = service
+
+    async def get_service_and_user_id(self, channel_id, prefer=None):
+        return self.service, "ig-login-id"
+
+
+def test_refused_timeframe_falls_back_to_the_instagram_login():
+    from app.services.instagram_audience_sync import refresh_audience
+
+    db = DB()
+    facebook = _Graph("facebook", {"last_90_days"})
+    login = _Graph("instagram", set())
+    assert run(refresh_audience(db, facebook, "dream", "fb-id", force=True, manager=_Manager(login))) is True
+    stored = run(db.instagram_audience.find_one({"channel_id": "dream"}))
+    assert stored["audiences"]["reached"]["last_90_days"]["country"] == [{"value": "IN", "count": 7}]
+
+    # Without a manager the refused timeframe stays empty, as before.
+    other = DB()
+    assert run(refresh_audience(other, facebook, "dream", "fb-id", force=True)) is True
+    assert (
+        run(other.instagram_audience.find_one({"channel_id": "dream"}))["audiences"]["reached"]["last_90_days"][
+            "country"
+        ]
+        == []
+    )

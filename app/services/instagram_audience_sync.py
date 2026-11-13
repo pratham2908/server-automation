@@ -32,13 +32,32 @@ from app.services.instagram_audience import (
     parse_story_navigation,
     story_metrics_for,
 )
+from app.services.instagram_tokens import PROVIDER_FACEBOOK, PROVIDER_INSTAGRAM
 from app.timezone import now_ist
 
 logger = get_logger(__name__)
 
 
+async def _login_fallback(manager: Any, ig: InstagramService, channel_id: str) -> tuple[InstagramService, str] | None:
+    """The channel's Instagram-login client, for what a Facebook-login token is refused.
+
+    Probed 2026-11-13: ``last_90_days`` is refused to Facebook-login tokens ("no longer supported from v20")
+    but answered to Instagram-login ones, so a channel whose primary is Facebook login got an empty 90-day list.
+    """
+    if manager is None or getattr(ig, "provider", None) != PROVIDER_FACEBOOK:
+        return None
+    resolved = await manager.get_service_and_user_id(channel_id, prefer=PROVIDER_INSTAGRAM)
+    return resolved if resolved and getattr(resolved[0], "provider", None) == PROVIDER_INSTAGRAM else None
+
+
 async def refresh_audience(
-    db: AsyncIOMotorDatabase, ig: InstagramService, channel_id: str, ig_user_id: str, *, force: bool = False
+    db: AsyncIOMotorDatabase,
+    ig: InstagramService,
+    channel_id: str,
+    ig_user_id: str,
+    *,
+    force: bool = False,
+    manager: Any = None,
 ) -> bool:
     """Pull every breakdown and store today's snapshot; returns whether it pulled.
 
@@ -53,12 +72,17 @@ async def refresh_audience(
         return False
     audiences: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}
     answered = 0
+    fallback = await _login_fallback(manager, ig, channel_id)
     for name, metric in AUDIENCE_METRICS.items():
         # Followers are the same whatever the timeframe, so one pass is enough (see FOLLOWER_TIMEFRAME).
         asked = (FOLLOWER_TIMEFRAME,) if name == "followers" else TIMEFRAMES
         for timeframe in asked:
             for breakdown in DEMOGRAPHIC_BREAKDOWNS:
                 body = await asyncio.to_thread(ig.get_demographics, ig_user_id, metric, breakdown, timeframe)
+                if body is None and fallback is not None:
+                    body = await asyncio.to_thread(
+                        fallback[0].get_demographics, fallback[1], metric, breakdown, timeframe
+                    )
                 answered += body is not None
                 audiences.setdefault(name, {}).setdefault(timeframe, {})[breakdown] = parse_demographics(body)
         if name == "followers":
