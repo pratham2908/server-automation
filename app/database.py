@@ -183,6 +183,7 @@ async def connect_db(
     # DM store: a message is kept once by its id; a conversation is one row per person per channel.
     await _db.dm_messages.create_index("message_id", unique=True)
     await _db.dm_messages.create_index([("channel_id", 1), ("peer_id", 1), ("created_at", 1)])
+    await _db.dm_seen.create_index([("channel_id", 1), ("peer_id", 1), ("message_id", 1)], unique=True)
     await _db.dm_conversations.create_index([("channel_id", 1), ("peer_id", 1)], unique=True)
     # Replies our buttons send, by content id; and the replies owed for taps, one per tap.
     await _db.dm_replies.create_index("reply_id", unique=True)

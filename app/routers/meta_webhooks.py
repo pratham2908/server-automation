@@ -20,6 +20,7 @@ from app.services import (
     comment_ai_reply_store,
     comment_log,
     dm_outbox,
+    dm_seen,
     dm_store,
     meet_city_answers,
     meta_webhook_config,
@@ -65,6 +66,8 @@ async def receive(request: Request, db: AsyncIOMotorDatabase = Depends(get_db)) 
     now = now_ist()
     # DMs ride the same subscription: keep each one so the inbox never reads it from Instagram again.
     await dm_store.record_webhook(db, payload if isinstance(payload, dict) else {}, now)
+    # Read receipts: the one live sign a comment-DM reached someone (Instagram never reports a refusal).
+    await dm_seen.record_webhook(db, payload if isinstance(payload, dict) else {}, now)
     # Taps on our reply buttons, chips, ice breakers and menu: the worker sends what each one asks for.
     await dm_outbox.record_webhook(db, payload if isinstance(payload, dict) else {}, now)
     # A city typed in reply to the meet flow's city question (TryAlgoViz) gets the map for that city.
