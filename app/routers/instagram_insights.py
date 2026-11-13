@@ -158,7 +158,7 @@ async def refetch_audience(channel_id: str, db: AsyncIOMotorDatabase = Depends(g
     ig, ig_user_id = resolved
     _refetching.add(channel_id)
     try:
-        pulled = await refresh_audience(db, ig, channel_id, ig_user_id, force=True)
+        pulled = await refresh_audience(db, ig, channel_id, ig_user_id, force=True, manager=manager)
     except requests.RequestException as exc:
         raise HTTPException(502, f"Instagram refused: {graph_error_message(exc)[:300]}") from exc
     finally:

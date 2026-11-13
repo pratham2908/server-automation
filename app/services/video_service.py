@@ -2170,7 +2170,9 @@ class VideoService:
         # Audience and stories are independent of the follow estimate and of each
         # other; one failing must not cost the others their refresh.
         try:
-            await refresh_audience(self.db, ig, channel_id, channel["instagram_user_id"])
+            await refresh_audience(
+                self.db, ig, channel_id, channel["instagram_user_id"], manager=self.instagram_manager
+            )
         except Exception:
             logger.exception("Audience demographics not refreshed for '%s'", channel_id)
         try:
