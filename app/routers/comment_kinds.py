@@ -32,6 +32,10 @@ class KindsSettingIn(BaseModel):
     read_back_days: int = Field(default=0, ge=0, le=store.MAX_KIND_READ_BACK_DAYS)
 
 
+class KindIn(BaseModel):
+    kind: str
+
+
 async def _channel(db: AsyncIOMotorDatabase, channel_id: str) -> None:
     if not await db.channels.find_one({"channel_id": channel_id}, {"_id": 1}):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Channel not found")
@@ -138,3 +142,16 @@ async def kind_comments(
         }
         for r in rows
     ]
+
+
+@router.patch("/comments/{comment_id}")
+async def change_kind(
+    channel_id: str, comment_id: str, body: KindIn, db: AsyncIOMotorDatabase = Depends(get_db)
+) -> dict[str, Any]:
+    """Correct the kind the AI gave a comment."""
+    await _channel(db, channel_id)
+    if body.kind not in cc.KIND_IDS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"unknown kind {body.kind!r}")
+    if not await store.set_kind_by_hand(db, channel_id, comment_id, body.kind, now_ist()):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Comment not found")
+    return {"comment_id": comment_id, "kind": body.kind}

@@ -500,6 +500,7 @@ from app.routers import (
     comment_reels,
     comment_replies,
     comment_reply_metrics,
+    comment_translate,
     commenters,
     competitor_feed,
     content_intelligence,
@@ -589,6 +590,7 @@ app.include_router(comment_collectors.router)
 app.include_router(voted_city.router)
 app.include_router(city_requesters.router)
 app.include_router(comment_kinds.router)
+app.include_router(comment_translate.router)
 app.include_router(meta_webhooks.router)
 
 

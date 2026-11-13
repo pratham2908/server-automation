@@ -37,6 +37,11 @@ class CollectorTest(BaseModel):
     collector: cc.CollectorIn
 
 
+class DoneIn(BaseModel):
+    answer: str = Field(min_length=1, max_length=cc.ANSWER_MAX_LEN)
+    done: bool
+
+
 class MergeIn(BaseModel):
     sources: list[str] = Field(min_length=1, max_length=20)
     into: str = Field(min_length=1, max_length=cc.ANSWER_MAX_LEN)
@@ -172,9 +177,12 @@ async def collector_tally(
     )
     # The reel filter offers every reel with answers, whatever the other filters.
     every = await db.collector_answers.distinct("media_id", {"collector_id": collector.id})
+    ticked = set(collector.done)
     return {
         **result,
-        "entries": [{**e, "last_at": to_ist_iso(e["last_at"])} for e in result["entries"]],
+        "entries": [
+            {**e, "last_at": to_ist_iso(e["last_at"]), "done": cc.fold(e["answer"]) in ticked} for e in result["entries"]
+        ],
         "reels": await _reels(db, channel_id, [str(m) for m in every if m]),
     }
 
@@ -215,6 +223,19 @@ async def collector_answers(
         }
         for r in rows
     ]
+
+
+@router.put("/{collector_id}/done")
+async def mark_answer_done(
+    channel_id: str, collector_id: str, body: DoneIn, db: AsyncIOMotorDatabase = Depends(get_db)
+) -> dict[str, Any]:
+    """Tick an answer as dealt with. It keeps its place in the list; only the "most" highlights skip it."""
+    collector = await _collector(db, channel_id, collector_id)
+    try:
+        done = await store.set_answer_done(db, collector, body.answer, body.done, now_ist())
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return {"done": done}
 
 
 @router.post("/{collector_id}/merge")
