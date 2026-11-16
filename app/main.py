@@ -497,6 +497,7 @@ from app.routers import (
     comment_dm,
     comment_inbox,
     comment_kinds,
+    comment_private_reply,
     comment_reels,
     comment_replies,
     comment_reply_metrics,
@@ -576,6 +577,7 @@ app.include_router(observability.router)
 app.include_router(growth.router)
 app.include_router(instagram_insights.router)
 app.include_router(instagram_dms.router)
+app.include_router(comment_private_reply.router)
 app.include_router(instagram_dm_setup.router)
 app.include_router(youtube_insights.router)
 app.include_router(threads.router)
