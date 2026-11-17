@@ -367,8 +367,8 @@ def due_for_recording(
 
     Settled reels barely move, so re-recording them all is wasted effort: a reel is due when its
     views (from the daily sync) have grown more than ``threshold`` since the recording its view
-    count came from. Never-recorded reels are due once they pass ``min_views``; below that they are
-    the small pathfinder reels the owner skips. Each mapping: media_id, title, views (now),
+    count came from. Reels never recorded (or recorded without their view count) are due once they
+    pass ``min_views``; below that they are the small pathfinder reels the owner skips. Each mapping: media_id, title, views (now),
     recorded_views, recorded_at.
     """
     due: list[DueReel] = []
@@ -383,9 +383,9 @@ def due_for_recording(
             views_recorded=reel.get("recorded_views"),
             recorded_at=reel.get("recorded_at"),
         )
-        if item.recorded_at is None:
+        if item.growth is None:  # nothing to compare against: only reels big enough to matter
             if item.views_now >= min_views:
                 due.append(item)
-        elif item.growth is None or item.growth > threshold:
+        elif item.growth > threshold:
             due.append(item)
     return sorted(due, key=lambda d: (d.recorded_at is None, -(d.growth or 0), -d.views_now))
