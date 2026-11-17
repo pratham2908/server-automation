@@ -89,9 +89,11 @@ def test_similar_reach_reel_settled_by_city(reels):
         {"media_id": "berlin", "title": "Where Should 4 Friends Meet? #33: Berlin", "views": 53921},
         {"media_id": "other", "title": "Where Should 4 Friends Meet? #3: Oslo", "views": 54000},
     ]
+    near_berlin[0]["likes"] = near_berlin[1]["likes"] = 280
+    berlin.counts["likes"] = 272
     assert ai.match_reel(berlin, near_berlin) == "berlin"  # the series name in every title doesn't decide it
     assert ai.match_reel(reels[0], stored) == "tokyo"
-    stored[1]["title"] = "Tokyo again"  # both name the city: no guess
+    stored[1] |= {"title": "Tokyo again", "likes": 17950}  # both name the city, likes agree: no guess
     assert ai.match_reel(reels[0], stored) is None
 
 
@@ -146,3 +148,15 @@ def test_recording_time_from_either_name():
         2026, 11, 17, 16, 24, 51, tzinfo=IST
     )
     assert recorded_at(Path("city_solved-2026-11-17-16-24.mp4")) == datetime(2026, 11, 17, 16, 24, tzinfo=IST)
+
+
+def test_new_reel_grown_past_the_tolerance_still_found():
+    """London #31: 91,635 views when recorded, 93,933 (+2.5%) by the time it was imported."""
+    london = ai.ReelInsights(thumbnail_text=["LONDON", "S MEET"], counts={"views": 91635, "likes": 351})
+    stored = [
+        {"media_id": "london31", "title": "Where Should 4 Friends Meet? #31: London", "views": 93933, "likes": 360},
+        {"media_id": "wembley", "title": "London: Wembley Stadium to Greenwich, 4 Ways", "views": 99000, "likes": 400},
+    ]
+    assert ai.match_reel(london, stored) == "london31"
+    stored[0]["likes"] = 900  # likes disagree: not this reel, and no guess
+    assert ai.match_reel(london, stored) is None

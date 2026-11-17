@@ -256,13 +256,16 @@ def _pct(value: str | None) -> float | None:
         return None
 
 
-def match_reel(rec: ReelInsights, reels: Sequence[Mapping[str, Any]], tolerance: float = 0.02) -> str | None:
+def match_reel(
+    rec: ReelInsights, reels: Sequence[Mapping[str, Any]], tolerance: float = 0.02, drift: float = 0.10
+) -> str | None:
     """The media id of the stored reel these insights are for, or None when it isn't clear.
 
     The view count picks the reel. Ours differs from the app by however long the two reads were
-    apart, so a tolerance is needed, and a reel of similar reach can fall inside it too; then a
-    thumbnail text must name exactly one of them. Without a view count, the like count must agree
-    and a thumbnail text must name the reel.
+    apart: one reel within ``tolerance`` is taken. Past that (a new reel gains several percent in an
+    hour, and a reel of similar reach can sit close by), reels within ``drift`` are candidates, the
+    like count must agree, and a thumbnail text must name exactly one of them. Without a view count,
+    the like count and the thumbnail text decide alone.
     """
 
     def near(ours: Any, theirs: int | None, slack: float) -> bool:
@@ -279,9 +282,8 @@ def match_reel(rec: ReelInsights, reels: Sequence[Mapping[str, Any]], tolerance:
 
     views = rec.counts.get("views")
     if views:
-        hits = [r for r in reels if near(r.get("views"), views, tolerance)]
-        if len(hits) == 1:
-            return str(hits[0]["media_id"])
-    else:
-        hits = [r for r in reels if near(r.get("likes"), rec.counts.get("likes"), 0.06)]
-    return named_by_thumbnail(hits)
+        tight = [r for r in reels if near(r.get("views"), views, tolerance)]
+        if len(tight) == 1:
+            return str(tight[0]["media_id"])
+        reels = [r for r in reels if near(r.get("views"), views, drift)]
+    return named_by_thumbnail([r for r in reels if near(r.get("likes"), rec.counts.get("likes"), 0.06)])
