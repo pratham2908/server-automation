@@ -121,3 +121,19 @@ def test_stored_with_history_and_follows_only_rise(reels):
     assert len(db.reel_app_insights.docs) == 2
     meta = db.videos.docs[0]["metadata"]
     assert meta["follows"] == 644 and meta["app_insights"]["source"] == "rec.mp4"
+
+
+def test_sources_of_views_kept_apart_from_countries():
+    """Istanbul from the 16:24 recording: sources and countries share a layout; Türkiye has an accent."""
+    (istanbul,) = ai.read_reels(
+        ai.parse_ocr((Path(__file__).parent / "fixtures" / "app_insights_ocr_sources.txt").read_text())
+    )
+    assert istanbul.source_pct == {"Reels tab": 74.2, "Explore": 12.4, "Feed": 7.0, "Profile": 3.3, "Stories": 0.1}
+    assert list(istanbul.country_pct) == ["Türkiye", "Germany", "United States", "United Kingdom", "Italy"]
+    assert istanbul.country_pct["Türkiye"] == 75.0
+    assert istanbul.as_doc()["source_pct"]["Reels tab"] == 74.2
+
+
+def test_cyrillic_lookalikes_read_as_counts():
+    ((_, tokens),) = ai.parse_ocr("### f\n0.90,0.34|3К\n")
+    assert ai.parse_count(tokens[0][2]) == 3000

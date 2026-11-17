@@ -4,7 +4,8 @@ The owner records the phone while opening each reel's "Reel insights" (Overview,
 Audience tabs). On-device OCR (``scripts/app_insights_ocr.swift``) turns the frames into lines of
 ``x,y|text`` (normalised, y from the top) under a ``### <frame>`` header; this module reads those into
 one record per reel and pairs each with a stored reel. Profile visits, bio link clicks, the
-follower/non-follower split, and viewer age and country per reel exist only there.
+follower/non-follower split, viewer age and country, and where the views came from (Reels tab,
+Feed, Explore...) per reel exist only there.
 
 Pure: no I/O. ``app_insights_store`` writes the result.
 """
@@ -20,6 +21,8 @@ from typing import Any
 _NUM = re.compile(r"^\d[\d,.]*\s?[KkMm]?$")
 _PCT = re.compile(r"^\d+(?:\.\d+)?%$")
 _LINE = re.compile(r"^([\d.]+),([\d.]+)\|(.*)$")
+# A country name: words of letters (accents too), no digits or periods, so not one of the app's sentences.
+_COUNTRY = re.compile(r"^(?=.{3,32}$)[^\W\d_]+(?:[ '-][^\W\d_]+)*$")
 
 # Rows on the Engagement tab: label on the left, value at the right edge of the same row.
 _ROW_FIELDS = {
@@ -36,6 +39,10 @@ _ROW_FIELDS = {
 _TILE_FIELDS = {"views": "views", "viewers": "viewers", "follows": "follows"}
 _ICONS = ("likes", "comments", "reposts", "shares", "saves")  # the row of counts under the thumbnail
 AGES = ("13-17", "18-24", "25-34", "35-44", "45-54", "55-64", "65+")
+# "Top sources of views" on the Overview tab: laid out like the country rows, so named outright.
+SOURCES = ("Reels tab", "Feed", "Explore", "Profile", "Stories", "Search", "Audio page", "Hashtags", "Other")
+# The OCR sometimes reads the app's K and M as their Cyrillic lookalikes ("3К").
+_LOOKALIKES = str.maketrans({"К": "K", "к": "k", "М": "M", "м": "m"})
 _NOT_COUNTRIES = {
     "followers",
     "nonfollowers",
@@ -70,6 +77,7 @@ class ReelInsights:
     age_pct: dict[str, float] = field(default_factory=dict)
     country_pct: dict[str, float] = field(default_factory=dict)
     gender_pct: dict[str, float] = field(default_factory=dict)
+    source_pct: dict[str, float] = field(default_factory=dict)  # share of views per surface
 
     def as_doc(self) -> dict[str, Any]:
         return {
@@ -81,6 +89,7 @@ class ReelInsights:
             "age_pct": self.age_pct,
             "country_pct": self.country_pct,
             "gender_pct": self.gender_pct,
+            "source_pct": self.source_pct,
         }
 
 
@@ -105,7 +114,7 @@ def parse_ocr(text: str) -> list[tuple[str, list[Token]]]:
             continue
         found = _LINE.match(line)
         if found and frames:
-            frames[-1][1].append((float(found[1]), float(found[2]), found[3].strip()))
+            frames[-1][1].append((float(found[1]), float(found[2]), found[3].strip().translate(_LOOKALIKES)))
     return frames
 
 
@@ -159,7 +168,11 @@ def _read_frame(tokens: Sequence[Token], votes: defaultdict[str, Counter[str]]) 
             votes["age:" + text][str(pct)] += 1
         elif text in ("Men", "Women", "Male", "Female"):
             votes["gender:" + text.lower()][str(pct)] += 1
-        elif re.match(r"^[A-Z][A-Za-z .'-]{2,}$", text) and not text.isupper() and key not in _NOT_COUNTRIES:
+        elif text in SOURCES:
+            votes["source:" + text][str(pct)] += 1
+        # A country name: no sentence of the app's own text ("Rates are listed in order ...").
+        # Letters may be accented: Instagram writes "Türkiye".
+        elif _COUNTRY.match(text) and text[0].isupper() and not text.isupper() and key not in _NOT_COUNTRIES:
             votes["country:" + text][str(pct)] += 1
 
 
@@ -216,11 +229,17 @@ def _record(names: list[str], votes: Mapping[str, Counter[str]], thumb: Counter[
     rec.non_followers_pct = _pct(best.get("viewers:nonfollowers"))
     for key, value in best.items():
         kind, _, label = key.partition(":")
-        target = {"age": rec.age_pct, "country": rec.country_pct, "gender": rec.gender_pct}.get(kind)
+        target = {
+            "age": rec.age_pct,
+            "country": rec.country_pct,
+            "gender": rec.gender_pct,
+            "source": rec.source_pct,
+        }.get(kind)
         if target is not None and (pct := _pct(value)) is not None:
             target[label] = pct
     rec.age_pct = {age: rec.age_pct[age] for age in AGES if age in rec.age_pct}
     rec.country_pct = dict(sorted(rec.country_pct.items(), key=lambda kv: -kv[1]))
+    rec.source_pct = dict(sorted(rec.source_pct.items(), key=lambda kv: -kv[1]))
     return rec
 
 
