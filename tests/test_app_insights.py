@@ -205,3 +205,22 @@ def test_latest_view_takes_each_field_from_the_newest_recording_that_showed_it()
     assert view["shown"]["profile_visits"] == "7K" and view["as_of"]["profile_visits"] == first
     assert view["country_pct"] == {"Japan": 60.0} and view["source_pct"] == {"Reels tab": 75.0}
     assert view["captured_at"] == second and view["source"] == "b.mp4"
+
+
+def test_a_reel_of_similar_reach_isnt_taken_for_one_that_grew_away():
+    """Miami #32 recorded at 157,674 had grown past 2%; a San Francisco reel sat at 160,236."""
+    miami = ai.ReelInsights(
+        thumbnail_text=["MIAMI", "4 FRIENDS MEET"], counts={"views": 157674, "likes": 1000}, shown={"likes": "1K"}
+    )
+    stored = [
+        {
+            "media_id": "sf",
+            "title": "San Francisco: Why Doesn't Google Maps Take the Shortest Road?",
+            "views": 160236,
+            "likes": 594,
+        },
+        {"media_id": "miami", "title": "Where Should 4 Friends Meet? #32: Miami", "views": 161500, "likes": 1090},
+    ]
+    assert ai.match_reel(miami, stored) == "miami"
+    stored[0]["likes"] = 1000  # even with likes alike, the title has to name the city
+    assert ai.match_reel(miami, stored[:1]) is None
