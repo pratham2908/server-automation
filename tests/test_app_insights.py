@@ -224,3 +224,25 @@ def test_a_reel_of_similar_reach_isnt_taken_for_one_that_grew_away():
     assert ai.match_reel(miami, stored) == "miami"
     stored[0]["likes"] = 1000  # even with likes alike, the title has to name the city
     assert ai.match_reel(miami, stored[:1]) is None
+
+
+def test_due_for_recording_only_movers_and_big_unrecorded_reels():
+    reels = [
+        {"media_id": "settled", "title": "Tokyo", "views": 1150000, "recorded_views": 1129593, "recorded_at": AT},
+        {"media_id": "moving", "title": "Berlin #33", "views": 80000, "recorded_views": 54249, "recorded_at": AT},
+        {"media_id": "faster", "title": "Miami", "views": 320000, "recorded_views": 159390, "recorded_at": AT},
+        {"media_id": "big-new", "title": "Zombie", "views": 450000, "recorded_views": None, "recorded_at": None},
+        {"media_id": "small-new", "title": "Pathfinder", "views": 40000, "recorded_views": None, "recorded_at": None},
+        {"media_id": "no-overview", "title": "BA", "views": 270000, "recorded_views": None, "recorded_at": AT},
+    ]
+    due = ai.due_for_recording(reels)
+    assert [d.media_id for d in due] == ["faster", "moving", "no-overview", "big-new"]
+    assert round(due[0].growth or 0, 2) == 1.01
+
+
+def test_due_reels_reads_the_view_counts_own_date():
+    db = _db(follows=None)
+    asyncio.run(store.store(db, "DreamScenicAi", [ai.ReelInsights(counts={"views": 1129590})], AT, "rec.mp4"))
+    db.videos.docs[0]["metadata"]["views"] = 1500000
+    (tokyo,) = asyncio.run(store.due_reels(db, "DreamScenicAi"))
+    assert tokyo.views_recorded == 1129590 and tokyo.recorded_at == AT

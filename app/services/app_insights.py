@@ -16,6 +16,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 _NUM = re.compile(r"^\d[\d,.]*\s?[KkMm]?$")
@@ -342,3 +343,49 @@ def latest_view(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             view["as_of"][key] = at
         view["captured_at"], view["source"] = at, row.get("source")
     return view
+
+
+@dataclass
+class DueReel:
+    """A reel whose app insights are worth recording again (or for the first time)."""
+
+    media_id: str
+    title: str
+    views_now: int
+    views_recorded: int | None  # None: never recorded, or recorded without its Overview tab
+    recorded_at: datetime | None
+
+    @property
+    def growth(self) -> float | None:
+        return self.views_now / self.views_recorded - 1 if self.views_recorded else None
+
+
+def due_for_recording(
+    reels: Iterable[Mapping[str, Any]], threshold: float = 0.20, min_views: int = 100_000
+) -> list[DueReel]:
+    """Reels to ask the owner to record next, most grown first.
+
+    Settled reels barely move, so re-recording them all is wasted effort: a reel is due when its
+    views (from the daily sync) have grown more than ``threshold`` since the recording its view
+    count came from. Never-recorded reels are due once they pass ``min_views``; below that they are
+    the small pathfinder reels the owner skips. Each mapping: media_id, title, views (now),
+    recorded_views, recorded_at.
+    """
+    due: list[DueReel] = []
+    for reel in reels:
+        now = reel.get("views")
+        if not isinstance(now, int | float):
+            continue
+        item = DueReel(
+            media_id=str(reel["media_id"]),
+            title=str(reel.get("title") or ""),
+            views_now=int(now),
+            views_recorded=reel.get("recorded_views"),
+            recorded_at=reel.get("recorded_at"),
+        )
+        if item.recorded_at is None:
+            if item.views_now >= min_views:
+                due.append(item)
+        elif item.growth is None or item.growth > threshold:
+            due.append(item)
+    return sorted(due, key=lambda d: (d.recorded_at is None, -(d.growth or 0), -d.views_now))
