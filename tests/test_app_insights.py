@@ -137,3 +137,12 @@ def test_sources_of_views_kept_apart_from_countries():
 def test_cyrillic_lookalikes_read_as_counts():
     ((_, tokens),) = ai.parse_ocr("### f\n0.90,0.34|3К\n")
     assert ai.parse_count(tokens[0][2]) == 3000
+
+
+def test_recording_time_from_either_name():
+    from scripts.import_app_insights import recorded_at
+
+    assert recorded_at(Path("ScreenRecording_11-17-2026 16-24-51_1.MP4")) == datetime(
+        2026, 11, 17, 16, 24, 51, tzinfo=IST
+    )
+    assert recorded_at(Path("city_solved-2026-11-17-16-24.mp4")) == datetime(2026, 11, 17, 16, 24, tzinfo=IST)
