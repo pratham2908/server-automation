@@ -160,3 +160,13 @@ def test_new_reel_grown_past_the_tolerance_still_found():
     assert ai.match_reel(london, stored) == "london31"
     stored[0]["likes"] = 900  # likes disagree: not this reel, and no guess
     assert ai.match_reel(london, stored) is None
+
+
+def test_rounded_likes_allow_for_the_rounding():
+    """Miami shows "1K" likes; we hold 1,082, beyond 6% of 1,000 but inside the rounding."""
+    miami = ai.ReelInsights(thumbnail_text=["MIAMI"], counts={"views": 157674, "likes": 1000}, shown={"likes": "1K"})
+    stored = [
+        {"media_id": "miami", "title": "Where Should 4 Friends Meet? #32: Miami", "views": 168000, "likes": 1082},
+        {"media_id": "other", "title": "Where Should 4 Friends Meet? #30: Oslo", "views": 165000, "likes": 1050},
+    ]
+    assert ai.match_reel(miami, stored) == "miami"

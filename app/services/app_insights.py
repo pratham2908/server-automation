@@ -271,6 +271,16 @@ def match_reel(
     def near(ours: Any, theirs: int | None, slack: float) -> bool:
         return isinstance(ours, int | float) and theirs is not None and abs(ours - theirs) <= max(5, theirs * slack)
 
+    def likes_agree(reel: Mapping[str, Any]) -> bool:
+        # "1K" or "17.9K" is rounded to a tenth of the unit: allow that on top of the growth.
+        shown = rec.shown.get("likes", "").upper()
+        rounding = 100 if shown.endswith("K") else 100_000 if shown.endswith("M") else 0
+        likes = rec.counts.get("likes")
+        ours = reel.get("likes")
+        return (
+            isinstance(ours, int | float) and likes is not None and abs(ours - likes) <= rounding + max(5, likes * 0.06)
+        )
+
     def named_by_thumbnail(hits: list[Mapping[str, Any]]) -> str | None:
         # Most-read text first. The series name ("4 FRIENDS MEET") is in every title, so only a text
         # that names exactly one candidate (the city) settles it.
@@ -286,4 +296,4 @@ def match_reel(
         if len(tight) == 1:
             return str(tight[0]["media_id"])
         reels = [r for r in reels if near(r.get("views"), views, drift)]
-    return named_by_thumbnail([r for r in reels if near(r.get("likes"), rec.counts.get("likes"), 0.06)])
+    return named_by_thumbnail([r for r in reels if likes_agree(r)])
