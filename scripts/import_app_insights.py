@@ -8,8 +8,9 @@ Two steps, because the text recognition needs macOS and the database is on the s
   # on the server: match each record to a stored reel and keep it
   PYTHONPATH=. venv/bin/python scripts/import_app_insights.py import out.json DreamScenicAi [--dry-run]
 
-In the recording, open each reel's "Reel insights" and show Overview, Engagement and Audience (tap
-Gender too if it should be kept). A reel is matched by its exact view count, so the Overview tab matters.
+In the recording, open each reel's "Reel insights": Overview (the view count, then scroll to "Top
+sources of views"), Engagement, and Audience (countries, and scroll the whole age list). Hold each
+screen about a second. A reel is matched by its view count, so the Overview tab matters.
 """
 
 from __future__ import annotations
