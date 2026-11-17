@@ -234,6 +234,7 @@ def test_due_for_recording_only_movers_and_big_unrecorded_reels():
         {"media_id": "big-new", "title": "Zombie", "views": 450000, "recorded_views": None, "recorded_at": None},
         {"media_id": "small-new", "title": "Pathfinder", "views": 40000, "recorded_views": None, "recorded_at": None},
         {"media_id": "no-overview", "title": "BA", "views": 270000, "recorded_views": None, "recorded_at": AT},
+        {"media_id": "small-glimpse", "title": "Wembley", "views": 52898, "recorded_views": None, "recorded_at": AT},
     ]
     due = ai.due_for_recording(reels)
     assert [d.media_id for d in due] == ["faster", "moving", "no-overview", "big-new"]
