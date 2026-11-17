@@ -120,6 +120,9 @@ class Collection:
 
     async def find_one(self, query: dict[str, Any] | None = None, projection: Any = None, sort: Any = None):
         found = [d for d in self.docs if matches(d, query or {})]
+        # Mongo applies sort before picking the first; keys are sorted last-to-first so the first key leads.
+        for key, direction in reversed(list(sort or [])):
+            found.sort(key=lambda d: (_get(d, key) is not None, _get(d, key)), reverse=direction < 0)
         return copy.deepcopy(found[0]) if found else None
 
     async def insert_one(self, doc: dict[str, Any]) -> Result:
