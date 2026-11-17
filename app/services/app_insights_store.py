@@ -16,7 +16,7 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.services.app_insights import ReelInsights, latest_view, match_reel
+from app.services.app_insights import DueReel, ReelInsights, due_for_recording, latest_view, match_reel
 
 FOLLOWS_SOURCE = "instagram_app"
 
@@ -83,3 +83,27 @@ async def store(
         await db.videos.update_one({"channel_id": channel_id, "instagram_media_id": media_id}, {"$set": update})
         result.stored.append((media_id, str(by_media[media_id].get("title") or "")))
     return result
+
+
+async def due_reels(
+    db: AsyncIOMotorDatabase, channel_id: str, threshold: float = 0.20, min_views: int = 100_000
+) -> list[DueReel]:
+    """``due_for_recording`` over the channel's stored reels."""
+    reels = []
+    async for video in db.videos.find(
+        {"channel_id": channel_id, "instagram_media_id": {"$nin": [None, ""]}},
+        {"instagram_media_id": 1, "title": 1, "metadata.views": 1, "metadata.app_insights": 1},
+    ):
+        meta = video.get("metadata") or {}
+        insights = meta.get("app_insights") or {}
+        reels.append(
+            {
+                "media_id": video["instagram_media_id"],
+                "title": video.get("title"),
+                "views": meta.get("views"),
+                "recorded_views": (insights.get("counts") or {}).get("views"),
+                # The view count's own date: a later pass may have skipped the Overview tab.
+                "recorded_at": (insights.get("as_of") or {}).get("views") or insights.get("captured_at"),
+            }
+        )
+    return due_for_recording(reels, threshold, min_views)
