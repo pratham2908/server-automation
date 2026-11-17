@@ -78,6 +78,17 @@ def test_matched_by_views_or_by_city_and_likes(reels):
     assert ai.match_reel(reels[2], stored) == "miami"  # no view count on screen: city + likes
 
 
+def test_similar_reach_reel_settled_by_city(reels):
+    """Stats refreshed after the recording: two reels within tolerance, the title's city decides."""
+    stored = [
+        {"media_id": "tokyo", "title": "Where Should 4 Friends Meet? #7: Tokyo", "views": 1131000, "likes": 17990},
+        {"media_id": "kl", "title": "Where Should 4 Friends Meet? #21: Kuala Lumpur", "views": 1120000, "likes": 9000},
+    ]
+    assert ai.match_reel(reels[0], stored) == "tokyo"
+    stored[1]["title"] = "Tokyo again"  # both name the city: no guess
+    assert ai.match_reel(reels[0], stored) is None
+
+
 def _db(follows: int | None) -> DB:
     return DB(
         videos=[
