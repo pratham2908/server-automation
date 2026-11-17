@@ -84,6 +84,12 @@ def test_similar_reach_reel_settled_by_city(reels):
         {"media_id": "tokyo", "title": "Where Should 4 Friends Meet? #7: Tokyo", "views": 1131000, "likes": 17990},
         {"media_id": "kl", "title": "Where Should 4 Friends Meet? #21: Kuala Lumpur", "views": 1120000, "likes": 9000},
     ]
+    berlin = ai.ReelInsights(thumbnail_text=["4 FRIENDS MEET", "BERLIN"], counts={"views": 53705})
+    near_berlin = [
+        {"media_id": "berlin", "title": "Where Should 4 Friends Meet? #33: Berlin", "views": 53921},
+        {"media_id": "other", "title": "Where Should 4 Friends Meet? #3: Oslo", "views": 54000},
+    ]
+    assert ai.match_reel(berlin, near_berlin) == "berlin"  # the series name in every title doesn't decide it
     assert ai.match_reel(reels[0], stored) == "tokyo"
     stored[1]["title"] = "Tokyo again"  # both name the city: no guess
     assert ai.match_reel(reels[0], stored) is None

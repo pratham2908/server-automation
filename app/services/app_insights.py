@@ -241,24 +241,28 @@ def match_reel(rec: ReelInsights, reels: Sequence[Mapping[str, Any]], tolerance:
     """The media id of the stored reel these insights are for, or None when it isn't clear.
 
     The view count picks the reel. Ours differs from the app by however long the two reads were
-    apart, so a tolerance is needed, and a reel of similar reach can fall inside it too; then the
-    city on the thumbnail must also appear in the title. Without a view count, the city and the
-    like count must both agree.
+    apart, so a tolerance is needed, and a reel of similar reach can fall inside it too; then a
+    thumbnail text must name exactly one of them. Without a view count, the like count must agree
+    and a thumbnail text must name the reel.
     """
 
     def near(ours: Any, theirs: int | None, slack: float) -> bool:
         return isinstance(ours, int | float) and theirs is not None and abs(ours - theirs) <= max(5, theirs * slack)
 
-    words = [t.lower() for t in rec.thumbnail_text]
-
-    def names_city(reel: Mapping[str, Any]) -> bool:
-        return any(w in str(reel.get("title") or "").lower() for w in words)
+    def named_by_thumbnail(hits: list[Mapping[str, Any]]) -> str | None:
+        # Most-read text first. The series name ("4 FRIENDS MEET") is in every title, so only a text
+        # that names exactly one candidate (the city) settles it.
+        for text in rec.thumbnail_text:
+            named = [r for r in hits if text.lower() in str(r.get("title") or "").lower()]
+            if len(named) == 1:
+                return str(named[0]["media_id"])
+        return None
 
     views = rec.counts.get("views")
     if views:
         hits = [r for r in reels if near(r.get("views"), views, tolerance)]
-        if len(hits) > 1:
-            hits = [r for r in hits if names_city(r)]
+        if len(hits) == 1:
+            return str(hits[0]["media_id"])
     else:
-        hits = [r for r in reels if names_city(r) and near(r.get("likes"), rec.counts.get("likes"), 0.06)]
-    return str(hits[0]["media_id"]) if len(hits) == 1 else None
+        hits = [r for r in reels if near(r.get("likes"), rec.counts.get("likes"), 0.06)]
+    return named_by_thumbnail(hits)
