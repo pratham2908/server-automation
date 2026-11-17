@@ -240,22 +240,25 @@ def _pct(value: str | None) -> float | None:
 def match_reel(rec: ReelInsights, reels: Sequence[Mapping[str, Any]], tolerance: float = 0.02) -> str | None:
     """The media id of the stored reel these insights are for, or None when it isn't clear.
 
-    The exact view count picks the reel (ours lags the app by a few views); without one, the city
-    on the thumbnail must appear in the title and the like count must agree.
+    The view count picks the reel. Ours differs from the app by however long the two reads were
+    apart, so a tolerance is needed, and a reel of similar reach can fall inside it too; then the
+    city on the thumbnail must also appear in the title. Without a view count, the city and the
+    like count must both agree.
     """
 
     def near(ours: Any, theirs: int | None, slack: float) -> bool:
         return isinstance(ours, int | float) and theirs is not None and abs(ours - theirs) <= max(5, theirs * slack)
 
+    words = [t.lower() for t in rec.thumbnail_text]
+
+    def names_city(reel: Mapping[str, Any]) -> bool:
+        return any(w in str(reel.get("title") or "").lower() for w in words)
+
     views = rec.counts.get("views")
     if views:
         hits = [r for r in reels if near(r.get("views"), views, tolerance)]
+        if len(hits) > 1:
+            hits = [r for r in hits if names_city(r)]
     else:
-        words = [t.lower() for t in rec.thumbnail_text]
-        hits = [
-            r
-            for r in reels
-            if any(w in str(r.get("title") or "").lower() for w in words)
-            and near(r.get("likes"), rec.counts.get("likes"), 0.06)
-        ]
+        hits = [r for r in reels if names_city(r) and near(r.get("likes"), rec.counts.get("likes"), 0.06)]
     return str(hits[0]["media_id"]) if len(hits) == 1 else None
