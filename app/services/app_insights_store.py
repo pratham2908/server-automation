@@ -1,7 +1,8 @@
 """Keeps what a screen recording of the Instagram app showed for each reel (see ``app_insights``).
 
 - ``reel_app_insights``: one row per reel per recording, so repeated recordings build a history.
-- ``videos.metadata.app_insights``: the newest of those rows, on the reel itself.
+- ``videos.metadata.app_insights``: the newest value of each field across those rows (``latest_view``),
+  on the reel itself, since one recording may cover only some tabs.
 - ``videos.metadata.follows``: the app's follow count, which is exact and newer than a Business Suite
   paste; a lifetime count only grows, so an older recording imported later never lowers it.
 """
@@ -15,7 +16,7 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.services.app_insights import ReelInsights, match_reel
+from app.services.app_insights import ReelInsights, latest_view, match_reel
 
 FOLLOWS_SOURCE = "instagram_app"
 
@@ -63,12 +64,14 @@ async def store(
             {"$set": doc},
             upsert=True,
         )
-        newest = await db.reel_app_insights.find_one(
-            {"channel_id": channel_id, "media_id": media_id},
-            {"_id": 0, "channel_id": 0, "media_id": 0},
-            sort=[("captured_at", -1)],
+        rows = (
+            await db.reel_app_insights.find(
+                {"channel_id": channel_id, "media_id": media_id}, {"_id": 0, "channel_id": 0, "media_id": 0}
+            )
+            .sort("captured_at", 1)
+            .to_list(None)
         )
-        update: dict[str, Any] = {"metadata.app_insights": newest}
+        update: dict[str, Any] = {"metadata.app_insights": latest_view(rows)}
         follows = rec.counts.get("follows")
         held = by_media[media_id].get("follows")
         if follows is not None and (not isinstance(held, int) or follows >= held):

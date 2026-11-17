@@ -1,0 +1,388 @@
+### f_0029.jpg
+0.88,0.03|64
+0.11,0.02|4:20
+0.00,0.06|Ived
+0.49,0.09|Reel insights
+0.00,0.10|/heri
+0.42,0.45|Q
+-0.00,0.47|a • Bay of P
+0.87,0.53|Audien
+0.21,0.53|Overview
+0.51,0.53|Engagement
+0.16,0.60|Summary
+0.04,0.81|city_
+-0.00,0.86|re Shou
+0.16,0.87|Views over time
+-0.00,0.88|etMap con
+-0.00,0.94|) Insigh
+0.16,0.97|What affects your views
+### f_0030.jpg
+0.86,0.03|764•
+0.11,0.03|4:20
+0.37,0.09|Reel insights
+0.39,0.26|MIAMI
+0.47,0.38|MIAMI
+0.30,0.45|Q
+0.48,0.48|13
+0.82,0.48|90
+0.31,0.48|9
+0.64,0.48|208
+0.12,0.48|1K
+0.08,0.53|Overview
+0.75,0.53|Audience
+0.39,0.53|Engagement
+0.04,0.59|Summary
+0.04,0.86|Views over time
+0.04,0.97|What affects your views
+### f_0031.jpg
+0.86,0.03|764•
+0.11,0.03|4:20
+0.88,0.09|•••
+0.37,0.09|Reel insights
+0.39,0.26|MIAMI
+0.47,0.38|MIAMI
+0.30,0.44|Q
+0.31,0.48|9
+0.64,0.48|208
+0.48,0.48|13
+0.12,0.48|1K
+0.82,0.48|90
+0.75,0.53|Audience
+0.08,0.53|Overview
+0.39,0.53|Engagement
+0.04,0.59|Summary i
+0.08,0.65|Views
+0.55,0.65|Viewers
+0.55,0.68|88,434
+0.08,0.68|159,390
+0.56,0.76|Follows
+0.08,0.76|Average watch time
+0.08,0.79|12s
+0.55,0.79|21
+0.04,0.87|Views over time
+0.46,0.92|Non-followers
+0.08,0.91|All
+0.21,0.92|Followers
+### f_0032.jpg
+0.86,0.03|764•
+0.11,0.03|4:20
+0.88,0.09|•••
+0.37,0.08|Reel insights
+0.39,0.16|MIAMI
+0.47,0.27|MIAMI
+0.64,0.37|208
+0.82,0.37|90
+0.31,0.37|9
+0.47,0.37|13
+0.12,0.37|1K
+0.08,0.42|Overview
+0.75,0.42|Audience
+0.39,0.42|Engagement
+0.04,0.49|Summary O
+0.08,0.55|Views
+0.55,0.55|Viewers
+0.08,0.57|159,390
+0.55,0.57|88,434
+0.55,0.65|Follows
+0.08,0.65|Average watch time
+0.08,0.68|12s
+0.55,0.68|21
+0.04,0.76|Views over time
+0.46,0.81|Non-followers
+0.08,0.81|All
+0.21,0.81|Followers
+0.07,0.89|2L
+0.06,0.96|1L
+### f_0033.jpg
+0.86,0.03|764•
+0.11,0.03|4:20
+0.87,0.09|•••
+0.37,0.08|Reel insights
+0.08,0.08|<
+0.30,0.15|Q
+0.12,0.18|1K
+0.64,0.18|208
+0.31,0.19|9
+0.82,0.19|90
+0.47,0.18|13
+0.08,0.23|Overview
+0.75,0.23|Audience
+0.39,0.23|Engagement
+0.04,0.30|Summary ®
+0.08,0.36|Views
+0.55,0.36|Viewers
+0.08,0.39|159,390
+0.55,0.39|88,434
+0.55,0.46|Follows
+0.08,0.46|Average watch time
+0.08,0.49|12s
+0.55,0.49|21
+0.04,0.57|Views over time 0
+0.46,0.62|Non-followers
+0.07,0.62|All
+0.21,0.62|Followers
+0.07,0.70|2L
+0.07,0.78|1L
+0.89,0.87|24h
+0.51,0.87|12h
+0.03,0.90|• This reel
+0.24,0.90|• Your typical reel
+0.04,0.97|What affects your views
+### f_0034.jpg
+0.86,0.03|764•
+0.11,0.03|4:20
+0.87,0.09|•••
+0.37,0.08|Reel insights
+0.08,0.08|<
+0.30,0.15|Q
+0.12,0.18|1K
+0.64,0.18|208
+0.31,0.19|9
+0.82,0.19|90
+0.47,0.18|13
+0.08,0.23|Overview
+0.75,0.23|Audience
+0.39,0.23|Engagement
+0.04,0.30|Summary ®
+0.08,0.36|Views
+0.55,0.36|Viewers
+0.08,0.39|159,390
+0.55,0.39|88,434
+0.55,0.46|Follows
+0.08,0.46|Average watch time
+0.08,0.49|12s
+0.55,0.49|21
+0.04,0.57|Views over time 0
+0.46,0.62|Non-followers
+0.07,0.62|All
+0.21,0.62|Followers
+0.07,0.70|2L
+0.07,0.78|1L
+0.89,0.87|24h
+0.51,0.87|12h
+0.03,0.90|• This reel
+0.24,0.90|• Your typical reel
+0.04,0.97|What affects your views
+### f_0035.jpg
+0.86,0.03|764•
+0.11,0.03|4:20
+0.73,0.03|•1 -
+0.88,0.09|•••
+0.37,0.08|Reel insights
+0.08,0.08|<
+0.75,0.15|Audience
+0.08,0.15|Overview
+0.39,0.15|Engagement
+0.04,0.19|Views over time
+0.46,0.24|Non-followers
+0.08,0.24|All
+0.21,0.24|Followers
+0.06,0.33|2L
+0.07,0.40|1L
+0.51,0.49|12h
+0.89,0.49|24h
+0.24,0.53|• Your typical reel
+0.03,0.52|• This reel
+0.04,0.59|What affects your views
+0.04,0.62|Rates are listed in order of importance to reach.
+0.83,0.67|33.7%
+0.19,0.68|Skip rate
+0.87,0.69|Lower
+0.85,0.75|0.2%
+0.19,0.77|Share rate
+0.87,0.78|Lower
+0.86,0.84|1.2%
+0.19,0.85|Like rate
+0.87,0.86|Lower
+0.86,0.92|0.1%
+0.19,0.93|Save rate
+0.87,0.95|Lower
+### f_0036.jpg
+0.86,0.03|764•
+0.11,0.03|4:20
+0.73,0.03|•1 -
+0.88,0.09|•••
+0.37,0.08|Reel insights
+0.08,0.08|<
+0.08,0.15|Overview
+0.75,0.15|Audience
+0.39,0.15|Engagement
+0.89,0.25|24h
+0.51,0.25|12h
+0.23,0.28|• Your typical reel
+0.03,0.28|• This reel
+0.04,0.35|What affects your views O
+0.04,0.38|Rates are listed in order of importance to reach.
+0.83,0.43|33.7%
+0.19,0.44|Skip rate
+0.87,0.45|Lower
+0.85,0.51|0.2%
+0.19,0.52|Share rate
+0.87,0.54|Lower
+0.86,0.59|1.2%
+0.19,0.61|Like rate
+0.87,0.62|Lower
+0.86,0.68|0.1%
+0.19,0.69|Save rate
+0.87,0.70|Lower
+0.85,0.76|0.0%
+0.19,0.78|Repost rate
+0.87,0.79|Lower
+0.85,0.85|0.0%
+0.19,0.86|Comment rate
+0.87,0.87|Lower
+0.04,0.94|How long people watched your reel
+### f_0037.jpg
+0.86,0.03|764•
+0.11,0.03|4:20
+0.88,0.09|•••
+0.37,0.08|Reel insights
+0.08,0.08|<
+0.75,0.15|Audience
+0.08,0.15|Overview
+0.39,0.15|Engagement
+0.83,0.19|33.7%
+0.09,0.19|L
+0.19,0.20|Skip rate
+0.87,0.21|Lower
+0.85,0.27|0.2%
+0.19,0.28|Share rate
+0.87,0.30|Lower
+0.85,0.35|1.2%
+0.19,0.37|Like rate
+0.87,0.38|Lower
+0.86,0.44|0.1%
+0.19,0.45|Save rate
+0.87,0.46|Lower
+0.85,0.52|0.0%
+0.19,0.54|Repost rate
+0.87,0.55|Lower
+0.85,0.61|0.0%
+0.19,0.62|Comment rate
+0.87,0.63|Lower
+0.04,0.70|How long people watched your reel
+0.41,0.82|MIAMI
+0.48,0.91|MTAST
+### f_0038.jpg
+0.86,0.03|764•
+0.11,0.03|4:20
+0.80,0.07|now
+0.24,0.07|Inshorts
+0.89,0.09|••
+0.24,0.09|CSK owner reveals how Dhoni asked
+0.23,0.11|the franchise to release him
+0.08,0.15|Overview
+0.75,0.15|Audience
+0.39,0.15|Engagement
+0.87,0.18|COVYCI
+0.85,0.24|0.0%
+0.19,0.25|Comment rate
+0.87,0.26|Lower
+0.04,0.33|How long people watched your reel
+0.41,0.45|MIAMI
+0.02,0.63|100%
+0.04,0.69|50%
+0.86,0.76|0:14
+0.13,0.77|0:00
+0.04,0.82|Top sources of views O
+0.04,0.86|Reels tab
+0.84,0.88|84.8%
+0.04,0.91|Explore
+0.85,0.94|12.9%
+0.04,0.97|Feed
+### f_0039.jpg
+0.86,0.03|764•
+0.11,0.02|4:20
+0.87,0.09|now
+0.18,0.08|Inshorts
+0.18,0.10|CSK owner reveals how Dhoni asked
+0.18,0.13|the franchise to release him
+0.09,0.16|VVVIVIUVY
+0.42,0.25|MIAMI
+0.02,0.43|100%
+0.04,0.49|50%
+0.13,0.56|0:00
+0.86,0.56|0:14
+0.04,0.62|Top sources of views O
+0.04,0.66|Reels tab
+0.84,0.68|84.8%
+0.04,0.71|Explore
+0.85,0.73|12.9%
+0.04,0.76|Feed
+0.87,0.79|1.5%
+0.04,0.82|Profile
+0.86,0.84|0.5%
+0.04,0.89|Ad
+0.13,0.93|Boost this Reel
+0.92,0.92|>
+### f_0040.jpg
+0.86,0.03|764•
+0.11,0.02|4:20
+0.87,0.09|now
+0.18,0.08|Inshorts
+0.18,0.11|CSK owner reveals how Dhoni asked
+0.18,0.13|the franchise to release him
+0.41,0.26|MIAMI
+0.02,0.44|100%
+0.04,0.50|50%
+0.13,0.57|0:00
+0.86,0.57|0:14
+0.04,0.63|Top sources of views O
+0.04,0.67|Reels tab
+0.84,0.69|84.8%
+0.04,0.72|Explore
+0.85,0.74|12.9%
+0.04,0.77|Feed
+0.87,0.79|1.5%
+0.04,0.83|Profile
+0.86,0.85|0.5%
+0.04,0.90|Ad
+0.13,0.94|Boost this Reel
+### f_0041.jpg
+0.88,0.09|•••
+0.08,0.08|<
+0.37,0.08|Reel insights
+0.75,0.15|Audience
+0.08,0.15|Overview
+0.39,0.15|Engagement
+0.41,0.26|MIAMI
+0.02,0.44|100%
+0.04,0.50|50%
+0.13,0.57|0:00
+0.86,0.57|0:14
+0.04,0.63|Top sources of views f
+0.04,0.67|Reels tab
+0.84,0.69|84.8%
+0.04,0.72|Explore
+0.85,0.74|12.9%
+0.04,0.77|Feed
+0.87,0.79|1.5%
+0.04,0.83|Profile
+0.86,0.85|0.5%
+0.04,0.90|Ad
+0.13,0.94|Boost this Reel
+### f_0042.jpg
+0.86,0.03|764•
+0.11,0.02|4:20
+0.88,0.09|•••
+0.08,0.08|<
+0.37,0.08|Reel insights
+0.08,0.15|Overview
+0.75,0.15|Audience
+0.39,0.15|Engagement
+0.41,0.26|MIAMI
+0.02,0.44|100%
+0.04,0.50|50%
+0.13,0.57|0:00
+0.86,0.57|0:14
+0.04,0.63|Top sources of views 0
+0.04,0.67|Reels tab
+0.84,0.69|84.8%
+0.04,0.72|Explore
+0.85,0.74|12.9%
+0.04,0.77|Feed
+0.87,0.79|1.5%
+0.04,0.83|Profile
+0.86,0.85|0.5%
+0.04,0.90|Ad
+0.13,0.94|Boost this Reel
