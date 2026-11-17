@@ -35,10 +35,14 @@ FRAME_WIDTH = 590  # half an iPhone screen: OCR reads every number, at a quarter
 
 
 def recorded_at(video: Path) -> datetime:
-    """iOS names recordings "ScreenRecording_11-17-2026 15-45-35"; else the file's own time."""
+    """When recording started, from the name: iOS's "ScreenRecording_11-17-2026 15-45-35" or the
+    archived "city_solved-2026-11-17-15-45". Else the file's own time, which is when it was copied."""
     found = re.search(r"(\d{2}-\d{2}-\d{4}) (\d{2}-\d{2}-\d{2})", video.name)
     if found:
         return datetime.strptime(f"{found[1]} {found[2]}", "%m-%d-%Y %H-%M-%S").replace(tzinfo=IST)
+    found = re.search(r"(\d{4}-\d{2}-\d{2}-\d{2}-\d{2})", video.name)
+    if found:
+        return datetime.strptime(found[1], "%Y-%m-%d-%H-%M").replace(tzinfo=IST)
     return datetime.fromtimestamp(video.stat().st_mtime, tz=IST)
 
 
