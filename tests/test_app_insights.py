@@ -170,3 +170,38 @@ def test_rounded_likes_allow_for_the_rounding():
         {"media_id": "other", "title": "Where Should 4 Friends Meet? #30: Oslo", "views": 165000, "likes": 1050},
     ]
     assert ai.match_reel(miami, stored) == "miami"
+
+
+def test_scrolled_to_sources_stays_the_same_reel():
+    """Miami in the 16:20 recording: the title scrolled away for a moment, then only sources showed."""
+    text = (Path(__file__).parent / "fixtures" / "app_insights_ocr_split.txt").read_text()
+    (miami,) = ai.read_reels(ai.parse_ocr(text))
+    assert miami.counts["views"] == 159390
+    assert miami.source_pct["Reels tab"] == 84.8
+
+
+def test_latest_view_takes_each_field_from_the_newest_recording_that_showed_it():
+    first, second = AT, AT + timedelta(minutes=35)
+    rows = [
+        {
+            "captured_at": first,
+            "source": "a.mp4",
+            "counts": {"views": 100, "profile_visits": 7000},
+            "shown": {"views": "100", "profile_visits": "7K"},
+            "country_pct": {"Japan": 60.0},
+            "source_pct": {},
+        },
+        {
+            "captured_at": second,
+            "source": "b.mp4",
+            "counts": {"views": 120},
+            "shown": {"views": "120"},
+            "country_pct": {},
+            "source_pct": {"Reels tab": 75.0},
+        },
+    ]
+    view = ai.latest_view(rows)
+    assert view["counts"] == {"views": 120, "profile_visits": 7000}
+    assert view["shown"]["profile_visits"] == "7K" and view["as_of"]["profile_visits"] == first
+    assert view["country_pct"] == {"Japan": 60.0} and view["source_pct"] == {"Reels tab": 75.0}
+    assert view["captured_at"] == second and view["source"] == "b.mp4"

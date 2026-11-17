@@ -200,7 +200,7 @@ def read_reels(frames: Iterable[tuple[str, Sequence[Token]]]) -> list[ReelInsigh
                 thumb[t] += 1
     merged: list[tuple[list[str], defaultdict[str, Counter[str]], Counter[str]]] = []
     for run in runs:
-        if merged and _icons(merged[-1][1]) and _icons(merged[-1][1]) == _icons(run[1]):
+        if merged and _same_reel(merged[-1], run):
             merged[-1][0].extend(run[0])
             for key, counter in run[1].items():
                 merged[-1][1][key].update(counter)
@@ -208,6 +208,26 @@ def read_reels(frames: Iterable[tuple[str, Sequence[Token]]]) -> list[ReelInsigh
         else:
             merged.append(run)
     return [_record(names, votes, thumb) for names, votes, thumb in merged if _icons(votes) or votes]
+
+
+def _same_reel(
+    before: tuple[list[str], Mapping[str, Counter[str]], Counter[str]],
+    run: tuple[list[str], Mapping[str, Counter[str]], Counter[str]],
+) -> bool:
+    """Runs split when a scroll hides the "Reel insights" title for a moment. Same counts row: same
+    reel. A run scrolled past the counts row (only sources showing, say) joins the one before it
+    when the thumbnail reads the same."""
+    if not _icons(before[1]):
+        return False
+    if _icons(run[1]):
+        return _icons(before[1]) == _icons(run[1])
+    top = _top(run[2])
+    return top is not None and top == _top(before[2])
+
+
+def _top(thumb: Counter[str]) -> str | None:
+    found = thumb.most_common(1)
+    return found[0][0] if found else None
 
 
 def _icons(votes: Mapping[str, Counter[str]]) -> tuple[str, ...]:
@@ -297,3 +317,26 @@ def match_reel(
             return str(tight[0]["media_id"])
         reels = [r for r in reels if near(r.get("views"), views, drift)]
     return named_by_thumbnail([r for r in reels if likes_agree(r)])
+
+
+def latest_view(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What a reel shows as its current insights, from its recordings oldest first.
+
+    A recording may cover only some tabs (one pass for sources, another for the audience), so each
+    count comes from the newest recording that showed it, and each breakdown (ages, countries,
+    sources) whole from the newest that showed it: never a mix of two recordings' percentages.
+    """
+    view: dict[str, Any] = {"counts": {}, "shown": {}, "as_of": {}}
+    for row in rows:
+        at = row.get("captured_at")
+        for key, value in (row.get("counts") or {}).items():
+            view["counts"][key] = value
+            view["shown"][key] = (row.get("shown") or {}).get(key, str(value))
+            view["as_of"][key] = at
+        for key, value in row.items():
+            if key in ("counts", "shown", "as_of", "captured_at", "source") or value in (None, {}, [], ""):
+                continue
+            view[key] = value
+            view["as_of"][key] = at
+        view["captured_at"], view["source"] = at, row.get("source")
+    return view
