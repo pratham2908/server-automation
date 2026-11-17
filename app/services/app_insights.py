@@ -281,11 +281,12 @@ def match_reel(
 ) -> str | None:
     """The media id of the stored reel these insights are for, or None when it isn't clear.
 
-    The view count picks the reel. Ours differs from the app by however long the two reads were
-    apart: one reel within ``tolerance`` is taken. Past that (a new reel gains several percent in an
-    hour, and a reel of similar reach can sit close by), reels within ``drift`` are candidates, the
-    like count must agree, and a thumbnail text must name exactly one of them. Without a view count,
-    the like count and the thumbnail text decide alone.
+    The view count narrows it to reels within ``drift`` (ours and the app's differ by however long
+    the two reads were apart, and a new reel gains several percent in an hour), the like count must
+    agree, and a thumbnail text must name exactly one of them. View count alone isn't enough: once
+    the right reel has grown away, another reel of similar reach can sit right where it was (Miami
+    #32 was matched to a San Francisco reel that way). Only when the thumbnail couldn't be read does
+    a lone reel within ``tolerance`` decide.
     """
 
     def near(ours: Any, theirs: int | None, slack: float) -> bool:
@@ -311,12 +312,13 @@ def match_reel(
         return None
 
     views = rec.counts.get("views")
-    if views:
-        tight = [r for r in reels if near(r.get("views"), views, tolerance)]
-        if len(tight) == 1:
-            return str(tight[0]["media_id"])
-        reels = [r for r in reels if near(r.get("views"), views, drift)]
-    return named_by_thumbnail([r for r in reels if likes_agree(r)])
+    candidates = [r for r in reels if near(r.get("views"), views, drift)] if views else list(reels)
+    if rec.counts.get("likes") is not None:
+        candidates = [r for r in candidates if likes_agree(r)]
+    if rec.thumbnail_text:
+        return named_by_thumbnail(candidates)
+    tight = [r for r in candidates if near(r.get("views"), views, tolerance)]
+    return str(tight[0]["media_id"]) if len(tight) == 1 else None
 
 
 def latest_view(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
