@@ -310,8 +310,18 @@ def _agrees(
     return abs(ours - theirs) <= rounding + max(floor, theirs * slack)
 
 
+def _exact(rec: ReelInsights, item: Mapping[str, Any]) -> bool:
+    return all(
+        rec.counts.get(key) is not None and item.get(key) == rec.counts.get(key) for key in ("likes", "comments")
+    )
+
+
 def match_reel(
-    rec: ReelInsights, reels: Sequence[Mapping[str, Any]], tolerance: float = 0.02, drift: float = 0.10
+    rec: ReelInsights,
+    reels: Sequence[Mapping[str, Any]],
+    tolerance: float = 0.02,
+    drift: float = 0.10,
+    wide_drift: float = 0.25,
 ) -> str | None:
     """The media id of the stored reel these insights are for, or None when it isn't clear.
 
@@ -348,9 +358,18 @@ def match_reel(
         ]
         return named_by_thumbnail(candidates)
     if not views:
-        return None  # nothing but likes and comments: too thin for a reel
-    # Nothing on the thumbnail to go by: likes and comments must both be known and agree.
-    candidates = [r for r in candidates if _agrees(rec, r, "likes", 0.06, 5) and _agrees(rec, r, "comments", 0.10, 3)]
+        # Only the counts row was recorded: the exact like and comment counts, on one reel alone.
+        exact = [r for r in reels if _exact(rec, r)]
+        return str(exact[0]["media_id"]) if len(exact) == 1 else None
+    # Nothing on the thumbnail to go by: likes and comments must both be known and agree. A fresh
+    # reel can gain a fifth of its views between recording and import, so the views window is wider.
+    candidates = [
+        r
+        for r in reels
+        if near(r.get("views"), views, wide_drift)
+        and _agrees(rec, r, "likes", 0.06, 5)
+        and _agrees(rec, r, "comments", 0.10, 3)
+    ]
     if len(candidates) == 1:
         return str(candidates[0]["media_id"])
     tight = [r for r in candidates if near(r.get("views"), views, tolerance)]
@@ -361,10 +380,14 @@ def match_post(rec: ReelInsights, posts: Sequence[Mapping[str, Any]]) -> str | N
     """The media id of the carousel or photo these insights are for, or None when it isn't clear.
 
     Our own records hold no view count for posts, so the like and comment counts (exact in the app
-    at this size, and both from Instagram's media list) must both agree with exactly one post.
+    at this size, and both from Instagram's media list) decide: one post with both exactly, or else
+    one within a couple. Carousels sit close together (21/15 and 20/13), so exact comes first.
     """
     if rec.counts.get("likes") is None or rec.counts.get("comments") is None:
         return None
+    exact = [p for p in posts if _exact(rec, p)]
+    if len(exact) == 1:
+        return str(exact[0]["media_id"])
     hits = [p for p in posts if _agrees(rec, p, "likes", 0.05, 2) and _agrees(rec, p, "comments", 0.05, 2)]
     return str(hits[0]["media_id"]) if len(hits) == 1 else None
 

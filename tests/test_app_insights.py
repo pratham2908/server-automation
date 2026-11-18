@@ -333,3 +333,24 @@ def test_carousel_stored_on_our_record_found_by_caption():
     assert "no server record" in result.stored[1][1]
     assert db.posts.docs[0]["app_insights"]["counts"]["views"] == 858
     assert {d["media_id"] for d in db.reel_app_insights.docs} == {"nov4", "old"}
+
+
+def test_close_carousels_settled_by_the_exact_counts():
+    posts = [{"media_id": "robe", "likes": 21, "comments": 15}, {"media_id": "airport", "likes": 20, "comments": 13}]
+    assert ai.match_post(ai.ReelInsights(kind="post", counts={"likes": 21, "comments": 15}), posts) == "robe"
+    assert ai.match_post(ai.ReelInsights(kind="post", counts={"likes": 20, "comments": 13}), posts) == "airport"
+
+
+def test_fast_reel_with_photo_thumbnail_found_past_ten_percent():
+    """'mummy ko pata nahi chalna': 193,361 views at 18:07, 216,337 by the import."""
+    stored = [
+        {"media_id": "mummy", "title": "mummy ko pata nahi chalna", "views": 216337, "likes": 1685, "comments": 205}
+    ]
+    rec = ai.ReelInsights(counts={"views": 193361, "likes": 1500, "comments": 194}, shown={"likes": "1.5K"})
+    assert ai.match_reel(rec, stored) == "mummy"
+
+
+def test_reel_without_views_needs_the_exact_counts():
+    stored = [{"media_id": "a", "title": "x", "views": 9000, "likes": 74, "comments": 10}]
+    assert ai.match_reel(ai.ReelInsights(counts={"likes": 74, "comments": 10}), stored) == "a"
+    assert ai.match_reel(ai.ReelInsights(counts={"likes": 75, "comments": 10}), stored) is None
