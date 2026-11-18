@@ -104,7 +104,7 @@ def _db(follows: int | None) -> DB:
                 "channel_id": "DreamScenicAi",
                 "instagram_media_id": "tokyo",
                 "title": "Where Should 4 Friends Meet? #7: Tokyo",
-                "metadata": {"views": 1129590, "likes": 17933, "follows": follows},
+                "metadata": {"views": 1129590, "likes": 17933, "comments": 131, "follows": follows},
             }
         ]
     )
@@ -118,7 +118,7 @@ def test_stored_with_history_and_follows_only_rise(reels):
     assert meta["follows"] == 644 and meta["follows_source"] == store.FOLLOWS_SOURCE
     assert meta["app_insights"]["counts"]["bio_link_clicks"] == 63
     # An older recording imported afterwards adds history but doesn't lower follows or replace the latest.
-    older = ai.ReelInsights(counts={"views": 1129000, "follows": 600})
+    older = ai.ReelInsights(counts={"views": 1129000, "likes": 17900, "comments": 130, "follows": 600})
     asyncio.run(store.store(db, "DreamScenicAi", [older], AT - timedelta(days=1), "old.mp4"))
     assert len(db.reel_app_insights.docs) == 2
     meta = db.videos.docs[0]["metadata"]
@@ -243,7 +243,93 @@ def test_due_for_recording_only_movers_and_big_unrecorded_reels():
 
 def test_due_reels_reads_the_view_counts_own_date():
     db = _db(follows=None)
-    asyncio.run(store.store(db, "DreamScenicAi", [ai.ReelInsights(counts={"views": 1129590})], AT, "rec.mp4"))
+    asyncio.run(
+        store.store(
+            db,
+            "DreamScenicAi",
+            [ai.ReelInsights(counts={"views": 1129590, "likes": 17933, "comments": 131})],
+            AT,
+            "rec.mp4",
+        )
+    )
     db.videos.docs[0]["metadata"]["views"] = 1500000
     (tokyo,) = asyncio.run(store.due_reels(db, "DreamScenicAi"))
     assert tokyo.views_recorded == 1129590 and tokyo.recorded_at == AT
+
+
+def _zara(views: int, likes: int, comments: int) -> ai.ReelInsights:
+    return ai.ReelInsights(thumbnail_text=["SVITVI"], counts={"views": views, "likes": likes, "comments": comments})
+
+
+def test_photo_thumbnail_matched_by_views_likes_and_comments():
+    """Zara's reels: no words on the thumbnail. Two reels of ~5.4K views and 119 likes differ in comments."""
+    stored = [
+        {"media_id": "a", "title": "Shaadi mein kaun si best?", "views": 5600, "likes": 121, "comments": 56},
+        {"media_id": "b", "title": "Family secret", "views": 5450, "likes": 120, "comments": 43},
+    ]
+    assert ai.match_reel(_zara(5529, 119, 55), stored) == "a"
+    assert ai.match_reel(_zara(5383, 119, 43), stored) == "b"
+    assert ai.match_reel(_zara(5383, 119, 20), stored) is None  # comments agree with neither
+
+
+def test_carousel_matched_by_likes_and_comments_alone():
+    posts = [
+        {"media_id": "nov4", "likes": 45, "comments": 26},
+        {"media_id": "nov11", "likes": 46, "comments": 37},
+    ]
+    post = ai.ReelInsights(kind="post", counts={"likes": 45, "comments": 26, "views": 858})
+    assert ai.match_post(post, posts) == "nov4"
+    assert ai.match_post(ai.ReelInsights(kind="post", counts={"likes": 45}), posts) is None
+
+
+def test_post_insights_read_as_a_carousel():
+    """A carousel's Overview from the Zara 18:13 recording: profile visits sit in a tile."""
+    text = "\n".join(
+        [
+            "### f_0171.jpg",
+            "0.37,0.08|Post insights",
+            *(f"{x},0.40|{v}" for x, v in ((0.12, 45), (0.30, 26), (0.48, 3), (0.65, 4), (0.83, 4))),
+            "0.08,0.45|Overview",
+            "0.39,0.45|Engagement",
+            "0.75,0.45|Audience",
+            "0.08,0.58|Views",
+            "0.55,0.58|Viewers",
+            "0.08,0.61|858",
+            "0.56,0.61|424",
+            "0.08,0.68|Profile visits",
+            "0.55,0.69|Follows",
+            "0.08,0.72|5",
+        ]
+    )
+    (post,) = ai.read_reels(ai.parse_ocr(text))
+    assert post.kind == "post" and post.as_doc()["kind"] == "post"
+    assert post.counts["likes"] == 45 and post.counts["comments"] == 26
+    assert post.counts["views"] == 858 and post.counts["profile_visits"] == 5
+
+
+def test_carousel_stored_on_our_record_found_by_caption():
+    db = DB(
+        videos=[],
+        posts=[
+            {
+                "channel_id": "zara kapoor",
+                "post_id": "p1",
+                "kind": "carousel",
+                "status": "published",
+                "caption": "Is dress ne mujhe nahi,  maine isse choose kiya",
+            },
+        ],
+    )
+    ig = [
+        {"media_id": "nov4", "caption": "Is dress ne mujhe nahi, maine isse choose kiya", "likes": 45, "comments": 26},
+        {"media_id": "old", "caption": "Pink mein dangerous", "likes": 26, "comments": 16},
+    ]
+    recs = [
+        ai.ReelInsights(kind="post", counts={"likes": 45, "comments": 26, "views": 858}),
+        ai.ReelInsights(kind="post", counts={"likes": 26, "comments": 16, "views": 700}),
+    ]
+    result = asyncio.run(store.store(db, "zara kapoor", recs, AT, "zara.mp4", posts=ig))
+    assert [m for m, _ in result.stored] == ["nov4", "old"]
+    assert "no server record" in result.stored[1][1]
+    assert db.posts.docs[0]["app_insights"]["counts"]["views"] == 858
+    assert {d["media_id"] for d in db.reel_app_insights.docs} == {"nov4", "old"}

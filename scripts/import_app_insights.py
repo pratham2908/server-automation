@@ -11,7 +11,7 @@ Two steps, because the text recognition needs macOS and the database is on the s
   # which reels to record next: grown >20% since their last recording, or never recorded and >100K
   PYTHONPATH=. venv/bin/python scripts/import_app_insights.py due DreamScenicAi
 
-In the recording, open each reel's "Reel insights": Overview (the view count, then scroll to "Top
+In the recording, open each reel's "Reel insights" (or a carousel's "Post insights"): Overview (the view count, then scroll to "Top
 sources of views"), Engagement, and Audience (countries, and scroll the whole age list). Hold each
 screen about a second. A reel is matched by its view count, so the Overview tab matters.
 """
@@ -116,26 +116,63 @@ async def due(channel_id: str, threshold: float, min_views: int) -> None:
         print(f"  {d.views_now:>9,}  {d.title[:60]}")
 
 
+async def instagram_posts(db: AsyncIOMotorDatabase, channel_id: str) -> list[dict[str, object]]:
+    """The account's carousels and photos from Instagram, as ``match_post`` reads them: our own records
+    hold no counts for them (and none at all for carousels posted by hand)."""
+    from app.services.instagram import InstagramServiceManager
+
+    resolved = await InstagramServiceManager(db).get_service_and_user_id(channel_id)
+    if resolved is None:
+        raise SystemExit(f"No Instagram connection for {channel_id}")
+    service, ig_user_id = resolved
+    items: list[dict[str, object]] = []
+    after = None
+    while True:
+        page = await asyncio.to_thread(service.get_media_page, ig_user_id, limit=50, after=after)
+        items += page["data"]
+        after = page["next_cursor"]
+        if not after:
+            break
+    return [
+        {
+            "media_id": str(item["id"]),
+            "caption": item.get("caption") or "",
+            "likes": item.get("like_count"),
+            "comments": item.get("comments_count"),
+            "timestamp": item.get("timestamp"),
+        }
+        for item in items
+        if item.get("media_type") in ("CAROUSEL_ALBUM", "IMAGE")
+    ]
+
+
 async def import_(path: Path, channel_id: str, dry_run: bool) -> None:
-    from app.services.app_insights import match_reel
+    from app.services.app_insights import match_post, match_reel
     from app.services.app_insights_store import channel_reels, store
 
     payload = json.loads(path.read_text())
     records = [ReelInsights(**r) for r in payload["reels"]]
     captured_at = datetime.fromisoformat(payload["recorded_at"])
     db = _db()
+    posts = await instagram_posts(db, channel_id) if any(r.kind == "post" for r in records) else []
     if dry_run:
         reels = {r["media_id"]: r for r in await channel_reels(db, channel_id)}
+        by_post = {str(p["media_id"]): p for p in posts}
         for rec in records:
-            media_id = match_reel(rec, list(reels.values()))
-            title = str(reels[media_id]["title"])[:60] if media_id else "NO MATCH"
-            print(f"{(rec.thumbnail_text or ['?'])[0]:14} -> {title}")
+            counts = f"v={rec.counts.get('views')} l={rec.counts.get('likes')} c={rec.counts.get('comments')}"
+            if rec.kind == "post":
+                post_id = match_post(rec, posts)
+                title = "carousel: " + str(by_post[post_id]["caption"])[:50] if post_id else "NO MATCH (carousel)"
+            else:
+                media_id = match_reel(rec, list(reels.values()))
+                title = str(reels[media_id]["title"])[:60] if media_id else "NO MATCH"
+            print(f"{counts:32} -> {title}")
         return
-    result = await store(db, channel_id, records, captured_at, source=payload["video"])
+    result = await store(db, channel_id, records, captured_at, source=payload["video"], posts=posts)
     for media_id, title in result.stored:
         print(f"stored {media_id}  {title[:70]}")
     for rec in result.unmatched:
-        print(f"NOT STORED (no clear reel): {rec.thumbnail_text} {rec.counts}")
+        print(f"NOT STORED (no clear match): {rec.kind} {rec.thumbnail_text} {rec.counts}")
     print()
     await due(channel_id, 0.20, 100_000)
 
