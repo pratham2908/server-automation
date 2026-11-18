@@ -37,7 +37,9 @@ _ROW_FIELDS = {
     "saves": "saves",
 }
 # Overview tiles: label with its value right under it.
-_TILE_FIELDS = {"views": "views", "viewers": "viewers", "follows": "follows"}
+_TILE_FIELDS = {"views": "views", "viewers": "viewers", "follows": "follows", "profilevisits": "profile_visits"}
+# The screen titles: a reel's, and a carousel's or photo's.
+KINDS = {"Reel insight": "reel", "Post insight": "post"}
 _ICONS = ("likes", "comments", "reposts", "shares", "saves")  # the row of counts under the thumbnail
 AGES = ("13-17", "18-24", "25-34", "35-44", "45-54", "55-64", "65+")
 # "Top sources of views" on the Overview tab: laid out like the country rows, so named outright.
@@ -66,9 +68,10 @@ Token = tuple[float, float, str]  # x, y, text
 
 @dataclass
 class ReelInsights:
-    """What one reel's insights screens showed. Counts the app rounds ("7K") stay rounded."""
+    """What one reel's (or carousel's) insights screens showed. Counts the app rounds ("7K") stay rounded."""
 
     frames: list[str] = field(default_factory=list)
+    kind: str = "reel"  # "post" for a carousel or photo ("Post insights")
     thumbnail_text: list[str] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
     shown: dict[str, str] = field(default_factory=dict)  # each count as the app printed it
@@ -82,6 +85,7 @@ class ReelInsights:
 
     def as_doc(self) -> dict[str, Any]:
         return {
+            "kind": self.kind,
             "counts": self.counts,
             "shown": self.shown,
             "avg_watch_seconds": self.avg_watch_seconds,
@@ -182,16 +186,24 @@ def _icon_row(tokens: Sequence[Token], y: float) -> bool:
     return any(_squash(t) == "overview" and 0.02 < ty - y < 0.08 for _, ty, t in tokens)
 
 
+def _kind(tokens: Sequence[Token]) -> str | None:
+    return next((kind for _, _, t in tokens for title, kind in KINDS.items() if t.startswith(title)), None)
+
+
 def read_reels(frames: Iterable[tuple[str, Sequence[Token]]]) -> list[ReelInsights]:
-    """One record per run of "Reel insights" frames; runs showing the same counts row are one reel."""
+    """One record per run of "Reel insights" (or "Post insights") frames; runs showing the same counts
+    row are one reel."""
     runs: list[tuple[list[str], defaultdict[str, Counter[str]], Counter[str]]] = []
+    kinds: list[str] = []
     open_run = False
     for name, tokens in frames:
-        if not any(t.startswith("Reel insight") for _, _, t in tokens):
+        kind = _kind(tokens)
+        if kind is None:
             open_run = False
             continue
-        if not open_run:
+        if not open_run or kinds[-1] != kind:
             runs.append(([], defaultdict(Counter), Counter()))
+            kinds.append(kind)
             open_run = True
         names, votes, thumb = runs[-1]
         names.append(name)
@@ -200,15 +212,21 @@ def read_reels(frames: Iterable[tuple[str, Sequence[Token]]]) -> list[ReelInsigh
             if 0.12 < y < 0.42 and t.isupper() and len(t) >= 4 and parse_count(t) is None:
                 thumb[t] += 1
     merged: list[tuple[list[str], defaultdict[str, Counter[str]], Counter[str]]] = []
-    for run in runs:
-        if merged and _same_reel(merged[-1], run):
+    merged_kinds: list[str] = []
+    for run, kind in zip(runs, kinds, strict=True):
+        if merged and merged_kinds[-1] == kind and _same_reel(merged[-1], run):
             merged[-1][0].extend(run[0])
             for key, counter in run[1].items():
                 merged[-1][1][key].update(counter)
             merged[-1][2].update(run[2])
         else:
             merged.append(run)
-    return [_record(names, votes, thumb) for names, votes, thumb in merged if _icons(votes) or votes]
+            merged_kinds.append(kind)
+    return [
+        _record(names, votes, thumb, kind)
+        for (names, votes, thumb), kind in zip(merged, merged_kinds, strict=True)
+        if _icons(votes) or votes
+    ]
 
 
 def _same_reel(
@@ -235,13 +253,14 @@ def _icons(votes: Mapping[str, Counter[str]]) -> tuple[str, ...]:
     return tuple(votes["icon:" + n].most_common(1)[0][0] for n in _ICONS if votes.get("icon:" + n))
 
 
-def _record(names: list[str], votes: Mapping[str, Counter[str]], thumb: Counter[str]) -> ReelInsights:
+def _record(names: list[str], votes: Mapping[str, Counter[str]], thumb: Counter[str], kind: str) -> ReelInsights:
     best = {key: counter.most_common(1)[0][0] for key, counter in votes.items() if counter}
-    rec = ReelInsights(frames=names, thumbnail_text=[t for t, _ in thumb.most_common(3)])
+    rec = ReelInsights(frames=names, kind=kind, thumbnail_text=[t for t, _ in thumb.most_common(3)])
     for name in _ICONS:
         _set_count(rec, name, best.get(name) or best.get("icon:" + name))
-    for name in ("profile_visits", "bio_link_clicks"):
-        _set_count(rec, name, best.get(name))
+    # A carousel shows profile visits as an Overview tile; a reel as an Engagement row.
+    _set_count(rec, "profile_visits", best.get("profile_visits") or best.get("tile:profile_visits"))
+    _set_count(rec, "bio_link_clicks", best.get("bio_link_clicks"))
     _set_count(rec, "follows", best.get("follows") or best.get("tile:follows"))
     _set_count(rec, "views", best.get("tile:views"))
     _set_count(rec, "viewers", best.get("tile:viewers"))
@@ -277,31 +296,37 @@ def _pct(value: str | None) -> float | None:
         return None
 
 
+def _agrees(
+    rec: ReelInsights, item: Mapping[str, Any], key: str, slack: float, floor: int, *, unknown: bool = False
+) -> bool:
+    """The stored count is within ``slack`` (or ``floor``) of what the app showed, plus the app's own
+    rounding: "1K" or "17.9K" is rounded to a tenth of the unit. ``unknown`` answers when either
+    side lacks the count."""
+    shown = rec.shown.get(key, "").upper()
+    rounding = 100 if shown.endswith("K") else 100_000 if shown.endswith("M") else 0
+    theirs, ours = rec.counts.get(key), item.get(key)
+    if not isinstance(ours, int | float) or theirs is None:
+        return unknown
+    return abs(ours - theirs) <= rounding + max(floor, theirs * slack)
+
+
 def match_reel(
     rec: ReelInsights, reels: Sequence[Mapping[str, Any]], tolerance: float = 0.02, drift: float = 0.10
 ) -> str | None:
     """The media id of the stored reel these insights are for, or None when it isn't clear.
 
     The view count narrows it to reels within ``drift`` (ours and the app's differ by however long
-    the two reads were apart, and a new reel gains several percent in an hour), the like count must
-    agree, and a thumbnail text must name exactly one of them. View count alone isn't enough: once
-    the right reel has grown away, another reel of similar reach can sit right where it was (Miami
-    #32 was matched to a San Francisco reel that way). Only when the thumbnail couldn't be read does
-    a lone reel within ``tolerance`` decide.
+    the two reads were apart, and a new reel gains several percent in an hour), and the like and
+    comment counts must agree. Then a thumbnail text must name exactly one of them: view count alone
+    isn't enough, since once the right reel has grown away another reel of similar reach can sit
+    right where it was (Miami #32 was matched to a San Francisco reel that way).
+
+    A thumbnail with no words that appear in any title (a photo, not a city card) can't name
+    anything; then a lone candidate decides, or else a lone one within ``tolerance``.
     """
 
     def near(ours: Any, theirs: int | None, slack: float) -> bool:
         return isinstance(ours, int | float) and theirs is not None and abs(ours - theirs) <= max(5, theirs * slack)
-
-    def likes_agree(reel: Mapping[str, Any]) -> bool:
-        # "1K" or "17.9K" is rounded to a tenth of the unit: allow that on top of the growth.
-        shown = rec.shown.get("likes", "").upper()
-        rounding = 100 if shown.endswith("K") else 100_000 if shown.endswith("M") else 0
-        likes = rec.counts.get("likes")
-        ours = reel.get("likes")
-        return (
-            isinstance(ours, int | float) and likes is not None and abs(ours - likes) <= rounding + max(5, likes * 0.06)
-        )
 
     def named_by_thumbnail(hits: list[Mapping[str, Any]]) -> str | None:
         # Most-read text first. The series name ("4 FRIENDS MEET") is in every title, so only a text
@@ -314,12 +339,34 @@ def match_reel(
 
     views = rec.counts.get("views")
     candidates = [r for r in reels if near(r.get("views"), views, drift)] if views else list(reels)
-    if rec.counts.get("likes") is not None:
-        candidates = [r for r in candidates if likes_agree(r)]
-    if rec.thumbnail_text:
+    readable = any(t.lower() in str(r.get("title") or "").lower() for t in rec.thumbnail_text for r in reels)
+    if readable:
+        candidates = [
+            r
+            for r in candidates
+            if _agrees(rec, r, "likes", 0.06, 5, unknown=True) and _agrees(rec, r, "comments", 0.10, 3, unknown=True)
+        ]
         return named_by_thumbnail(candidates)
+    if not views:
+        return None  # nothing but likes and comments: too thin for a reel
+    # Nothing on the thumbnail to go by: likes and comments must both be known and agree.
+    candidates = [r for r in candidates if _agrees(rec, r, "likes", 0.06, 5) and _agrees(rec, r, "comments", 0.10, 3)]
+    if len(candidates) == 1:
+        return str(candidates[0]["media_id"])
     tight = [r for r in candidates if near(r.get("views"), views, tolerance)]
     return str(tight[0]["media_id"]) if len(tight) == 1 else None
+
+
+def match_post(rec: ReelInsights, posts: Sequence[Mapping[str, Any]]) -> str | None:
+    """The media id of the carousel or photo these insights are for, or None when it isn't clear.
+
+    Our own records hold no view count for posts, so the like and comment counts (exact in the app
+    at this size, and both from Instagram's media list) must both agree with exactly one post.
+    """
+    if rec.counts.get("likes") is None or rec.counts.get("comments") is None:
+        return None
+    hits = [p for p in posts if _agrees(rec, p, "likes", 0.05, 2) and _agrees(rec, p, "comments", 0.05, 2)]
+    return str(hits[0]["media_id"]) if len(hits) == 1 else None
 
 
 def latest_view(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -389,3 +436,12 @@ def due_for_recording(
         elif item.growth > threshold:
             due.append(item)
     return sorted(due, key=lambda d: (d.recorded_at is None, -(d.growth or 0), -d.views_now))
+
+
+def same_caption(ours: object, theirs: object) -> bool:
+    """Two captions are the same post's when they read the same, spacing aside."""
+
+    def norm(text: object) -> str:
+        return " ".join(str(text or "").split())
+
+    return bool(norm(ours)) and norm(ours) == norm(theirs)
