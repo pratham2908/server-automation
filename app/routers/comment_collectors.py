@@ -181,7 +181,8 @@ async def collector_tally(
     return {
         **result,
         "entries": [
-            {**e, "last_at": to_ist_iso(e["last_at"]), "done": cc.fold(e["answer"]) in ticked} for e in result["entries"]
+            {**e, "last_at": to_ist_iso(e["last_at"]), "done": cc.fold(e["answer"]) in ticked}
+            for e in result["entries"]
         ],
         "reels": await _reels(db, channel_id, [str(m) for m in every if m]),
     }

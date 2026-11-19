@@ -375,3 +375,14 @@ def test_match_reel_exact_counts_settle_two_close_reels() -> None:
     two = ai.ReelInsights(counts={"views": 14587, "likes": 65, "comments": 2})
     assert ai.match_reel(one, reels) == "a"
     assert ai.match_reel(two, reels) == "b"
+
+
+def test_channel_reels_lists_a_shared_media_id_once_with_the_most_views() -> None:
+    db = DB(
+        videos=[
+            {"channel_id": "C", "instagram_media_id": "paris", "title": "Paris", "metadata": {"views": 0}},
+            {"channel_id": "C", "instagram_media_id": "paris", "title": "Paris", "metadata": {"views": 466011}},
+        ]
+    )
+    reels = asyncio.run(store.channel_reels(db, "C"))
+    assert [(r["media_id"], r["views"]) for r in reels] == [("paris", 466011)]
