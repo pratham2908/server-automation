@@ -356,7 +356,11 @@ def match_reel(
             for r in candidates
             if _agrees(rec, r, "likes", 0.06, 5, unknown=True) and _agrees(rec, r, "comments", 0.10, 3, unknown=True)
         ]
-        return named_by_thumbnail(candidates)
+        named = named_by_thumbnail(candidates)
+        if named or not views:
+            return named
+        # The text may belong to a different reel ("Two Sum: 3 Ways to Solve It" vs the one titled
+        # "Two Sum, 3 Ways"): fall through to the counts alone, which must still single one out.
     if not views:
         # Only the counts row was recorded: the exact like and comment counts, on one reel alone.
         exact = [r for r in reels if _exact(rec, r)]

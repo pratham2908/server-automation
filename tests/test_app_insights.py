@@ -354,3 +354,13 @@ def test_reel_without_views_needs_the_exact_counts():
     stored = [{"media_id": "a", "title": "x", "views": 9000, "likes": 74, "comments": 10}]
     assert ai.match_reel(ai.ReelInsights(counts={"likes": 74, "comments": 10}), stored) == "a"
     assert ai.match_reel(ai.ReelInsights(counts={"likes": 75, "comments": 10}), stored) is None
+
+
+def test_match_reel_falls_back_to_counts_when_thumbnail_names_another_reel() -> None:
+    """ "Two Sum: 3 Ways" on the card is in another reel's title, but the counts single out the right one."""
+    rec = ai.ReelInsights(thumbnail_text=["TWO SUM: 3 WAYS"], counts={"views": 43008, "likes": 534, "comments": 2})
+    reels = [
+        {"media_id": "a", "title": "Two Sum, 3 Ways", "views": 43008, "likes": 534, "comments": 2},
+        {"media_id": "b", "title": "Two Sum: 3 Ways to Solve It, Fast", "views": 9000, "likes": 80, "comments": 1},
+    ]
+    assert ai.match_reel(rec, reels) == "a"
