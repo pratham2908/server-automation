@@ -39,7 +39,7 @@ class StoreResult:
 
 async def channel_reels(db: AsyncIOMotorDatabase, channel_id: str) -> list[dict[str, Any]]:
     """The channel's reels as ``match_reel`` reads them."""
-    out = []
+    out: dict[str, dict[str, Any]] = {}
     async for video in db.videos.find(
         {"channel_id": channel_id, "instagram_media_id": {"$nin": [None, ""]}},
         {
@@ -52,17 +52,20 @@ async def channel_reels(db: AsyncIOMotorDatabase, channel_id: str) -> list[dict[
         },
     ):
         meta = video.get("metadata") or {}
-        out.append(
-            {
-                "media_id": str(video["instagram_media_id"]),
-                "title": video.get("title"),
-                "views": meta.get("views"),
-                "likes": meta.get("likes"),
-                "comments": meta.get("comments"),
-                "follows": meta.get("follows"),
-            }
-        )
-    return out
+        media_id = str(video["instagram_media_id"])
+        reel = {
+            "media_id": media_id,
+            "title": video.get("title"),
+            "views": meta.get("views"),
+            "likes": meta.get("likes"),
+            "comments": meta.get("comments"),
+            "follows": meta.get("follows"),
+        }
+        # Two video records can share one Instagram media id (a re-sync leaves a copy with no views):
+        # the reel is one, so it must be one candidate, the copy with the most views.
+        if media_id not in out or (reel["views"] or 0) > (out[media_id]["views"] or 0):
+            out[media_id] = reel
+    return list(out.values())
 
 
 async def _keep(
