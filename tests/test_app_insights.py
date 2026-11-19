@@ -364,3 +364,14 @@ def test_match_reel_falls_back_to_counts_when_thumbnail_names_another_reel() -> 
         {"media_id": "b", "title": "Two Sum: 3 Ways to Solve It, Fast", "views": 9000, "likes": 80, "comments": 1},
     ]
     assert ai.match_reel(rec, reels) == "a"
+
+
+def test_match_reel_exact_counts_settle_two_close_reels() -> None:
+    reels = [
+        {"media_id": "a", "title": "Kengeri", "views": 14677, "likes": 63, "comments": 2},
+        {"media_id": "b", "title": "Big O", "views": 14587, "likes": 65, "comments": 2},
+    ]
+    one = ai.ReelInsights(thumbnail_text=["BENGALURU"], counts={"views": 14677, "likes": 63, "comments": 2})
+    two = ai.ReelInsights(counts={"views": 14587, "likes": 65, "comments": 2})
+    assert ai.match_reel(one, reels) == "a"
+    assert ai.match_reel(two, reels) == "b"

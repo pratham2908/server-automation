@@ -376,6 +376,10 @@ def match_reel(
     ]
     if len(candidates) == 1:
         return str(candidates[0]["media_id"])
+    # Two reels a couple of likes apart (63 and 65): the exact likes and comments tell them apart.
+    exact = [r for r in candidates if _exact(rec, r)]
+    if len(exact) == 1:
+        return str(exact[0]["media_id"])
     tight = [r for r in candidates if near(r.get("views"), views, tolerance)]
     return str(tight[0]["media_id"]) if len(tight) == 1 else None
 
