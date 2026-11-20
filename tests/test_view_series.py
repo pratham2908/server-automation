@@ -10,6 +10,7 @@ from app.services.view_series import (
     DAY,
     Curve,
     channel_totals,
+    complete_ist_days,
     curve_points,
     daily_points,
     hourly_points,
@@ -220,3 +221,14 @@ class TestRunningToday:
     def test_a_window_not_ending_today_is_untouched(self) -> None:
         points = daily_points({}, set(), date(2026, 11, 5), 1)
         assert with_running_today(points, date(2026, 11, 6), (10.0, "x")) == points
+
+
+def test_complete_ist_days_sums_only_days_with_all_24_hours() -> None:
+    """A day is IST midnight to midnight: a full one is summed exactly, a day missing hours is left out."""
+    midnight = datetime(2026, 10, 21, 0, 0, tzinfo=IST)
+    # 100 views an hour from 20 Oct 21:00 IST to 22 Oct 06:00 IST: 21 Oct is whole, 20 and 22 are partial.
+    readings = [
+        MetricReading(at=midnight - timedelta(hours=3) + timedelta(hours=h), values={"views": 100.0 * h})
+        for h in range(0, 34)
+    ]
+    assert complete_ist_days(None, readings, "views", 72) == {"2026-10-21": 2400.0}
