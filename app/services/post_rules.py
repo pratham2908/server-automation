@@ -17,7 +17,7 @@ from typing import Any
 from dateutil.parser import isoparse
 
 from app.models.post import PostDoc, Slide, SlideCreate
-from app.services.first_comment import validate_comment
+from app.services.first_comment import validate_comments
 from app.timezone import IST, assume_utc
 
 IMAGE_CONTENT_TYPE = "image/jpeg"
@@ -69,6 +69,11 @@ DELETABLE = frozenset({"draft", "failed", "archived"})
 SCHEDULABLE = frozenset({"draft", "scheduled"})
 UNSCHEDULABLE = frozenset({"scheduled", "awaiting_manual"})
 PUBLISH_NOW_FROM = frozenset({"draft", "scheduled"})
+
+
+def comments_for_post(post: PostDoc) -> list[str]:
+    """The comments to post under it, in order. A post saved before there could be several holds only `first_comment`."""
+    return list(post.first_comments) or ([post.first_comment] if post.first_comment else [])
 
 
 def can_edit_text(status: str) -> bool:
@@ -233,7 +238,7 @@ def validate(post: PostDoc) -> Validation:
             result.problems.append(f"Caption has {tags} hashtags; Instagram allows {MAX_HASHTAGS}")
 
     try:
-        validate_comment(post.first_comment, "instagram")
+        validate_comments(comments_for_post(post), "instagram")
     except ValueError as exc:
         result.problems.append(f"First comment: {exc}")
 
