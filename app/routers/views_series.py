@@ -33,6 +33,7 @@ from app.services.view_series import (
     Measure,
     SeriesPoint,
     Step,
+    complete_ist_days,
     curve_points,
     daily_from_readings,
     daily_points,
@@ -220,7 +221,7 @@ async def _daily_views(
     else:
         async for d in db.youtube_video_daily.find({"channel_id": channel_id, "youtube_video_id": video_id}):
             values[d["date"]] = d.get("views")
-    return values, rough, "YouTube Analytics' daily numbers, which arrive two to three days late."
+    return values, rough, "YouTube Analytics' daily numbers (counted on Pacific time, not IST), which arrive two to three days late."
 
 
 async def _curve_series(
@@ -312,6 +313,20 @@ async def _views_series(
             raise HTTPException(status_code=422, detail="Daily ranges show views only")
         values, rough, note = await _daily_views(db, channel_id, platform, video_id)
         today: date = now.astimezone(IST).date()
+        if platform == "instagram" and video_id is None and metric == "views":
+            # Instagram counts its own days on Pacific time (12:30 IST to 12:30 IST), so a day's bar was
+            # not what happened between IST midnights. Every IST day our hourly readings cover in full is
+            # summed from them; only days before they began keep Instagram's own figure.
+            window_hours = min(size, 28) * 24
+            channel_readings, channel_published = await _hourly_readings(
+                db, channel_id, platform, None, metric, since=now - timedelta(hours=window_hours + 48)
+            )
+            ist_days = complete_ist_days(channel_published, channel_readings, metric, window_hours + 24)
+            values = {**values, **ist_days}
+            note = (
+                "Days are IST (midnight to midnight), summed from our hourly readings. Days before those "
+                "readings began show Instagram's own daily total, which is counted on Pacific time."
+            )
         points = daily_points(values, rough, today, size)
         # Today's bar while the day runs: the platform's count if it has one, else the sum of today's hours.
         midnight = datetime.combine(today, datetime.min.time(), tzinfo=IST)

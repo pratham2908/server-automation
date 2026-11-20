@@ -206,6 +206,26 @@ def daily_from_readings(
     return out
 
 
+def complete_ist_days(
+    published_at: datetime | None, readings: Sequence[MetricReading], metric: str, max_hours: int
+) -> dict[str, float]:
+    """Gains per IST date, for the dates whose 24 hours all have a number — each one is the day's exact total.
+
+    Unlike ``daily_from_readings`` (a floor), a day with any hour the readings can't place is left out
+    entirely, so a caller can fall back to another source for it instead of showing a partial sum.
+    """
+    sums: dict[str, float] = {}
+    known: dict[str, int] = {}
+    for hour in bucket_gains(published_at, readings, HOUR, max_hours):
+        value = hour.values.get(metric)
+        if value is None:
+            continue
+        day = hour.start.astimezone(IST).date().isoformat()
+        sums[day] = sums.get(day, 0.0) + value
+        known[day] = known.get(day, 0) + 1
+    return {day: round(total, 1) for day, total in sums.items() if known[day] == 24}
+
+
 def daily_points(
     values_by_date: Mapping[str, float | None], rough_dates: set[str], today: date, days: int
 ) -> list[SeriesPoint]:
