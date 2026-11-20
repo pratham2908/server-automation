@@ -103,6 +103,12 @@ def _clean_comment(text: str | None) -> str | None:
     return cleaned or None
 
 
+def _clean_comments(first_comment: str | None, first_comments: list[str] | None) -> list[str]:
+    """The comments a request asks for: the list if sent, else the single comment; blanks dropped. Count and length are left to validation."""
+    raw = first_comments if first_comments is not None else [first_comment]
+    return [c for c in (_clean_comment(item) for item in raw) if c]
+
+
 def _clean_collaborators(value: list[str] | None) -> list[str]:
     try:
         return clean_collaborators(value) or []
@@ -181,6 +187,7 @@ class PostService:
             status=post.status,
             caption=post.caption,
             first_comment=post.first_comment,
+            first_comments=rules.comments_for_post(post),
             first_comment_status=post.first_comment_status,
             music_mode=post.music_mode,
             music_note=post.music_note,
@@ -250,7 +257,8 @@ class PostService:
             channel_id=channel_id,
             kind=body.kind,
             caption=body.caption,
-            first_comment=_clean_comment(body.first_comment),
+            first_comment=(_clean_comments(body.first_comment, body.first_comments) or [None])[0],
+            first_comments=_clean_comments(body.first_comment, body.first_comments),
             music_mode=body.music_mode,
             music_note=_clean_note(body.music_note),
             location_name=_clean_note(body.location_name),
@@ -273,6 +281,7 @@ class PostService:
         text_fields = {
             "caption",
             "first_comment",
+            "first_comments",
             "music_mode",
             "music_note",
             "location_name",
@@ -289,8 +298,14 @@ class PostService:
         fields: dict[str, Any] = {}
         if "caption" in sent:
             fields["caption"] = body.caption or ""
-        if "first_comment" in sent:
-            fields["first_comment"] = _clean_comment(body.first_comment)
+        if "first_comments" in sent or "first_comment" in sent:
+            # The list wins when both are sent; either way the single field mirrors the first.
+            comments = _clean_comments(
+                body.first_comment if "first_comment" in sent else None,
+                body.first_comments if "first_comments" in sent else None,
+            )
+            fields["first_comments"] = comments
+            fields["first_comment"] = comments[0] if comments else None
         if "music_mode" in sent and body.music_mode is not None:
             fields["music_mode"] = body.music_mode
         if "music_note" in sent:
@@ -541,6 +556,7 @@ class PostService:
             kind=post.kind,
             caption=post.caption,
             first_comment=post.first_comment,
+            first_comments=rules.comments_for_post(post),
             music_note=post.music_note,
             location_name=post.location_name,
             go_live_at=to_ist_iso(rules.go_live_time(post)),

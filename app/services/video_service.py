@@ -29,7 +29,7 @@ from app.services.downloader import (
     download_youtube_video_to_r2,
 )
 from app.services.error_reporting import create_monitored_task, report_error
-from app.services.first_comment import pending_fields, platform_id_field, validate_comment
+from app.services.first_comment import pending_fields, platform_id_field, validate_comment, validate_comments
 from app.services.insight_glitch import regressed_reels
 from app.services.instagram import InstagramService
 from app.services.instagram_audience_sync import refresh_audience, refresh_stories
@@ -1401,7 +1401,7 @@ class VideoService:
         channel_id: str,
         video_id: str,
         scheduled_at: datetime | None = None,
-        first_comment: str | None = None,
+        first_comment: str | list[str] | None = None,
         trial_graduation: str | None = None,
         trial_check: TrialCheck | None = None,
         location_id: str | None = None,
@@ -1414,7 +1414,7 @@ class VideoService:
         if not channel:
             raise ValueError("Channel not found")
         platform = get_channel_platform(channel)
-        comment = validate_comment(first_comment, platform)
+        comments = validate_comments(first_comment, platform)
         place = {
             **location_fields(location_id, location_name, platform),
             **collaborator_fields(collaborators, platform, str(channel.get("instagram_username") or "")),
@@ -1422,7 +1422,7 @@ class VideoService:
         if any(place.values()) and video_id.lower() == "all":
             # The same place (or co-author) on a whole queue is far more likely a mistake than an intention.
             raise ValueError("A location or collaborators can only be set when scheduling a single video")
-        if comment and video_id.lower() == "all":
+        if comments and video_id.lower() == "all":
             # One comment across a whole queue is far more likely to be a
             # mistake than an intention, and it would be tedious to undo.
             raise ValueError("A first comment can only be set when scheduling a single video")
@@ -1460,8 +1460,8 @@ class VideoService:
             raise ValueError("Not enough slots")
         res = []
         for v_doc, slot in zip(vids, slots, strict=False):
-            if comment:
-                fields = pending_fields(comment)
+            if comments:
+                fields = pending_fields(comments)
                 await self.db.videos.update_one({"_id": v_doc["_id"]}, {"$set": fields})
                 # The workers read the doc handed to them, not a re-fetch.
                 v_doc.update(fields)
@@ -1560,7 +1560,7 @@ class VideoService:
         channel_id: str,
         video_id: str,
         new_time: datetime | None = None,
-        first_comment: str | None = None,
+        first_comment: str | list[str] | None = None,
         trial_graduation: str | None = None,
         trial_check: TrialCheck | None = None,
         location_id: str | None = None,
@@ -1572,14 +1572,14 @@ class VideoService:
             raise ValueError("Video not found")
         channel = await self.db.channels.find_one({"channel_id": channel_id})
         platform = get_channel_platform(channel) if channel else "youtube"
-        comment = validate_comment(first_comment, platform)
+        comments = validate_comments(first_comment, platform)
         trial = {
             **trial_fields(trial_graduation, trial_check, video.get("trial_graduation"), platform),
             **location_fields(location_id, location_name, platform),
             **collaborator_fields(collaborators, platform, str((channel or {}).get("instagram_username") or "")),
         }
         if video.get("status") == "scheduled":
-            return await self._reschedule_on_youtube(channel_id, video, platform, new_time, first_comment, comment)
+            return await self._reschedule_on_youtube(channel_id, video, platform, new_time, first_comment, comments)
         if video.get("status") != "queued":
             raise ValueError("Only a queued or scheduled video can be rescheduled")
         now = now_ist()
@@ -1587,7 +1587,7 @@ class VideoService:
         # Only touched when the caller says something about it: a reschedule that
         # omits the field must not silently wipe a comment set when scheduling.
         if first_comment is not None:
-            upd.update(pending_fields(comment))
+            upd.update(pending_fields(comments))
         upd.update(trial)
         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
         await self.db.schedule_queue.update_one(
@@ -1616,8 +1616,8 @@ class VideoService:
         video: dict[str, Any],
         platform: str,
         new_time: datetime | None,
-        first_comment: str | None,
-        comment: str | None,
+        first_comment: str | list[str] | None,
+        comments: list[str],
     ) -> dict[str, Any]:
         """Change the publish time of a video already uploaded to YouTube and waiting, private, to go live.
 
@@ -1648,7 +1648,7 @@ class VideoService:
 
         upd: dict[str, Any] = {"scheduled_at": new_time, "updated_at": now_ist()}
         if first_comment is not None:
-            upd.update(pending_fields(comment))
+            upd.update(pending_fields(comments))
         await self.db.videos.update_one({"_id": video["_id"]}, {"$set": upd})
         return {
             "ok": True,
@@ -1668,7 +1668,7 @@ class VideoService:
         tag_mode: str | None = "replace",
         category: str | None = None,
         thumbnail_url: str | None = None,
-        first_comment: str | None = None,
+        first_comment: str | list[str] | None = None,
         trial_graduation: str | None = None,
         trial_check: TrialCheck | None = None,
         location_id: str | None = None,
@@ -1693,7 +1693,7 @@ class VideoService:
 
         new_tags = merged_tags(video.get("tags"), tags, tag_mode) if tags is not None else None
         check_snippet_limits(title, description, new_tags)
-        comment = validate_comment(first_comment, platform)
+        comments = validate_comments(first_comment, platform)
         upd: dict[str, Any] = {
             **trial_fields(trial_graduation, trial_check, video.get("trial_graduation"), platform),
             **location_fields(location_id, location_name, platform),
@@ -1710,7 +1710,7 @@ class VideoService:
         if new_tags is not None:
             upd["tags"] = new_tags
         if first_comment is not None:
-            upd.update(pending_fields(comment))
+            upd.update(pending_fields(comments))
         if scheduled_at is not None:
             upd["scheduled_at"] = scheduled_at
         if not upd:

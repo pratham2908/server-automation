@@ -20,10 +20,12 @@ from app.services.first_comment import (
     MAX_ATTEMPTS,
     PENDING,
     POSTED,
+    comments_of,
     is_due,
     pending_fields,
     post_and_record,
     validate_comment,
+    validate_comments,
 )
 from app.services.instagram import InstagramService
 from app.services.youtube import YouTubeService
@@ -383,3 +385,76 @@ def test_commenting_on_a_video_that_is_not_live_yet_is_refused():
 def test_commenting_on_a_missing_video_is_refused():
     with pytest.raises(ValueError, match="Video not found"):
         _comment_on(None, service=_IG())
+
+
+# --- several comments ---------------------------------------------------------
+
+
+def test_up_to_three_comments_are_kept_in_order_and_blanks_dropped():
+    assert validate_comments([" one ", "", "two", "three"], "instagram") == ["one", "two", "three"]
+
+
+def test_a_fourth_comment_is_refused():
+    with pytest.raises(ValueError, match="at most 3"):
+        validate_comments(["a", "b", "c", "d"], "instagram")
+
+
+def test_a_single_string_is_one_comment_and_none_is_none():
+    assert validate_comments("hi", "instagram") == ["hi"]
+    assert validate_comments(None, "instagram") == []
+
+
+def test_every_comment_is_checked_against_the_platform_limit():
+    with pytest.raises(ValueError, match="500"):
+        validate_comments(["fine", "x" * 501], "threads")
+
+
+def test_arming_with_a_list_keeps_the_first_in_the_single_field():
+    fields = pending_fields(["a", "b"])
+    assert fields["first_comment"] == "a"
+    assert fields["first_comments"] == ["a", "b"]
+    assert fields["first_comments_posted"] == 0
+    assert fields["first_comment_status"] == PENDING
+
+
+def test_an_older_doc_with_only_one_comment_still_reads_as_a_list():
+    assert comments_of({"first_comment": "old"}) == ["old"]
+
+
+def test_comments_go_up_in_order_and_the_first_id_is_kept_for_pin_tracking():
+    seen: list[str] = []
+
+    def post(_vid, text):
+        seen.append(text)
+        return f"id-{len(seen)}"
+
+    ok, doc = _record(post, first_comments=["a", "b", "c"])
+    assert ok
+    assert seen == ["a", "b", "c"]
+    assert doc["first_comment_id"] == "id-1"
+    assert doc["first_comment_ids"] == ["id-1", "id-2", "id-3"]
+    assert doc["first_comments_posted"] == 3
+
+
+def test_a_failure_part_way_stops_the_thread_and_a_retry_carries_on_after_it():
+    calls: list[str] = []
+
+    def flaky(_vid, text):
+        calls.append(text)
+        if text == "b" and calls.count("b") == 1:
+            raise RuntimeError("rate limited")
+        return f"id-{text}"
+
+    ok, doc = _record(flaky, first_comments=["a", "b", "c"])
+    assert not ok
+    assert calls == ["a", "b"]  # "c" is never posted before "b"
+    assert doc["first_comments_posted"] == 1
+    assert doc["first_comment_status"] == PENDING
+
+    # The retry is handed the doc as stored, and does not post "a" twice.
+    db = _DB()
+    retry_doc = _pending(first_comments=["a", "b", "c"], first_comments_posted=1, first_comment_ids=["id-a"])
+    ok = asyncio.run(post_and_record(db=db, post=flaky, channel_id="c1", video_doc=retry_doc, platform="youtube"))
+    assert ok
+    assert calls == ["a", "b", "b", "c"]
+    assert db.videos.doc["first_comment_ids"] == ["id-a", "id-b", "id-c"]

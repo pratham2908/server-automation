@@ -163,8 +163,9 @@ def build_handoff_email(post: PostDoc, channel_name: str, username: str | None, 
         "Caption:",
         post.caption or "(none)",
     ]
-    if post.first_comment:
-        lines += ["", "First comment:", post.first_comment]
+    comments = rules.comments_for_post(post)
+    for n, text_ in enumerate(comments, start=1):
+        lines += ["", f"Comment {n}:" if len(comments) > 1 else "First comment:", text_]
     text = "\n".join(lines)
 
     rows = "".join(
@@ -172,10 +173,10 @@ def build_handoff_email(post: PostDoc, channel_name: str, username: str | None, 
         f'<td style="padding:4px 0"><strong>{html.escape(value)}</strong></td></tr>'
         for label, value in details
     )
-    comment = (
-        f'<p><strong>First comment</strong></p><pre style="white-space:pre-wrap">{html.escape(post.first_comment)}</pre>'
-        if post.first_comment
-        else ""
+    comment = "".join(
+        f'<p><strong>{"Comment " + str(n) if len(comments) > 1 else "First comment"}</strong></p>'
+        f'<pre style="white-space:pre-wrap">{html.escape(text_)}</pre>'
+        for n, text_ in enumerate(comments, start=1)
     )
     body = (
         f'<p style="font-size:18px"><strong>Post as {html.escape(account)}</strong> — switch to that account in '
@@ -562,16 +563,19 @@ async def _after_publish(db: Any, service: Any, post: PostDoc, media_id: str, no
         # The post is live; a missing link only costs the UI a button.
         logger.warning("[Posts] Could not fetch the permalink of media %s: %s", media_id, exc)
 
-    comment = (post.first_comment or "").strip()
-    if comment:
-        # Tried once, unlike reels: a post's comment has no sweep to retry it,
-        # and the outcome is shown on the post either way.
-        try:
-            await asyncio.to_thread(service.post_comment, media_id, comment)
-            fields["first_comment_status"] = "posted"
-        except Exception as exc:
-            logger.warning("[Posts] First comment on media %s failed: %s", media_id, exc)
-            fields["first_comment_status"] = "failed"
+    comments = rules.comments_for_post(post)
+    if comments:
+        # Tried once, unlike reels: a post's comments have no sweep to retry them,
+        # and the outcome is shown on the post either way. They go up in order and
+        # stop at the first that fails, so the thread never reads out of sequence.
+        fields["first_comment_status"] = "posted"
+        for index, comment in enumerate(comments, start=1):
+            try:
+                await asyncio.to_thread(service.post_comment, media_id, comment)
+            except Exception as exc:
+                logger.warning("[Posts] Comment %d/%d on media %s failed: %s", index, len(comments), media_id, exc)
+                fields["first_comment_status"] = "failed"
+                break
 
     if fields:
         fields["updated_at"] = now

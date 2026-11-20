@@ -14,6 +14,7 @@ from app.dependencies import verify_api_key
 from app.logger import get_logger
 from app.models.post import PostDoc
 from app.services.errors import get_error_service
+from app.services.first_comment import wanted_comments
 from app.services.post_rules import protected_slide_keys
 from app.services.storage_usage import refresh_storage_usage
 from app.services.trial_graduation import TrialCheck
@@ -113,6 +114,10 @@ class ScheduleRequest(BaseModel):
     first_comment: str | None = Field(
         None,
         description="Comment to post from the channel's own account as soon as the video goes live",
+    )
+    first_comments: list[str] | None = Field(
+        None,
+        description="Up to 3 comments, posted in this order right after it goes live. Wins over first_comment",
     )
     trial_graduation: str | None = Field(
         None,
@@ -552,7 +557,7 @@ async def schedule_video(
             channel_id,
             video_id,
             body.scheduled_at if body else None,
-            body.first_comment if body else None,
+            wanted_comments(body.first_comment, body.first_comments) if body else None,
             body.trial_graduation if body else None,
             body.trial_check if body else None,
             location_id=body.location_id if body else None,
@@ -656,7 +661,7 @@ async def reschedule_video(
             channel_id,
             video_id,
             body.scheduled_at,
-            body.first_comment,
+            wanted_comments(body.first_comment, body.first_comments),
             body.trial_graduation,
             body.trial_check,
             location_id=body.location_id,
@@ -691,6 +696,7 @@ class VideoUpdateRequest(BaseModel):
     category: str | None = Field(None, description="Our own content category")
     thumbnail_url: str | None = None
     first_comment: str | None = Field(None, description="Empty string clears it; omit to leave it")
+    first_comments: list[str] | None = Field(None, description="Up to 3, in order; an empty list clears them. Wins over first_comment")
     trial_graduation: str | None = Field(None, description="Instagram only; empty string turns it off")
     trial_check: TrialCheck | None = None
     location_id: str | None = Field(None, description="Instagram only; empty string clears it")
@@ -712,7 +718,11 @@ async def update_video(
     YouTube first, in a single call, and our record only follows once YouTube accepts it.
     """
     try:
-        return await service.update_pending_video(channel_id, video_id, **body.model_dump(exclude_none=True))
+        fields = body.model_dump(exclude_none=True)
+        several = fields.pop("first_comments", None)
+        if several is not None:
+            fields["first_comment"] = several
+        return await service.update_pending_video(channel_id, video_id, **fields)
     except Exception as e:
         if isinstance(e, ValueError):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))

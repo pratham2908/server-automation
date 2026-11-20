@@ -265,6 +265,21 @@ async def test_first_comment_failure_is_recorded_and_the_post_stays_published():
     assert post.first_comment_status == "failed"
 
 
+@pytest.mark.asyncio
+async def test_several_comments_go_up_in_order():
+    db, ig, r2, mgr = setup([doc(first_comments=["one", "two", "three"])])
+    await tick(db, ig, r2, mgr)
+    assert ig.comments == [("media-img-1", "one"), ("media-img-1", "two"), ("media-img-1", "three")]
+    assert stored(db).first_comment_status == "posted"
+
+
+@pytest.mark.asyncio
+async def test_a_post_saved_with_one_comment_still_posts_it():
+    db, ig, r2, mgr = setup([doc(first_comment="old style")])
+    await tick(db, ig, r2, mgr)
+    assert ig.comments == [("media-img-1", "old style")]
+
+
 # ---- in-app music hand-off --------------------------------------------------------------
 
 

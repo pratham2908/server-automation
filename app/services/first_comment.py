@@ -39,6 +39,9 @@ FAILED = "failed"
 # worth refusing at the edge where the user can still fix the text.
 MAX_LENGTH: dict[str, int] = {"instagram": 2200, "youtube": 10000, "threads": 500}
 
+# How many comments one video can carry. They go up in order, as one little thread.
+MAX_COMMENTS = 3
+
 # Matches the publish/upload workers: enough to ride out a transient API error,
 # few enough that a permanently rejected comment stops burning quota.
 MAX_ATTEMPTS = 5
@@ -71,6 +74,35 @@ def validate_comment(text: str | None, platform: str) -> str | None:
     return cleaned
 
 
+def validate_comments(value: str | list[str] | None, platform: str) -> list[str]:
+    """Normalise the comments wanted on a video: up to ``MAX_COMMENTS``, blanks dropped, each one checked.
+
+    A single string is one comment (what every client sent before there could be several). An empty
+    result means "no comments wanted" — callers use it to clear the field.
+    """
+    if value is None:
+        return []
+    raw = [value] if isinstance(value, str) else list(value)
+    cleaned = [c for c in (validate_comment(item, platform) for item in raw) if c]
+    if len(cleaned) > MAX_COMMENTS:
+        raise ValueError(f"A video can carry at most {MAX_COMMENTS} comments (got {len(cleaned)})")
+    return cleaned
+
+
+def wanted_comments(first_comment: str | None, first_comments: list[str] | None) -> str | list[str] | None:
+    """What a request asks for: the list if it sent one, else the single comment. None means it said nothing."""
+    return first_comments if first_comments is not None else first_comment
+
+
+def comments_of(video_doc: dict[str, Any]) -> list[str]:
+    """The comments a video doc wants posted, in order. Docs saved before there could be several hold one string."""
+    several = [c.strip() for c in (video_doc.get("first_comments") or []) if isinstance(c, str) and c.strip()]
+    if several:
+        return several
+    single = (video_doc.get("first_comment") or "").strip()
+    return [single] if single else []
+
+
 def platform_id_field(platform: str) -> str | None:
     """The video-doc field holding the platform's own id for this video."""
     return _PLATFORM_ID_FIELD.get(platform)
@@ -85,7 +117,7 @@ def is_due(video_doc: dict[str, Any], platform: str, now: datetime) -> bool:
     """
     if video_doc.get("first_comment_status") != PENDING:
         return False
-    if not (video_doc.get("first_comment") or "").strip():
+    if not comments_of(video_doc):
         return False
     if video_doc.get("first_comment_attempts", 0) >= MAX_ATTEMPTS:
         return False
@@ -104,24 +136,31 @@ def is_due(video_doc: dict[str, Any], platform: str, now: datetime) -> bool:
     return True
 
 
-def pending_fields(comment: str | None) -> dict[str, Any]:
-    """The video-doc fields that arm (or disarm) a first comment.
+def pending_fields(comments: str | list[str] | None) -> dict[str, Any]:
+    """The video-doc fields that arm (or disarm) the comments.
 
     Clearing matters as much as setting: rescheduling a video whose comment
     already failed should give it a fresh run rather than inherit the old
-    attempt count.
+    attempt count. ``first_comment`` keeps the first one for everything that
+    only knows a single comment.
     """
-    if not comment:
+    wanted = [comments] if isinstance(comments, str) else list(comments or [])
+    wanted = [c for c in wanted if c]
+    if not wanted:
         return {
             "first_comment": None,
+            "first_comments": [],
             "first_comment_status": None,
             "first_comment_attempts": 0,
+            "first_comments_posted": 0,
             "first_comment_error": None,
         }
     return {
-        "first_comment": comment,
+        "first_comment": wanted[0],
+        "first_comments": wanted,
         "first_comment_status": PENDING,
         "first_comment_attempts": 0,
+        "first_comments_posted": 0,
         "first_comment_error": None,
     }
 
@@ -134,15 +173,16 @@ async def post_and_record(
     video_doc: dict[str, Any],
     platform: str,
 ) -> bool:
-    """Post the pending comment on *video_doc* and write the outcome back.
+    """Post the pending comments on *video_doc*, in order, and write the outcome back.
 
     *post* is the platform service's blocking ``post_comment``; it runs in a
     thread so a slow Graph or Data API call cannot stall the worker loop.
-    Returns ``True`` only when the comment actually landed.
+    A retry carries on after the comments that already landed rather than
+    posting them twice. Returns ``True`` only when every comment landed.
     """
     video_id = video_doc["video_id"]
-    comment = (video_doc.get("first_comment") or "").strip()
-    if not comment:
+    comments = comments_of(video_doc)
+    if not comments:
         return False
 
     id_field = platform_id_field(platform)
@@ -151,43 +191,56 @@ async def post_and_record(
         logger.warning("[FirstComment] Video '%s' has no %s yet — leaving pending", video_id, id_field)
         return False
 
+    done = min(int(video_doc.get("first_comments_posted") or 0), len(comments))
+    ids: list[str] = [str(i) for i in (video_doc.get("first_comment_ids") or [])][:done]
     attempts = video_doc.get("first_comment_attempts", 0) + 1
+    key = {"channel_id": channel_id, "video_id": video_id}
 
-    try:
-        comment_id = await asyncio.to_thread(post, platform_video_id, comment)
-    except Exception as exc:
-        # Deliberately swallowed: the video is already live and a missing
-        # comment must not bounce it back or retry the publish. The failure is
-        # recorded on the video so the dashboard can show it.
-        giving_up = attempts >= MAX_ATTEMPTS
-        logger.warning(
-            "[FirstComment] Could not comment on '%s' (%s, attempt %d/%d)%s: %s",
-            video_id,
-            platform,
-            attempts,
-            MAX_ATTEMPTS,
-            " — giving up" if giving_up else "",
-            exc,
-        )
-        await db.videos.update_one(
-            {"channel_id": channel_id, "video_id": video_id},
-            {
-                "$set": {
-                    "first_comment_status": FAILED if giving_up else PENDING,
-                    "first_comment_attempts": attempts,
-                    "first_comment_error": str(exc)[:500],
-                    "updated_at": now_ist(),
-                }
-            },
-        )
-        return False
+    for index in range(done, len(comments)):
+        try:
+            comment_id = await asyncio.to_thread(post, platform_video_id, comments[index])
+        except Exception as exc:
+            # Deliberately swallowed: the video is already live and a missing
+            # comment must not bounce it back or retry the publish. The failure is
+            # recorded on the video so the dashboard can show it; the comments
+            # that did land stay counted so a retry resumes after them.
+            giving_up = attempts >= MAX_ATTEMPTS
+            logger.warning(
+                "[FirstComment] Could not post comment %d/%d on '%s' (%s, attempt %d/%d)%s: %s",
+                index + 1,
+                len(comments),
+                video_id,
+                platform,
+                attempts,
+                MAX_ATTEMPTS,
+                " — giving up" if giving_up else "",
+                exc,
+            )
+            await db.videos.update_one(
+                key,
+                {
+                    "$set": {
+                        "first_comment_status": FAILED if giving_up else PENDING,
+                        "first_comment_attempts": attempts,
+                        "first_comments_posted": index,
+                        "first_comment_ids": ids,
+                        "first_comment_error": str(exc)[:500],
+                        "updated_at": now_ist(),
+                    }
+                },
+            )
+            return False
+        ids.append(comment_id)
 
     await db.videos.update_one(
-        {"channel_id": channel_id, "video_id": video_id},
+        key,
         {
             "$set": {
                 "first_comment_status": POSTED,
-                "first_comment_id": comment_id,
+                # The first one is "the" first comment for everything that tracks a single one (pins).
+                "first_comment_id": ids[0],
+                "first_comment_ids": ids,
+                "first_comments_posted": len(comments),
                 "first_comment_attempts": attempts,
                 "first_comment_posted_at": now_ist(),
                 "first_comment_error": None,
@@ -195,5 +248,5 @@ async def post_and_record(
             }
         },
     )
-    logger.success("[FirstComment] Commented on '%s' (%s, comment_id=%s)", video_id, platform, comment_id)
+    logger.success("[FirstComment] Posted %d comment(s) on '%s' (%s, ids=%s)", len(comments), video_id, platform, ids)
     return True

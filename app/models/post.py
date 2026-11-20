@@ -90,6 +90,8 @@ class PostDoc(BaseModel):
     kind: PostKind
     caption: str = ""
     first_comment: str | None = None
+    # Up to 3, posted in order; `first_comment` stays the first one. Posts saved before there could be several hold only that.
+    first_comments: list[str] = Field(default_factory=list)
     first_comment_status: FirstCommentStatus | None = None
     music_mode: MusicMode = "none"
     music_note: str | None = None
@@ -127,6 +129,7 @@ class PostCreate(BaseModel):
     kind: PostKind
     caption: str = ""
     first_comment: str | None = None
+    first_comments: list[str] | None = None
     music_mode: MusicMode = "none"
     music_note: str | None = None
     location_name: str | None = None
@@ -140,6 +143,7 @@ class PostUpdate(BaseModel):
     kind: PostKind | None = None
     caption: str | None = None
     first_comment: str | None = None
+    first_comments: list[str] | None = None
     music_mode: MusicMode | None = None
     music_note: str | None = None
     location_name: str | None = None
@@ -195,6 +199,7 @@ class PostOut(BaseModel):
     status: PostStatus
     caption: str
     first_comment: str | None
+    first_comments: list[str]
     first_comment_status: FirstCommentStatus | None
     music_mode: MusicMode
     music_note: str | None
@@ -283,6 +288,7 @@ class HandoffOut(BaseModel):
     kind: PostKind
     caption: str
     first_comment: str | None
+    first_comments: list[str]
     music_note: str | None
     location_name: str | None
     # When to post it: the go-live time if one was set, else the scheduled time.
