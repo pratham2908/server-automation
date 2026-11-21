@@ -104,3 +104,22 @@ async def test_a_reel_stored_after_the_snapshot_but_before_the_import_is_skipped
     result = await svc._sync_instagram_videos(CHANNEL, {"instagram_user_id": "1"}, None)
     assert [d["video_id"] for d in _records(db, "924")] == ["ours-924"]
     assert asked == [] and result["synced"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_the_unique_index_catches_is_skipped_not_raised(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The publisher stores 924 between the sync's last re-check and its insert: only the index sees it.
+    from pymongo.errors import DuplicateKeyError
+
+    db = DB(videos=[], categories=[{"channel_id": CHANNEL, "name": "Reels"}])
+    svc = _service(monkeypatch, db, [_reel("924"), _reel("925")], store_during_ai=[])
+    real_insert = db.videos.insert_one
+
+    async def insert_one(doc: dict[str, Any]) -> Any:
+        if doc.get("instagram_media_id") == "924":
+            raise DuplicateKeyError("E11000 duplicate key")
+        return await real_insert(doc)
+
+    monkeypatch.setattr(db.videos, "insert_one", insert_one)
+    result = await svc._sync_instagram_videos(CHANNEL, {"instagram_user_id": "1"}, None)
+    assert _records(db, "924") == [] and len(_records(db, "925")) == 1 and result["synced"] == 1

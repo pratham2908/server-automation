@@ -9,7 +9,10 @@ across all requests.  Index creation runs once during the lifespan event.
 import certifi
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
+from app.logger import get_logger
 from app.services.video_properties import PropertyDef
+
+logger = get_logger(__name__)
 
 # Module-level reference – set during startup, closed during shutdown.
 _client: AsyncIOMotorClient | None = None
@@ -175,6 +178,18 @@ async def connect_db(
     await _db.comment_dm_events.create_index([("channel_id", 1), ("media_id", 1), ("person", 1)])
     await _db.comment_dm_events.create_index([("channel_id", 1), ("status", 1), ("sent_at", 1)])
     await _db.comment_dm_rules.create_index([("channel_id", 1), ("media_id", 1)], unique=True)
+    # One record per Instagram reel per channel (2026-11-21: the sync could import a reel our publisher had
+    # just stored). Partial: records without a media id yet (scheduled, YouTube, Threads) aren't covered.
+    # Logged, not raised, if it can't be built (existing duplicates), so the server still starts.
+    try:
+        await _db.videos.create_index(
+            [("channel_id", 1), ("instagram_media_id", 1)],
+            unique=True,
+            name="channel_instagram_media_unique",
+            partialFilterExpression={"instagram_media_id": {"$type": "string", "$gt": ""}},
+        )
+    except Exception:
+        logger.exception("[DB] Unique (channel_id, instagram_media_id) index not created — duplicates exist?")
     # Comment log: one row per comment however it arrived; commenter stats read it by channel and author.
     await _db.comment_log.create_index("comment_id", unique=True)
     await _db.comment_log.create_index([("channel_id", 1), ("commented_at", -1)])
