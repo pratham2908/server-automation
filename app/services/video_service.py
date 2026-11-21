@@ -2087,6 +2087,11 @@ class VideoService:
                     {"$set": set_doc},
                 )
 
+        # db_ids was read before the sweep. Our publish worker may have stored one of these media ids since
+        # (2026-11-21: reel 924 was imported a second time this way), so ask again before spending AI on them.
+        if new_vids:
+            stored_now = await self._stored_instagram_media_ids(channel_id, [v["instagram_media_id"] for v in new_vids])
+            new_vids = [v for v in new_vids if v["instagram_media_id"] not in stored_now]
         if not new_vids:
             await self._refresh_instagram_account_insights(ig, channel_id, channel, counts_by_media)
             return {"ok": True, "synced": 0, "missing": missing}
@@ -2115,6 +2120,13 @@ class VideoService:
                         }
                     )
                     cats.append({"name": cat})
+                # Categorizing takes seconds; the publish worker can store this reel meanwhile. Its record wins.
+                if await self._stored_instagram_media_ids(channel_id, [v["instagram_media_id"]]):
+                    logger.info(
+                        "Instagram reel %s was stored by another path during the sync — not importing it again",
+                        v["instagram_media_id"],
+                    )
+                    continue
                 await self.db.videos.insert_one(
                     {
                         "channel_id": channel_id,
@@ -2136,6 +2148,17 @@ class VideoService:
                 inserted += 1
         await self._refresh_instagram_account_insights(ig, channel_id, channel, counts_by_media)
         return {"ok": True, "synced": inserted, "missing": missing}
+
+    async def _stored_instagram_media_ids(self, channel_id: str, media_ids: list[str]) -> set[str]:
+        """Which of these Instagram media ids already have a video record on the channel, read now."""
+        if not media_ids:
+            return set()
+        found: set[str] = set()
+        async for doc in self.db.videos.find(
+            {"channel_id": channel_id, "instagram_media_id": {"$in": media_ids}}, {"instagram_media_id": 1}
+        ):
+            found.add(doc["instagram_media_id"])
+        return found
 
     async def _graduation_update(
         self, channel_id: str, media_id: str, video: dict[str, Any], shared: bool | None, now: datetime
