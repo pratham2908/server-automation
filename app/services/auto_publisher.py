@@ -13,6 +13,7 @@ import os
 from typing import Any
 
 import requests
+from pymongo.errors import DuplicateKeyError
 
 from app.database import is_channel_paused, update_channel_task_status
 from app.logger import get_logger
@@ -31,6 +32,32 @@ logger = get_logger(__name__)
 
 _POLL_INTERVAL_SECONDS = 300  # 5 minutes
 _MAX_PUBLISH_ATTEMPTS = 5
+
+
+async def record_published_media(
+    db: Any, channel_id: str, video_id: str, media_id: str, fields: dict[str, Any]
+) -> None:
+    """Store the live reel's media id on our own record.
+
+    (channel_id, instagram_media_id) is unique. If the Instagram sync imported this brand-new reel as a
+    record of its own in the seconds before this write, that import is a stray copy of ours: it goes, and
+    ours takes the id. The reel is already live, so this write must not fail (a failure here would send a
+    published reel back through the publish path).
+    """
+    query = {"channel_id": channel_id, "video_id": video_id}
+    try:
+        await db.videos.update_one(query, {"$set": fields})
+    except DuplicateKeyError:
+        removed = await db.videos.delete_many(
+            {"channel_id": channel_id, "instagram_media_id": media_id, "video_id": {"$ne": video_id}}
+        )
+        logger.warning(
+            "[Instagram] Media %s was already imported by the sync as %d stray record(s); removed, kept '%s'",
+            media_id,
+            removed.deleted_count,
+            video_id,
+        )
+        await db.videos.update_one(query, {"$set": fields})
 
 
 async def _publish_one_reel(
@@ -150,19 +177,20 @@ async def _publish_one_reel(
 
         now = now_ist()
 
-        await db.videos.update_one(
-            {"channel_id": channel_id, "video_id": video_id},
+        await record_published_media(
+            db,
+            channel_id,
+            video_id,
+            media_id,
             {
-                "$set": {
-                    "instagram_media_id": media_id,
-                    "status": "published",
-                    "published_at": now,
-                    "updated_at": now,
-                    **({"location_dropped_reason": location_dropped} if location_dropped else {}),
-                    **({"collaborators_dropped_reason": collaborators_dropped} if collaborators_dropped else {}),
-                    # Starts the graduation timer (if one was asked for) from the moment it is live.
-                    **arm_fields(video_doc, now),
-                }
+                "instagram_media_id": media_id,
+                "status": "published",
+                "published_at": now,
+                "updated_at": now,
+                **({"location_dropped_reason": location_dropped} if location_dropped else {}),
+                **({"collaborators_dropped_reason": collaborators_dropped} if collaborators_dropped else {}),
+                # Starts the graduation timer (if one was asked for) from the moment it is live.
+                **arm_fields(video_doc, now),
             },
         )
 

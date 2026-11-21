@@ -13,6 +13,7 @@ import requests
 from dateutil.parser import isoparse
 from googleapiclient.errors import HttpError
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
 
 from app.config import get_settings
 from app.database import (
@@ -2127,24 +2128,31 @@ class VideoService:
                         v["instagram_media_id"],
                     )
                     continue
-                await self.db.videos.insert_one(
-                    {
-                        "channel_id": channel_id,
-                        "video_id": str(uuid.uuid4()),
-                        "instagram_media_id": v["instagram_media_id"],
-                        "title": v["title"],
-                        "description": v["description"],
-                        "category": cat,
-                        "status": "published",
-                        "published_at": v["published_at"],
-                        "thumbnail_url": v.get("thumbnail_url"),
-                        "instagram_permalink": v.get("instagram_permalink"),
-                        "metadata": v.get("metadata", {}),
-                        "insights_synced_at": now if v["instagram_media_id"] in stored else None,
-                        "verification_status": "unverified",
-                        "created_at": now_ist(),
-                    }
-                )
+                try:
+                    await self.db.videos.insert_one(
+                        {
+                            "channel_id": channel_id,
+                            "video_id": str(uuid.uuid4()),
+                            "instagram_media_id": v["instagram_media_id"],
+                            "title": v["title"],
+                            "description": v["description"],
+                            "category": cat,
+                            "status": "published",
+                            "published_at": v["published_at"],
+                            "thumbnail_url": v.get("thumbnail_url"),
+                            "instagram_permalink": v.get("instagram_permalink"),
+                            "metadata": v.get("metadata", {}),
+                            "insights_synced_at": now if v["instagram_media_id"] in stored else None,
+                            "verification_status": "unverified",
+                            "created_at": now_ist(),
+                        }
+                    )
+                except DuplicateKeyError:
+                    # The unique index caught a record stored a moment ago by another path: it wins.
+                    logger.info(
+                        "Instagram reel %s already has a record — not importing it again", v["instagram_media_id"]
+                    )
+                    continue
                 inserted += 1
         await self._refresh_instagram_account_insights(ig, channel_id, channel, counts_by_media)
         return {"ok": True, "synced": inserted, "missing": missing}
