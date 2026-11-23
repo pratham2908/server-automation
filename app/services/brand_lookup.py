@@ -106,6 +106,9 @@ class LookupCache:
 APP_LIMIT_MARKER = "(#4)"
 COOLDOWN_SECONDS = 3600
 LIVE_CALLS_PER_HOUR = 30
+# Posting, first comments and the insights sync share the app budget, so lookups yield well before the limit.
+USAGE_STOP_PERCENT = 50.0
+USAGE_PAUSE_SECONDS = 600
 
 
 def is_app_limit(message: str) -> bool:
@@ -128,7 +131,7 @@ class CallGuard:
         now = self._clock()
         if now < self._blocked_until:
             minutes = int((self._blocked_until - now) / 60) + 1
-            return f"Instagram's app request limit was hit; lookups are paused for about {minutes} more minutes"
+            return f"Lookups are paused for about {minutes} more minutes to protect the app's shared Graph budget"
         self._calls = [t for t in self._calls if now - t < 3600]
         if len(self._calls) >= LIVE_CALLS_PER_HOUR:
             return f"Hourly cap of {LIVE_CALLS_PER_HOUR} live lookups reached; cached brands still answer"
@@ -136,6 +139,11 @@ class CallGuard:
 
     def record_call(self) -> None:
         self._calls.append(self._clock())
+
+    def record_usage(self, percent: float | None) -> None:
+        """Pause lookups for ten minutes whenever the app's usage is at or over the stop line."""
+        if percent is not None and percent >= USAGE_STOP_PERCENT:
+            self._blocked_until = max(self._blocked_until, self._clock() + USAGE_PAUSE_SECONDS)
 
     def record_app_limit(self) -> None:
         self._blocked_until = self._clock() + COOLDOWN_SECONDS

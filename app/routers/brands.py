@@ -6,6 +6,7 @@ Read-only. One Graph call per brand, kept for a day. Only Business and Creator a
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import requests
@@ -32,6 +33,8 @@ router = APIRouter(
 PACE_SECONDS = 0.25
 _cache = bl.LookupCache()
 _guard = bl.CallGuard()
+# Usage readings taken in worker threads, written to Mongo by the request that made them.
+_pending_usage: list[dict[str, Any]] = []
 
 
 class MediaOut(BaseModel):
@@ -75,6 +78,20 @@ async def _service(db: AsyncIOMotorDatabase, channel_id: str) -> tuple[Instagram
     return resolved
 
 
+def _note_usage(service: InstagramService) -> None:
+    percent = service.last_app_usage
+    _guard.record_usage(percent)
+    if percent is not None:
+        _pending_usage.append({"at": datetime.now(UTC), "percent": percent})
+
+
+async def _flush_usage(db: AsyncIOMotorDatabase) -> None:
+    rows = list(_pending_usage)
+    del _pending_usage[: len(rows)]
+    if rows:
+        await db.brand_lookup_usage.insert_many(rows)
+
+
 def _lookup_one(service: InstagramService, ig_user_id: str, raw: str, media_limit: int) -> dict[str, Any]:
     handle = bl.clean_handle(raw)
     if handle is None:
@@ -88,7 +105,9 @@ def _lookup_one(service: InstagramService, ig_user_id: str, raw: str, media_limi
     _guard.record_call()
     try:
         reply = service.business_discovery(ig_user_id, bl.discovery_fields(handle, media_limit))
+        _note_usage(service)
     except requests.HTTPError as exc:
+        _note_usage(service)
         message = graph_error_message(exc)
         status = exc.response.status_code if exc.response is not None else 0
         if bl.is_app_limit(message):
@@ -105,6 +124,28 @@ def _lookup_one(service: InstagramService, ig_user_id: str, raw: str, media_limi
     return {**result, "cached": False}
 
 
+@router.get("/usage/summary")
+async def usage_summary(
+    channel_id: str, hours: int = Query(24, ge=1, le=168), db: AsyncIOMotorDatabase = Depends(get_db)
+) -> dict[str, Any]:
+    """How much of the app's Graph limit (x-app-usage, percent) the lookups saw, per hour, newest first."""
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    rows = await db.brand_lookup_usage.find({"at": {"$gte": since}}).sort("at", 1).to_list(length=None)
+    per_hour: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        key = r["at"].strftime("%Y-%m-%dT%H:00Z")
+        slot = per_hour.setdefault(key, {"hour": key, "calls": 0, "max_percent": 0.0})
+        slot["calls"] += 1
+        slot["max_percent"] = max(slot["max_percent"], r["percent"])
+    return {
+        "stop_percent": bl.USAGE_STOP_PERCENT,
+        "samples": len(rows),
+        "latest_percent": rows[-1]["percent"] if rows else None,
+        "max_percent": max((r["percent"] for r in rows), default=None),
+        "per_hour": sorted(per_hour.values(), key=lambda x: x["hour"], reverse=True),
+    }
+
+
 @router.get("/{handle}", response_model=BrandOut)
 async def get_brand(
     channel_id: str,
@@ -114,7 +155,9 @@ async def get_brand(
 ) -> dict[str, Any]:
     """One brand. A brand that cannot be read comes back 200 with status not_business / invalid_handle / error."""
     service, ig_user_id = await _service(db, channel_id)
-    return await asyncio.to_thread(_lookup_one, service, ig_user_id, handle, media_limit)
+    result = await asyncio.to_thread(_lookup_one, service, ig_user_id, handle, media_limit)
+    await _flush_usage(db)
+    return result
 
 
 @router.post("/batch", response_model=list[BrandOut])
@@ -129,4 +172,5 @@ async def get_brands(
         out.append(result)
         if not result.get("cached") and result["status"] not in ("invalid_handle", "rate_limited"):
             await asyncio.sleep(PACE_SECONDS)
+    await _flush_usage(db)
     return out

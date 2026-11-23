@@ -12,6 +12,7 @@ from app.database import get_db
 from app.main import app
 from app.routers import brands as router_mod
 from app.services import brand_lookup as bl
+from app.services.instagram import parse_app_usage
 from tests.conftest import GLOBAL_API_KEY
 from tests.mongo_fakes import DB
 
@@ -75,6 +76,7 @@ def test_cache_keeps_successes_for_a_day_and_not_failures() -> None:
 class _Service:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.last_app_usage: float | None = 12.0
 
     def business_discovery(self, ig_user_id: str, fields: str) -> dict[str, Any]:
         self.calls.append(fields)
@@ -140,3 +142,30 @@ def test_guard_caps_live_calls_per_hour() -> None:
     assert guard.refusal() is not None
     now[0] = 3601
     assert guard.refusal() is None
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [('{"call_count":28,"total_time":25,"total_cputime":31}', 31.0), (None, None), ("not json", None), ("[]", None)],
+)
+def test_parse_app_usage_takes_the_highest_figure(header: str | None, expected: float | None) -> None:
+    assert parse_app_usage(header) == expected
+
+
+def test_usage_over_the_stop_line_pauses_lookups() -> None:
+    now = [0.0]
+    guard = bl.CallGuard(clock=lambda: now[0])
+    guard.record_usage(49.9)
+    assert guard.refusal() is None
+    guard.record_usage(50.0)
+    assert guard.refusal() is not None
+    now[0] = bl.USAGE_PAUSE_SECONDS + 1
+    assert guard.refusal() is None
+
+
+def test_live_lookups_store_the_apps_usage_and_high_usage_pauses(client: tuple[TestClient, _Service]) -> None:
+    http, service = client
+    service.last_app_usage = 55.0
+    out = http.post("/api/v1/channels/DreamScenicAi/brands/batch", json={"handles": ["acme", "other"]}).json()
+    assert [o["status"] for o in out] == ["ok", "rate_limited"]
+    assert len(service.calls) == 1
