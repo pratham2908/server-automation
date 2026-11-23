@@ -329,6 +329,10 @@ class InstagramService:
                 metrics_service.record_external_call("instagram", duration, False)
             raise e
 
+    def business_discovery(self, ig_user_id: str, fields: str) -> dict[str, Any]:
+        """Read another Business/Creator account's profile and media through ours (one read-only Graph call)."""
+        return self._get(self._user_node(ig_user_id), {"fields": fields})
+
     # ------------------------------------------------------------------
     # Account info
     # ------------------------------------------------------------------

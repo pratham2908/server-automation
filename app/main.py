@@ -488,6 +488,7 @@ from app.routers import (
     analysis,
     auth,
     batch_upload,
+    brands,
     categories,
     channel_groups,
     channels,
@@ -588,6 +589,7 @@ app.include_router(comment_dm.config_router)
 app.include_router(fallback_video.router)
 app.include_router(commenters.router)
 app.include_router(followers.router)
+app.include_router(brands.router)
 app.include_router(comment_collectors.router)
 app.include_router(voted_city.router)
 app.include_router(city_requesters.router)
