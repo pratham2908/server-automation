@@ -78,6 +78,11 @@ class _Service:
 
     def business_discovery(self, ig_user_id: str, fields: str) -> dict[str, Any]:
         self.calls.append(fields)
+        if "limited" in fields:
+            resp = requests.Response()
+            resp.status_code = 403
+            resp._content = b'{"error": {"message": "(#4) Application request limit reached", "code": 4}}'
+            raise requests.HTTPError(response=resp)
         if "personal" in fields:
             resp = requests.Response()
             resp.status_code = 400
@@ -97,6 +102,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _Service]:
     monkeypatch.setattr(router_mod, "_service", fake_service)
     monkeypatch.setattr(router_mod, "_cache", bl.LookupCache())
     monkeypatch.setattr(router_mod, "PACE_SECONDS", 0)
+    monkeypatch.setattr(router_mod, "_guard", bl.CallGuard())
     app.dependency_overrides[get_db] = lambda: db
     yield TestClient(app, headers={"X-API-Key": GLOBAL_API_KEY}), service
     app.dependency_overrides.pop(get_db, None)
@@ -116,3 +122,21 @@ def test_batch_reports_each_brand_in_order(client: tuple[TestClient, _Service]) 
     out = http.post("/api/v1/channels/DreamScenicAi/brands/batch", json=body).json()
     assert [o["status"] for o in out] == ["ok", "not_business", "invalid_handle"]
     assert out[1]["error"] and len(service.calls) == 2
+
+
+def test_app_limit_pauses_later_lookups_without_calling_graph(client: tuple[TestClient, _Service]) -> None:
+    http, service = client
+    out = http.post("/api/v1/channels/DreamScenicAi/brands/batch", json={"handles": ["limited.one", "acme"]}).json()
+    assert [o["status"] for o in out] == ["rate_limited", "rate_limited"]
+    assert len(service.calls) == 1
+
+
+def test_guard_caps_live_calls_per_hour() -> None:
+    now = [0.0]
+    guard = bl.CallGuard(clock=lambda: now[0])
+    for _ in range(bl.LIVE_CALLS_PER_HOUR):
+        assert guard.refusal() is None
+        guard.record_call()
+    assert guard.refusal() is not None
+    now[0] = 3601
+    assert guard.refusal() is None

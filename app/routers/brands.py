@@ -31,6 +31,7 @@ router = APIRouter(
 # Pause between brands in a batch: well inside Graph's limits, and it keeps one batch from bursting.
 PACE_SECONDS = 0.25
 _cache = bl.LookupCache()
+_guard = bl.CallGuard()
 
 
 class MediaOut(BaseModel):
@@ -81,11 +82,18 @@ def _lookup_one(service: InstagramService, ig_user_id: str, raw: str, media_limi
     cached = _cache.get(handle, media_limit)
     if cached is not None:
         return {**cached, "cached": True}
+    refused = _guard.refusal()
+    if refused:
+        return bl.failure(handle, "rate_limited", refused)
+    _guard.record_call()
     try:
         reply = service.business_discovery(ig_user_id, bl.discovery_fields(handle, media_limit))
     except requests.HTTPError as exc:
         message = graph_error_message(exc)
         status = exc.response.status_code if exc.response is not None else 0
+        if bl.is_app_limit(message):
+            _guard.record_app_limit()
+            return bl.failure(handle, "rate_limited", message[:300])
         # Instagram answers 400 for an account that is personal or does not exist; anything else is ours to report.
         kind: bl.Status = "not_business" if status == 400 else "error"
         logger.info("business_discovery for %s refused: %s", handle, message[:200])
@@ -119,6 +127,6 @@ async def get_brands(
     for raw in body.handles:
         result = await asyncio.to_thread(_lookup_one, service, ig_user_id, raw, body.media_limit)
         out.append(result)
-        if not result.get("cached") and result["status"] != "invalid_handle":
+        if not result.get("cached") and result["status"] not in ("invalid_handle", "rate_limited"):
             await asyncio.sleep(PACE_SECONDS)
     return out

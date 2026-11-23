@@ -19,7 +19,7 @@ MAX_BATCH = 50
 _HANDLE = re.compile(r"^[a-z0-9._]{1,30}$")
 _URL = re.compile(r"instagram\.com/([^/?#\s]+)", re.IGNORECASE)
 
-Status = Literal["ok", "not_business", "invalid_handle", "error"]
+Status = Literal["ok", "not_business", "invalid_handle", "rate_limited", "error"]
 
 MEDIA_FIELDS = "caption,permalink,timestamp,like_count,comments_count,media_type"
 PROFILE_FIELDS = "username,name,biography,website,followers_count,media_count"
@@ -100,3 +100,42 @@ class LookupCache:
     def put(self, handle: str, media_limit: int, result: dict[str, Any]) -> None:
         if result["status"] == "ok":
             self._items[(handle, media_limit)] = (self._clock(), result)
+
+
+# Graph's code 4 is the whole app's request budget, shared with posting, first comments and the insights sync.
+APP_LIMIT_MARKER = "(#4)"
+COOLDOWN_SECONDS = 3600
+LIVE_CALLS_PER_HOUR = 30
+
+
+def is_app_limit(message: str) -> bool:
+    return APP_LIMIT_MARKER in message
+
+
+class CallGuard:
+    """Keeps lookups from spending the app's shared Graph budget.
+
+    After Instagram says code 4, no lookup goes out for an hour; and at most ``LIVE_CALLS_PER_HOUR`` live
+    calls are made in any hour, whoever asks. Returns the reason to refuse, or None to go ahead.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._blocked_until = 0.0
+        self._calls: list[float] = []
+
+    def refusal(self) -> str | None:
+        now = self._clock()
+        if now < self._blocked_until:
+            minutes = int((self._blocked_until - now) / 60) + 1
+            return f"Instagram's app request limit was hit; lookups are paused for about {minutes} more minutes"
+        self._calls = [t for t in self._calls if now - t < 3600]
+        if len(self._calls) >= LIVE_CALLS_PER_HOUR:
+            return f"Hourly cap of {LIVE_CALLS_PER_HOUR} live lookups reached; cached brands still answer"
+        return None
+
+    def record_call(self) -> None:
+        self._calls.append(self._clock())
+
+    def record_app_limit(self) -> None:
+        self._blocked_until = self._clock() + COOLDOWN_SECONDS
