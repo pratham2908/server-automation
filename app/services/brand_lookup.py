@@ -97,9 +97,10 @@ class LookupCache:
             return None
         return hit[1]
 
-    def put(self, handle: str, media_limit: int, result: dict[str, Any]) -> None:
-        if result["status"] == "ok":
-            self._items[(handle, media_limit)] = (self._clock(), result)
+    def put(self, handle: str, media_limit: int, result: dict[str, Any], age: float = 0.0) -> None:
+        """Keep a success; ``age`` is how old it already is (a result reloaded from the database)."""
+        if result["status"] == "ok" and age < self._ttl:
+            self._items[(handle, media_limit)] = (self._clock() - age, result)
 
 
 # Graph's code 4 is the whole app's request budget, shared with posting, first comments and the insights sync.
