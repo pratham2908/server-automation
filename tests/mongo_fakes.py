@@ -130,6 +130,11 @@ class Collection:
         self.docs.append(copy.deepcopy(doc))
         return Result(inserted_id=doc["_id"])
 
+    async def insert_many(self, docs: list[dict[str, Any]]) -> Result:
+        for doc in docs:
+            await self.insert_one(doc)
+        return Result()
+
     async def update_one(self, query: dict[str, Any], update: dict[str, Any], upsert: bool = False) -> Result:
         target = next((d for d in self.docs if matches(d, query)), None)
         upserted = None

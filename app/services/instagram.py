@@ -69,6 +69,18 @@ def graph_error_code(exc: Exception) -> int | None:
     return int(code) if isinstance(code, int) else None
 
 
+def parse_app_usage(header: str | None) -> float | None:
+    """The highest figure in Graph's ``x-app-usage`` header (call_count, total_time, total_cputime, each a
+    percentage of the app's limit), or None when the header is absent or unreadable."""
+    if not header:
+        return None
+    try:
+        figures = json.loads(header)
+        return max(float(v) for v in figures.values())
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def graph_error_message(exc: Exception) -> str:
     """Meta's own words for a failed Graph call.
 
@@ -295,6 +307,8 @@ class InstagramService:
         self._channel_id = channel_id
         # Which slot on the channel doc holds this token, so a refresh writes back to the right one.
         self._token_field = token_field
+        # Percentage of the app's Graph limit as of the latest call; shared by every caller of this client.
+        self.last_app_usage: float | None = None
 
     def _get(self, endpoint: str, params: dict | None = None) -> dict:
 
@@ -308,6 +322,9 @@ class InstagramService:
                 timeout=30,
             )
             duration = (time.time() - start_time) * 1000
+            usage = parse_app_usage(resp.headers.get("x-app-usage"))
+            if usage is not None:
+                self.last_app_usage = usage
 
             if not resp.ok:
                 metrics_service.record_external_call("instagram", duration, False)
