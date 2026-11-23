@@ -169,3 +169,19 @@ def test_live_lookups_store_the_apps_usage_and_high_usage_pauses(client: tuple[T
     out = http.post("/api/v1/channels/DreamScenicAi/brands/batch", json={"handles": ["acme", "other"]}).json()
     assert [o["status"] for o in out] == ["ok", "rate_limited"]
     assert len(service.calls) == 1
+
+
+def test_a_restart_does_not_lose_cached_brands(
+    client: tuple[TestClient, _Service], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    http, service = client
+    assert http.get("/api/v1/channels/DreamScenicAi/brands/acme").json()["cached"] is False
+    monkeypatch.setattr(router_mod, "_cache", bl.LookupCache())  # what a restart does to memory
+    again = http.post("/api/v1/channels/DreamScenicAi/brands/batch", json={"handles": ["acme"]}).json()
+    assert again[0]["cached"] is True and len(service.calls) == 1
+
+
+def test_a_day_old_saved_result_is_not_served() -> None:
+    cache = bl.LookupCache()
+    cache.put("acme", 30, bl.shape("acme", REPLY), age=bl.CACHE_TTL_SECONDS + 1)
+    assert cache.get("acme", 30) is None

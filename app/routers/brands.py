@@ -20,6 +20,7 @@ from app.logger import get_logger
 from app.services import brand_lookup as bl
 from app.services.instagram import InstagramService, graph_error_message
 from app.services.instagram_tokens import PROVIDER_FACEBOOK
+from app.timezone import assume_utc
 
 logger = get_logger(__name__)
 
@@ -76,6 +77,31 @@ async def _service(db: AsyncIOMotorDatabase, channel_id: str) -> tuple[Instagram
     if resolved is None:
         raise HTTPException(422, "This channel has no Instagram token")
     return resolved
+
+
+async def _warm_from_db(db: AsyncIOMotorDatabase, raws: list[str], media_limit: int) -> None:
+    """Reload lookups saved before a restart, so a deploy does not spend the hourly budget on repeats."""
+    now = datetime.now(UTC)
+    for raw in raws:
+        handle = bl.clean_handle(raw)
+        if handle is None or _cache.get(handle, media_limit) is not None:
+            continue
+        doc = await db.brand_lookup_cache.find_one({"handle": handle, "media_limit": media_limit})
+        if doc:
+            age = (now - assume_utc(doc["fetched_at"])).total_seconds()
+            _cache.put(handle, media_limit, doc["result"], age=age)
+
+
+async def _save_to_db(db: AsyncIOMotorDatabase, results: list[dict[str, Any]], media_limit: int) -> None:
+    now = datetime.now(UTC)
+    for r in results:
+        if r["status"] == "ok" and not r.get("cached"):
+            body = {k: v for k, v in r.items() if k != "cached"}
+            await db.brand_lookup_cache.update_one(
+                {"handle": r["handle"], "media_limit": media_limit},
+                {"$set": {"result": body, "fetched_at": now}},
+                upsert=True,
+            )
 
 
 def _note_usage(service: InstagramService) -> None:
@@ -155,8 +181,10 @@ async def get_brand(
 ) -> dict[str, Any]:
     """One brand. A brand that cannot be read comes back 200 with status not_business / invalid_handle / error."""
     service, ig_user_id = await _service(db, channel_id)
+    await _warm_from_db(db, [handle], media_limit)
     result = await asyncio.to_thread(_lookup_one, service, ig_user_id, handle, media_limit)
     await _flush_usage(db)
+    await _save_to_db(db, [result], media_limit)
     return result
 
 
@@ -166,6 +194,7 @@ async def get_brands(
 ) -> list[dict[str, Any]]:
     """Up to 50 brands, one result per handle in the order given, paced one call at a time."""
     service, ig_user_id = await _service(db, channel_id)
+    await _warm_from_db(db, body.handles, body.media_limit)
     out: list[dict[str, Any]] = []
     for raw in body.handles:
         result = await asyncio.to_thread(_lookup_one, service, ig_user_id, raw, body.media_limit)
@@ -173,4 +202,5 @@ async def get_brands(
         if not result.get("cached") and result["status"] not in ("invalid_handle", "rate_limited"):
             await asyncio.sleep(PACE_SECONDS)
     await _flush_usage(db)
+    await _save_to_db(db, out, body.media_limit)
     return out
